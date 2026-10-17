@@ -1,0 +1,84 @@
+{
+  "name": "dsh-plugin-ai-drama",
+  "version": "0.6.3",
+  "type": "module",
+  "description": "DeepSeek Harness 插件：AI 短剧工作区（立项/总纲/人物/剧本/分镜/导出）+「短剧模式」Agent 预设（34 个 drama_* 工具、9 个随包技能）",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./preset": "./preset.js"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "preset.js",
+    "cordis.patch.yml",
+    "presets/*.yml",
+    "lib/**/*.js",
+    "skills/**/*",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "license": "MIT",
+  "author": "dsh-plugin-ai-drama contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HengryLiang/dsh-plugin-ai-drama.git"
+  },
+  "homepage": "https://github.com/HengryLiang/dsh-plugin-ai-drama#readme",
+  "bugs": {
+    "url": "https://github.com/HengryLiang/dsh-plugin-ai-drama/issues"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": [
+        "./cordis.patch.yml",
+        "./presets/drama.patch.yml"
+      ]
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  },
+  "engines": {
+    "node": "^22.19.0 || ^24.0.0",
+    "dsh": ">=0.2.0-rc.2 <0.2.1-0 || >=0.2.1-rc.1 <0.3.0-0"
+  },
+  "scripts": {
+    "test": "node test/all.mjs",
+    "test:host": "node test/smoke.mjs",
+    "test:client": "node test/client.mjs",
+    "test:agent": "node test/agent-tools.mjs",
+    "check": "node --check index.js && node --check client.js && node --check preset.js"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-skill-filesystem": ">=0.2.0-rc.2 <0.2.1-0 || >=0.2.1-rc.1 <0.3.0-0",
+    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2 <0.2.1-0 || >=0.2.1-rc.1 <0.3.0-0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "deepseek",
+    "dsh",
+    "ai-drama",
+    "short-drama",
+    "storyboard",
+    "screenwriting",
+    "video-creation",
+    "agent-preset",
+    "plugin"
+  ]
+}

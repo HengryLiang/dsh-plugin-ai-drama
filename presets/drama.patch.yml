@@ -1,0 +1,73 @@
+# Agent 预设「短剧模式」。
+#
+# 基于 DSH 随包标准预设（@deepseek-ai/dsh-web-app/presets/standard.patch.yml）的本机副本改写：
+#   - persona 换成短剧编剧/制片/分镜导演/合规顾问
+#   - 去掉系统命令类工具（FR-D03 工具白名单：不暴露 shell）
+#   - 去掉子代理编排组，收敛工具面
+#   - 追加 ai-drama-preset（隔离服务 dramaMode）与 drama_* 工具挂载点
+- insert:
+    - id: preset-drama
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: drama
+        name: 短剧模式
+        description: 使用 AI 短剧工作区完成立项、大纲、人物、剧本、分镜与导出。
+        order: 6
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              suffix: Your working directory is {{cwd}}.
+              prefix: You are a short-drama director agent powered by the {{model}} model.
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+          - id: skill-filesystem
+            name: '@deepseek-ai/dsh-skill-filesystem'
+          - id: tool-skill
+            name: '@deepseek-ai/dsh-tool-skill'
+          - id: ai-drama-agent
+            name: 'dsh-plugin-ai-drama/preset'
+            isolate:
+              dramaMode: true
+          - id: command-goal
+            name: '@deepseek-ai/dsh-command-goal'
+          - id: tool-goal
+            name: '@deepseek-ai/dsh-tool-goal'
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+          - id: present
+            name: '@deepseek-ai/dsh-tool-present'
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024

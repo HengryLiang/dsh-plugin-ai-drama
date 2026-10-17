@@ -1,0 +1,9 @@
+node_modules/
+*.tgz
+dist/
+coverage/
+*.log
+.DS_Store
+Thumbs.db
+.aidrama/
+AI短剧/
