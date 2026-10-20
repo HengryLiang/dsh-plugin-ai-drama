@@ -4,7 +4,7 @@
  * 运行：node test/client.mjs
  *
  * 契约冻结 v1（AI短剧工作区/P1-接口契约冻结-v1.md §2/§5.4/§7.5/§6 E5）：
- *   宿主 METHODS：R0=64 → E1 后 67 → **E5 后 68（+sources-list）**；
+ *   宿主 METHODS：R0=64 → E1 后 67 → E5 后 68（+sources-list）→ **v0.15.1 task-110 后 69（media-read +1）**；
  *   客户端去重调用：R0=51 → C-4 后 54 → T7/E1 后 57 → client B 接入 sources-list 后 58 → M4 批1（task-20）5 条后 63 → **M4 批2（task-21）5 条后 68**。
  * 本文件按**被测工件实际能力**自动判定期望值（旧工件无 doc-* 与 sources-list 时仍能全绿），
  * 同时可用 `EXPECT_HOST_METHODS` / `EXPECT_CLIENT_CALLS` 环境变量显式覆盖；
@@ -22,11 +22,11 @@ const C4_CLIENT_ROUTES = ['entry-create', 'entry-rename', 'entry-delete']
 const E1_CLIENT_ROUTES = ['doc-read', 'doc-save', 'doc-notify']
 /** E5/P2-1：多数据源枚举路由（契约冻结 §6 变更登记）。 */
 const E5_EXTRA_ROUTE = 'sources-list'
-const HOST_METHODS_WITH_E5 = 68
+const HOST_METHODS_WITH_E5 = 69 // task-110 media-read +1（68→69）
 const HOST_METHODS_WITH_E1 = 67
 const HOST_METHODS_LEGACY = 64
 const CLIENT_CALLS_WITH_E5 = 58
-/** v0.12.2/0.12.3（M4 批1+批2）：各接 5 条既有 host 路由 → client 去重调用 58→63→68（已批准登记）。 */
+/** v0.12.2/0.12.3（M4 批1+批2）：各接 5 条既有 host 路由 → client 去重调用 58→63→68（已批准登记）→ 69（task-110 media-read +1）。 */
 const M4_CLIENT_ROUTES = ['estimate-generation', 'search-context', 'canvas-reconcile', 'task-create', 'task-update']
 const CLIENT_CALLS_WITH_M4 = 63
 const M4B_CLIENT_ROUTES = ['intake-artifact', 'catalog', 'backends-status', 'agents-status', 'ping']
@@ -218,7 +218,7 @@ console.log('\n[5] 客户端调用的路由都真实存在（前后端路由对�
     } else {
       console.log('      （SKIP：v0.10.4 基线文件不可用（安装副本环境），仅保留新版结构断言）')
     }
-    check('v0.10.4：调用点 = 68（M4 批1+批2 +10 已批准；无 extras-* 新 API）', called.size === 68 && ![...called].some((name) => ['shot-extras-save', 'storyboard-extras-save', 'extras-save'].includes(name)), String(called.size))
+    check('v0.10.4：调用点 = 69（task-110 media-read +1）（M4 批1+批2 +10 已批准；无 extras-* 新 API）', called.size === 69 && ![...called].some((name) => ['shot-extras-save', 'storyboard-extras-save', 'extras-save'].includes(name)), String(called.size))
     check('v0.10.4：无新依赖（package.json dependencies 为空）', (() => { try { const pkg = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8')); return Object.keys(pkg.dependencies || {}).length === 0 } catch { return true } })())
   } else {
     console.log('      （SKIP：当前 client < v0.10.4，无新字段只读展示；旧工件不回归）')
@@ -237,11 +237,34 @@ console.log('\n[5] 客户端调用的路由都真实存在（前后端路由对�
     const groupsEnd = clientSrc.indexOf('草帽视图（只读）')
     const groupsRegion = groupsStart >= 0 && groupsEnd > groupsStart ? clientSrc.slice(groupsStart, groupsEnd + 120) : ''
     check('v0.11.2：只读区无编辑控件/无 api 调用（input/select/textarea/onChange/api()）', groupsRegion.length > 0 && !/\b(input|select|textarea|contentEditable|onChange|onInput)\b/.test(groupsRegion) && !/\bapi\(/.test(groupsRegion), groupsRegion.slice(0, 100))
-    check('v0.11.2：groups 展示不写盘（无 setShots/saveShots/storyboard-save 新增调用）', called.size === 68 && !/setShotGroups[\s\S]{0,200}(saveShots|storyboard-save)/.test(clientSrc))
+    check('v0.11.2：groups 展示不写盘（无 setShots/saveShots/storyboard-save 新增调用）', called.size === 69 && !/setShotGroups[\s\S]{0,200}(saveShots|storyboard-save)/.test(clientSrc))
     check('v0.11.2：CSS 新增 ad-groups/ad-group/ad-group-prompt 类', clientSrc.includes('.ad-groups{') && clientSrc.includes('.ad-group{') && clientSrc.includes('.ad-group-prompt{'))
-    check('v0.11.2：调用点 = 68（M4 批1+批2 +10 已批准）；slots=4（已批准终值）', called.size === 68 && (clientSrc.match(/slots\.register\(/g) || []).length === 4)
+    check('v0.11.2：调用点 = 69（task-110 media-read +1）（M4 批1+批2 +10 已批准）；slots=4（已批准终值）', called.size === 69 && (clientSrc.match(/slots\.register\(/g) || []).length === 4)
   } else {
     console.log('      （SKIP：当前 client < v0.11.2，无 groups 只读展示；旧工件不回归）')
+  }
+  // v0.15.1（task-108/109）：素材库分类 + 图片可见（只读；能力自适应）
+  const hasAssetGallery = clientSrc.includes('ASSET_TYPE_ORDER') && clientSrc.includes("api('media-read'") && clientSrc.includes("className: 'ad-asset-toolbar'")
+  if (hasAssetGallery) {
+    const galleryStart = clientSrc.indexOf("className: 'ad-asset-toolbar'")
+    const galleryEnd = clientSrc.indexOf('已登记文件（旧视图保留）', galleryStart)
+    const galleryRegion = galleryStart >= 0 && galleryEnd > galleryStart ? clientSrc.slice(galleryStart, galleryEnd) : ''
+    check('v0.15.1：9 类资产类型顺序 + 中文标签 + 全部筛选（CHR/SPC/PRP/CST/EXP/SFX/VOX/MUS/SHT）', /const ASSET_TYPE_ORDER = \[/.test(clientSrc) && ['CHR', 'SPC', 'PRP', 'CST', 'EXP', 'SFX', 'VOX', 'MUS', 'SHT'].every((type) => new RegExp("'" + type + "'").test(clientSrc)) && clientSrc.includes('assetTypeLabelOf'))
+    check('v0.15.1：类型筛选 chips（全部 N + 类型）aria-pressed 只读切换', clientSrc.includes('全部 ${' + 'assetCards.length}') && clientSrc.includes("'aria-pressed': assetTypeFilter === '全部'") && clientSrc.includes('setAssetTypeFilter(type)'))
+    check('v0.15.1：卡片网格 + 缩略图（http(s) 直接展示 / 相对路径 media-read 转 data URL）', clientSrc.includes("className: 'ad-asset-grid'") && clientSrc.includes("className: 'ad-asset-thumb'") && clientSrc.includes('assetImageSourceOf') && clientSrc.includes("api('media-read'") && clientSrc.includes('data:' + '${mime}' + ';base64,' + '${base64}'))
+    check('v0.15.1：无图/坏图占位降级（onError → markBroken + ad-asset-thumb 占位）', clientSrc.includes('onError: () => markBroken(src.value)') && clientSrc.includes("className: 'ad-asset-thumb'") && clientSrc.includes("status: 'error'"))
+    check('v0.15.1：详情大图 + 多图切换 + 无图空态', clientSrc.includes("className: 'ad-asset-detail'") && clientSrc.includes("className: 'ad-asset-detail-img'") && clientSrc.includes("className: 'ad-asset-detail-thumb'") && clientSrc.includes("className: 'ad-asset-detail-empty'") && clientSrc.includes('该资产暂无图片（media.images 为空）'))
+    check('v0.15.1：搜索按编号/名称本地过滤（无新增请求）', clientSrc.includes('function filterAssetCards') && clientSrc.includes("String(card.id || '').toLowerCase().includes(keyword)") && clientSrc.includes("String(card.name || '').toLowerCase().includes(keyword)"))
+    check('v0.15.4：只读边界——cards/legacy 卡片区无编辑控件与写调用；登记管理区保留既有登记/移除操作（v0.15.1 只读断言按已批行为迭代）', (() => { const start = clientSrc.indexOf('ad-asset-grid ad-legacy-grid'); const end = clientSrc.indexOf('assetRegistrationNode', start); const readonlyRegion = start >= 0 && end > start ? clientSrc.slice(start, end) : ''; const registrationStart = clientSrc.indexOf('const assetRegistrationNode ='); const registrationEnd = clientSrc.indexOf('visualLightboxNode', registrationStart); const registrationRegion = registrationStart >= 0 && registrationEnd > registrationStart ? clientSrc.slice(registrationStart, registrationEnd) : ''; return readonlyRegion.length > 0 && !/h\('(input|select|textarea)'|className: 'ad-input'/.test(readonlyRegion) && !/api\('assets-(add|remove)'/.test(readonlyRegion) && /onClick: addAsset/.test(registrationRegion) && /removeAsset\(a\.id\)/.test(registrationRegion) })())
+    check('v0.15.1：media-read 缓存去重（assetImageLoadState + 仅 pending 请求 + 并发上限 12）', clientSrc.includes('assetImageLoadState') && clientSrc.includes('candidates.filter((pathValue) => !assetImageLoadState.has(pathValue))') && clientSrc.includes('pending.slice(0, 12)'))
+    check('v0.15.1：切换项目/刷新清空图片缓存与选中态', (clientSrc.match(/setAssetImageCache\(\{\}\)/g) || []).length >= 2 && clientSrc.includes('setAssetSelectedId(null)') && clientSrc.includes('setAssetImageIndex(0)'))
+    check('v0.15.4：旧登记管理折叠区保留（登记管理（N 条）｜展开/收起 + 刷新/重扫 + 素材资产登记表 + 登记语义）', clientSrc.includes('登记管理（') && clientSrc.includes('素材资产登记表') && clientSrc.includes('刷新/重扫') && clientSrc.includes('登记=引用外部文件路径，不复制文件') && clientSrc.includes('登记后自动出现在上方卡片视图'))
+    check('v0.15.4：旧登记项目可见统一视图（hasAssetData = assets>0 || cards>0；无数据零新显示 + 引导）', /hasAssetData = assets\.length > 0 \|\| assetCards\.length > 0/.test(clientSrc) && clientSrc.includes("className: 'ad-legacy-view'") && clientSrc.includes('还没有登记素材：粘贴文件路径'))
+    check('v0.15.1：无图占位类 ad-asset-placeholder + 只读字段区 ad-asset-fields', clientSrc.includes('ad-asset-placeholder') && clientSrc.includes('ad-asset-fields'))
+    check('v0.15.1：可访问性（卡片 aria-label 查看资产 / 搜索框 aria-label 搜索素材编号或名称）', clientSrc.includes('查看资产') && clientSrc.includes('搜索素材编号或名称'))
+    check('v0.15.1：调用点 69（task-110 media-read +1）/ slots=4 不变', called.size === 69 && (clientSrc.match(/slots\.register\(/g) || []).length === 4, String(called.size))
+  } else {
+    console.log('      （SKIP：当前 client < v0.15.1，无素材库分类/图片 UI；旧工件不回归）')
   }
   console.log(`      宿主 ${hostMethods.size} 条 / 客户端调用 ${called.size} 条 / 仅 Agent 用 ${agentOnly.length} 条`)
   // v0.10（task-84）：分镜保存后 merge 未知/add-only per-shot 字段（静态断言；旧工件自适应 SKIP）
@@ -358,15 +381,15 @@ console.log('\n[7] v0.12.2/0.12.3（M4 批1+批2）：10 条既有路由面板�
   }
   const autoLoad = [fnRegion('const loadList = React.useCallback(async () => {', 'React.useEffect(() => {'), fnRegion('const openProject = (title) =>', 'const createProject'), fnRegion('const loadGenerate = () =>', 'const bindCanvas')].join('\n')
 
-  check('M4①：调用点 = 68（58+5+5 唯一路由名，M4 批1+批2，精确）', callNames.size === 68, String(callNames.size))
+  check('M4①：调用点 = 69（task-110 media-read +1）（58+5+5 唯一路由名，M4 批1+批2，精确）', callNames.size === 69, String(callNames.size))
   check('M4①：新增名集合精确 = 10 条且各 1 处（无其他新增）', newNames.length === 10 && [...M4, ...M4B].every((n) => (clientSrc.match(new RegExp("api\\('" + n + "'", 'g')) || []).length === 1), newNames.join(','))
   check('M4①：无自动加载调用（loadList/openProject/loadGenerate 区均不含 5 新路由）', M4.every((n) => !autoLoad.includes("api('" + n + "'")))
-  check('M4①：10 条路由均在 host METHODS 68 内（只接既有路由）', [...M4, ...M4B].every((n) => hostMethods.has(n)) && hostMethods.size === 68, String(hostMethods.size))
+  check('M4①：10 条路由均在 host METHODS 69（task-110 media-read +1） 内（只接既有路由）', [...M4, ...M4B].every((n) => hostMethods.has(n)) && hostMethods.size === 69, String(hostMethods.size))
   check('M4②：5 条路由 UI marker（成本预估/登记任务/检索参考/画布对账/状态更新列）', ['预估成本（只读）', '登记任务（只写台账，不提交生成）', '⑤ 检索参考（本地检索，不调用模型）', '画布对账（只读）', "'产物', '操作'"].every((m) => clientSrc.includes(m)))
   check('M4②：空/错/加载降级 marker（5 类 + busy 文案）', ['预估失败：', '未获取到后端预估', '检索失败：', '无检索结果', '画布对账不可用', '登记失败：', '更新失败：', '预估中…', '检索中…', '对账中…'].every((m) => clientSrc.includes(m)))
   check('M4③：task-create/update 数据安全（仅 .aidrama/tasks.json 台账，不提交生成）', clientSrc.includes('task-create / task-update：仅写 .aidrama/tasks.json 台账（不提交生成）') && clientSrc.includes('登记任务（只写台账，不提交生成）'))
   check('M4③：真实模型 0（5 新路由均为目录/检索/只读/台账，无 generate/submit/审读触发）', !M4.some((n) => /generate|submit|consistency|audit/.test(n)))
-  check('M4④：工具 34 / METHODS 68 / slots=4 / 无新依赖不变', hostMethods.size === 68 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && (() => { try { const pkg = JSON.parse(fsMod.readFileSync(path.join(here, '..', 'package.json'), 'utf8')); return Object.keys(pkg.dependencies || {}).length === 0 } catch { return true } })())
+  check('M4④：工具 34 / METHODS 69（task-110 media-read +1） / slots=4 / 无新依赖不变', hostMethods.size === 69 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && (() => { try { const pkg = JSON.parse(fsMod.readFileSync(path.join(here, '..', 'package.json'), 'utf8')); return Object.keys(pkg.dependencies || {}).length === 0 } catch { return true } })())
   check('M4⑤：CSS 0 diff 线索（无 ad-m4 新类；--dsw-* 仍 9 白名单）', !clientSrc.includes('.ad-m4') && new Set([...clientSrc.matchAll(/--dsw-[a-z0-9-]+/g)].map((m) => m[0])).size === 9)
   check('M4⑤：既有 P0/flow/分镜/审读/设置页/工具卡逻辑 marker 保留', ['const requestLeave = (action) => {', 'const persistFlow = async', 'function mergeShotsPreservingExtraFields(', 'function normalizeReviewReport(raw)', 'function SettingsSection(props) {', 'function DramaCheckToolCard(props) {'].every((m) => clientSrc.includes(m)))
 }
@@ -389,7 +412,7 @@ console.log('\n[8] v0.12.3（task-21 / M4 批2）：产物入库 + 诊断 4 条�
   const diagRegion = fnRegion('/* v0.12.3（task-21 / M4 批2）：诊断区 4 条既有路由', 'function DramaCheckToolCard')
   const checkRegion = fnRegion("if (tab === 'check') {", "if (tab === 'toolcards') {")
 
-  check('M4B①：调用点 = 68（63+5 唯一路由名，精确）', callNames.size === 68, String(callNames.size))
+  check('M4B①：调用点 = 69（task-110 media-read +1）（63+5 唯一路由名，精确）', callNames.size === 69, String(callNames.size))
   check('M4B①：5 条新路由各 1 处且无其他新增', M4B.every((n) => (clientSrc.match(new RegExp("api\\('" + n + "'", 'g')) || []).length === 1))
   check('M4B①：无自动加载调用（loadList/openProject/loadGenerate/设置页 load 均不含 5 新路由）', M4B.every((n) => !autoLoad.includes("api('" + n + "'")))
   check('M4B②：诊断 4 项只读 handler（仅 4 条只读路由，无写盘/生成/审读）', ['backends-status', 'catalog', 'agents-status', 'ping'].every((n) => diagHandlers.includes("api('" + n + "'")) && !/submit-batch|generate|consistency-check|intake-artifact|settings-save/.test(diagHandlers))
@@ -399,7 +422,7 @@ console.log('\n[8] v0.12.3（task-21 / M4 批2）：产物入库 + 诊断 4 条�
   check('M4B③：入库降级 marker + 写入路径说明（素材/生成 + 素材清单 + 资产索引）', ['入库失败：', '不阻塞；可检查路径/URL 后重试', '素材/生成/', '更新素材清单与资产索引', '不触发生成、不调用模型'].every((m) => clientSrc.includes(m)))
   check('M4B③：真实模型 0（5 新路由均为入库/目录/探测/诊断/连通，无 generate/submit/审读）', !M4B.some((n) => /generate|submit|consistency|audit/.test(n)))
   check('M4B④：批1 五路由仍在（estimate/search/reconcile/task-create/update 各 1）', ['estimate-generation', 'search-context', 'canvas-reconcile', 'task-create', 'task-update'].every((n) => (clientSrc.match(new RegExp("api\\('" + n + "'", 'g')) || []).length === 1))
-  check('M4B④：CSS 0 diff 线索 / slots=4 / METHODS=68 / 无新依赖', !clientSrc.includes('.ad-m4') && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && clientSrc.includes("inject: ['slots']") && (() => { try { const pkg = JSON.parse(fsMod.readFileSync(path.join(here, '..', 'package.json'), 'utf8')); return Object.keys(pkg.dependencies || {}).length === 0 } catch { return true } })())
+  check('M4B④：CSS 0 diff 线索 / slots=4 / METHODS=69（task-110 media-read +1） / 无新依赖', !clientSrc.includes('.ad-m4') && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && clientSrc.includes("inject: ['slots']") && (() => { try { const pkg = JSON.parse(fsMod.readFileSync(path.join(here, '..', 'package.json'), 'utf8')); return Object.keys(pkg.dependencies || {}).length === 0 } catch { return true } })())
   check('M4B⑤：既有 P0/flow/分镜/审读/设置页/工具卡/批1 marker 保留', ['const requestLeave = (action) => {', 'const persistFlow = async', 'function mergeShotsPreservingExtraFields(', 'function normalizeReviewReport(raw)', 'function SettingsSection(props) {', 'function DramaCheckToolCard(props) {', 'const estimateGeneration = async () => {'].every((m) => clientSrc.includes(m)))
 }
 
@@ -437,7 +460,7 @@ console.log('\n[9] v0.12.4（task-24 / M5-A）可访问性/键盘导航：roving
   check('M5-A④：保存按钮 aria-keyshortcuts ≥6（仅属性，不改 onClick/行为）', (clientSrc.match(/'aria-keyshortcuts': 'Control\+S Meta\+S'/g) || []).length >= 6 && clientSrc.includes("onClick: saveContract, disabled: busy, 'aria-keyshortcuts'"))
   check('M5-A④：4 处纯 placeholder 输入 aria-label 精确补齐且不重名', ['预算上限（留空取消）', '登记任务提示词（可选）', '分镜生成模型名（可留空）', '产物名称（可选）'].every((m) => clientSrc.includes(m)) && new Set(['预算上限（留空取消）', '登记任务提示词（可选）', '分镜生成模型名（可留空）', '产物名称（可选）']).size === 4)
   check('M5-A⑤：2 处动态结果补 role=status 播报（轻量）', (clientSrc.match(/className: 'ad-hits', role: 'status'/g) || []).length >= 2)
-  check('M5-A⑥：红线不变——调用点 68 / slots=4 / inject 仅 slots / 业务 CSS hex 0 / --dsw-* 9', callNames.size === 68 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && clientSrc.includes("inject: ['slots']") && !/#[0-9a-fA-F]{3,8}\b/.test(outside.replace(/body[\s\S]*?\}/, '')) && new Set([...css.matchAll(/--dsw-[a-z0-9-]+/g)].map((m) => m[0])).size === 9)
+  check('M5-A⑥：红线不变——调用点 69（task-110 media-read +1） / slots=4 / inject 仅 slots / 业务 CSS hex 0 / --dsw-* 9', callNames.size === 69 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && clientSrc.includes("inject: ['slots']") && !/#[0-9a-fA-F]{3,8}\b/.test(outside.replace(/body[\s\S]*?\}/, '')) && new Set([...css.matchAll(/--dsw-[a-z0-9-]+/g)].map((m) => m[0])).size === 9)
   check('M5-A⑥：既有 P0/flow/分镜/审读/设置页/工具卡/批1/批2 逻辑 marker 保留', ['const requestLeave = (action) => {', 'const persistFlow = async', 'function mergeShotsPreservingExtraFields(', 'function normalizeReviewReport(raw)', 'function SettingsSection(props) {', 'function DramaCheckToolCard(props) {', 'const estimateGeneration = async () => {', 'const intakeGeneratedArtifact = async () => {'].every((m) => clientSrc.includes(m)))
 }
 

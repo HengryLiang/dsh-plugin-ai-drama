@@ -803,7 +803,7 @@ window.__ModuleLoader__.load({
 
     // v0.12.0（task-7）：15 页签 4 组（创作 / 资料 / 交付 / 高级）——键不重不漏，草稿计数在渲染时拼
     const TAB_GROUPS = [
-      { id: 'create', label: '创作', tabs: ['contract', 'outline', 'characters', 'world', 'episode', 'storyboard', 'dialogue'] },
+      { id: 'create', label: '创作', tabs: ['contract', 'outline', 'characters', 'world', 'episode', 'storyboard'] },
       { id: 'assets', label: '资料', tabs: ['assets', 'memory', 'drafts', 'ledger'] },
       { id: 'deliver', label: '交付', tabs: ['generate', 'check'] },
       { id: 'advanced', label: '高级', tabs: ['tree', 'toolcards'] },
@@ -816,6 +816,17 @@ window.__ModuleLoader__.load({
     }
     function tabLabelOfKey(key) {
       return TAB_LABEL_MAP[key] || String(key == null ? '' : key)
+    }
+
+    // v0.15.2（task-112）：旧「台词与音效」页签（dialogue）并入「剧本」页台词视图。
+    // 代码中无 URL query/hash 等外部深链机制；保留 legacy tab-key 兼容，命中时重定向到剧本页 + 台词视图 + 提示。
+    const LEGACY_TAB_ALIASES = { dialogue: 'episode' }
+    function normalizeTabKey(key) {
+      const text = String(key == null ? '' : key)
+      return LEGACY_TAB_ALIASES[text] || text
+    }
+    function isLegacyDialogueTab(key) {
+      return String(key == null ? '' : key) === 'dialogue'
     }
 
     function emptyFlowSteps() {
@@ -1666,6 +1677,78 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
 .ad-next-chip[data-tone="success"]{background:var(--ad-subtle-bg);color:var(--ad-success);border-color:var(--ad-border)}
 @media (max-width:900px){.ad-next-hint{display:none}}
 @media (max-width:560px){.ad-next-label{display:none}.ad-next-label-short{display:inline}.ad-next-chip{display:none}.ad-next-alt{display:none}.ad-next-cta>span{max-width:none}}
+.ad-asset-toolbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:10px}
+.ad-asset-chip{padding:3px 10px;border-radius:999px;border:1px solid var(--ad-border);background:var(--ad-bg-base);color:var(--ad-label-secondary);font-size:12px;cursor:pointer}
+.ad-asset-chip[aria-pressed='true']{background:var(--ad-brand);border-color:var(--ad-brand);color:var(--ad-on-brand)}
+.ad-asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+.ad-asset-card{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid var(--ad-border);border-radius:10px;background:var(--ad-bg-base);cursor:pointer;text-align:left;color:inherit}
+.ad-asset-card[aria-pressed='true']{border-color:var(--ad-brand)}
+.ad-asset-thumb{display:flex;align-items:center;justify-content:center;width:100%;height:96px;border-radius:8px;background:var(--ad-subtle-bg);overflow:hidden}
+.ad-asset-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.ad-asset-placeholder{display:flex;align-items:center;justify-content:center;width:100%;height:96px;border-radius:8px;background:var(--ad-subtle-bg);color:var(--ad-label-secondary);font-size:12px;text-align:center;padding:4px;box-sizing:border-box}
+.ad-asset-badge{align-self:flex-start;padding:1px 8px;border-radius:999px;background:var(--ad-subtle-bg);color:var(--ad-label-secondary);font-size:12px}
+.ad-asset-card-meta{display:flex;flex-direction:column;gap:2px}
+.ad-asset-card-id{font-size:12px;color:var(--ad-label-secondary)}
+.ad-asset-card-name{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ad-asset-detail{margin-top:10px;padding:10px;border:1px solid var(--ad-border);border-radius:10px;background:var(--ad-bg-base)}
+.ad-asset-detail-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.ad-asset-detail-main{display:flex;justify-content:center;margin-bottom:8px}
+.ad-asset-detail-img{max-width:100%;max-height:320px;border-radius:8px;object-fit:contain;background:var(--ad-subtle-bg)}
+.ad-asset-detail-thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.ad-asset-detail-thumb{padding:0;border:2px solid transparent;border-radius:6px;background:none;cursor:pointer;overflow:hidden}
+.ad-asset-detail-thumb[aria-pressed='true']{border-color:var(--ad-brand)}
+.ad-asset-detail-thumb-img{width:48px;height:48px;object-fit:cover;display:block}
+.ad-asset-detail-empty{padding:16px;text-align:center;color:var(--ad-label-secondary);font-size:12px}
+.ad-asset-audio{margin-top:8px}
+.ad-asset-audio-el{width:100%;max-width:420px}
+.ad-episode-dialogue{margin-top:4px}
+.ad-episode-viewtabs{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.ad-visual-bible{margin-top:4px}
+.ad-visual-toolbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:10px}
+.ad-visual-section{margin-bottom:14px}
+.ad-visual-style{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;padding:10px;border:1px solid var(--ad-border);border-radius:10px;background:var(--ad-bg-base)}
+.ad-visual-style-head{max-width:180px;flex-shrink:0}
+.ad-visual-style-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;flex:1;min-width:220px}
+.ad-visual-style-dim{padding:6px 8px;border-radius:8px;background:var(--ad-subtle-bg)}
+.ad-visual-style-label{font-size:12px;color:var(--ad-label-secondary);margin-bottom:2px}
+.ad-visual-style-text{font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word;max-height:96px;overflow:auto}
+.ad-visual-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.ad-visual-card{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid var(--ad-border);border-radius:10px;background:var(--ad-bg-base);min-width:0}
+.ad-visual-thumb-wrap{display:flex;align-items:center;justify-content:center;width:100%;height:104px;border-radius:8px;background:var(--ad-subtle-bg);overflow:hidden}
+.ad-visual-thumb{display:flex;width:100%;height:100%;align-items:center;justify-content:center;padding:0;border:none;background:none;cursor:zoom-in;overflow:hidden;border-radius:8px}
+.ad-visual-thumb-img{width:100%;height:100%;object-fit:cover;display:block}
+.ad-visual-placeholder{display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:var(--ad-label-secondary);font-size:12px;background:var(--ad-subtle-bg)}
+.ad-visual-card-body{display:flex;flex-direction:column;gap:3px;min-width:0;font-size:12px;line-height:1.7}
+.ad-visual-meta{color:var(--ad-label-secondary);font-size:12px;overflow-wrap:anywhere}
+.ad-visual-audio-box{margin-top:2px;display:flex;flex-direction:column;gap:4px}
+.ad-visual-audio{width:100%;max-width:260px}
+.ad-visual-audio-switches{display:flex;gap:4px;flex-wrap:wrap}
+.ad-visual-empty{padding:10px;border-radius:8px;background:var(--ad-subtle-bg);color:var(--ad-label-secondary);font-size:12px}
+.ad-visual-wall{display:flex;flex-wrap:wrap;gap:8px}
+.ad-visual-wall .ad-visual-thumb{width:108px;height:108px;flex:0 0 auto}
+.ad-visual-lightbox{position:fixed;inset:0;z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:72px 16px 24px;background:color-mix(in srgb, var(--ad-label-primary) 55%, transparent);overflow:auto}
+.ad-visual-lightbox-close{position:fixed;top:16px;right:16px;z-index:2;min-width:96px;min-height:40px;box-shadow:0 2px 10px rgba(0,0,0,.35)}
+.ad-visual-lightbox-hint{position:relative;z-index:1;color:var(--ad-bg-base);font-size:12px;line-height:18px;opacity:.9;text-align:center;flex:0 0 auto}
+.ad-visual-lightbox-img{position:relative;z-index:1;max-width:min(90vw,calc(100vw - 32px));max-height:calc(100vh - 160px);border-radius:10px;background:var(--ad-bg-base);flex:0 1 auto}
+.ad-legacy-view{margin-top:2px}
+.ad-legacy-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.ad-legacy-card{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid var(--ad-border);border-radius:10px;background:var(--ad-bg-base);min-width:0}
+.ad-legacy-thumb-wrap{display:flex;align-items:center;justify-content:center;width:100%;height:104px;border-radius:8px;background:var(--ad-subtle-bg);overflow:hidden}
+.ad-legacy-thumb{display:flex;width:100%;height:100%;align-items:center;justify-content:center;padding:0;border:none;background:none;cursor:zoom-in;overflow:hidden;border-radius:8px}
+.ad-legacy-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.ad-legacy-placeholder{display:flex;align-items:center;justify-content:center;width:100%;height:100%;padding:4px;box-sizing:border-box;color:var(--ad-label-secondary);font-size:12px;text-align:center;background:var(--ad-subtle-bg)}
+.ad-legacy-missing{color:var(--ad-warn)}
+.ad-legacy-body{display:flex;flex-direction:column;gap:3px;min-width:0;font-size:12px;line-height:1.7}
+.ad-legacy-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ad-legacy-meta{color:var(--ad-label-secondary);font-size:12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;overflow-wrap:anywhere}
+.ad-legacy-note{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ad-registration{margin-top:12px;padding-top:10px;border-top:1px dashed var(--ad-divider)}
+.ad-registration-body{margin-top:8px}
+.ad-asset-fields{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px 14px;margin:0}
+
+.ad-asset-field{display:flex;gap:6px;font-size:12px;line-height:1.7;min-width:0}
+.ad-asset-field-label{color:var(--ad-label-secondary);flex-shrink:0}
+.ad-asset-field-value{color:var(--ad-label-primary);overflow-wrap:anywhere}
 `
 
     function Styles() {
@@ -1722,6 +1805,302 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         focusable: 'false',
       }, h('path', { d: ICON_PATHS[name] || ICON_PATHS.ellipsis }))
     }
+
+    /* ------------------------- v0.15.1（task-108 / B2S-C）：素材库分类 + 图片可见（只读） helper */
+    // 9 类资产卡类型（与宿主 lib/assets.js ASSET_PREFIXES 对齐）+ 展示顺序/中文标签。
+    const ASSET_TYPE_ORDER = [
+      ['CHR', '角色'],
+      ['SPC', '场景'],
+      ['PRP', '道具'],
+      ['CST', '服装'],
+      ['EXP', '表情'],
+      ['SFX', '音效'],
+      ['VOX', '配音'],
+      ['MUS', '音乐'],
+      ['SHT', '分镜'],
+    ]
+    const ASSET_TYPE_LABELS = (() => {
+      const labels = {}
+      for (const [type, label] of ASSET_TYPE_ORDER) labels[type] = label
+      return labels
+    })()
+    const ASSET_IMAGE_MAX_COUNT = 6
+    const ASSET_IMAGE_SRC_MAX = 500
+    // 图片读取去重表（项目切换/刷新时清空；渲染状态由组件 assetImageCache 驱动）
+    const assetImageLoadState = new Map()
+
+    function assetCardImagePaths(cards, maxCards) {
+      const paths = []
+      for (const card of (Array.isArray(cards) ? cards : []).slice(0, maxCards || 60)) {
+        if (!card || !card.media) continue
+        if (card.media.thumbnail) paths.push(card.media.thumbnail)
+        if (Array.isArray(card.media.images) && card.media.images[0]) paths.push(card.media.images[0])
+      }
+      return paths
+    }
+
+    function assetTypeLabelOf(type) {
+      return ASSET_TYPE_LABELS[String(type || '').toUpperCase()] || '资产'
+    }
+
+    function assetIdTypeOf(id) {
+      const match = /^([A-Z]{3})[0-9]/.exec(String(id || '').toUpperCase())
+      return match && ASSET_TYPE_LABELS[match[1]] ? match[1] : ''
+    }
+
+    /** 图片源分类：http(s) 可直接展示；非 http 的非空字符串按项目相对路径走 media-read；其余不请求。 */
+    function assetImageSourceOf(raw) {
+      const text = typeof raw === 'string' ? raw.trim().slice(0, ASSET_IMAGE_SRC_MAX) : ''
+      if (!text) return { kind: 'none', value: '' }
+      if (/^https?:\/\//i.test(text)) {
+        try {
+          const parsed = new URL(text)
+          return { kind: 'http', value: parsed.href }
+        } catch {
+          return { kind: 'invalid', value: text }
+        }
+      }
+      if (/^(?:data|blob):/i.test(text)) return { kind: 'invalid', value: text }
+      if (/^[\\/]/.test(text) || /^[A-Za-z]:[\\/]/.test(text)) return { kind: 'absolute', value: text }
+      return { kind: 'relative', value: text }
+    }
+
+    function normalizeAssetMedia(raw) {
+      const media = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null
+      if (!media) return null
+      const images = []
+      if (Array.isArray(media.images)) {
+        for (const item of media.images) {
+          const src = assetImageSourceOf(item)
+          if (src.kind === 'none' || src.kind === 'invalid') continue
+          if (!images.includes(src.value)) images.push(src.value)
+          if (images.length >= ASSET_IMAGE_MAX_COUNT) break
+        }
+      }
+      // v0.15.2（task-112）：media.audio 为 string[]（1–6 项；兼容脏数据中的单字符串），默认试听 audio[0]。
+      const audios = []
+      const audioRaw = Array.isArray(media.audio) ? media.audio : typeof media.audio === 'string' ? [media.audio] : []
+      for (const item of audioRaw) {
+        const src = assetImageSourceOf(item)
+        if (src.kind === 'none' || src.kind === 'invalid') continue
+        if (!audios.includes(src.value)) audios.push(src.value)
+        if (audios.length >= ASSET_IMAGE_MAX_COUNT) break
+      }
+      const thumbnail = assetImageSourceOf(media.thumbnail)
+      const normalized = {}
+      if (images.length) normalized.images = images
+      if (audios.length) normalized.audio = audios
+      if (thumbnail.value && thumbnail.kind !== 'invalid') normalized.thumbnail = thumbnail.value
+      return Object.keys(normalized).length ? normalized : null
+    }
+
+    /** 防御式归一化 assets-get add-only `cards`（缺 id/name/重复 id 跳过；旧项目 [] → 旧视图）。 */
+    function normalizeAssetCards(raw) {
+      if (!Array.isArray(raw)) return []
+      const cards = []
+      const seen = new Set()
+      for (const item of raw) {
+        if (!item || typeof item !== 'object') continue
+        const id = typeof item.id === 'string' ? item.id.trim().toUpperCase() : ''
+        const name = typeof item.name === 'string' ? item.name.trim() : ''
+        if (!id || !name || seen.has(id)) continue
+        seen.add(id)
+        const version = Number(item.version)
+        cards.push({
+          id,
+          type: String(item.type || '').trim().toUpperCase() || assetIdTypeOf(id),
+          name,
+          status: typeof item.status === 'string' ? item.status.trim() : '',
+          version: Number.isFinite(version) && version >= 1 ? Math.floor(version) : 1,
+          variantOf: typeof item.variantOf === 'string' ? item.variantOf : '',
+          aliases: Array.isArray(item.aliases) ? item.aliases.map((alias) => String(alias).trim()).filter(Boolean) : [],
+          fields: item.fields && typeof item.fields === 'object' && !Array.isArray(item.fields) ? item.fields : {},
+          relations: item.relations && typeof item.relations === 'object' && !Array.isArray(item.relations) ? item.relations : {},
+          prompts: item.prompts && typeof item.prompts === 'object' && !Array.isArray(item.prompts) ? item.prompts : {},
+          history: Array.isArray(item.history) ? item.history : [],
+          media: normalizeAssetMedia(item.media),
+        })
+      }
+      return cards
+    }
+
+    function filterAssetCards(cards, type, query) {
+      const typeKey = String(type || '全部').toUpperCase()
+      const keyword = String(query || '').trim().toLowerCase()
+      return (Array.isArray(cards) ? cards : []).filter((card) => {
+        if (typeKey !== '全部' && String(card.type || '').toUpperCase() !== typeKey) return false
+        if (!keyword) return true
+        return String(card.id || '').toLowerCase().includes(keyword) || String(card.name || '').toLowerCase().includes(keyword)
+      })
+    }
+
+    function assetFieldEntries(card) {
+      if (!card || typeof card !== 'object') return []
+      const entries = []
+      const push = (label, value) => {
+        const text = typeof value === 'string' ? value.trim() : typeof value === 'number' || typeof value === 'boolean' ? String(value) : ''
+        if (!text) return
+        entries.push([label, text.length > 200 ? text.slice(0, 200) + '…' : text])
+      }
+      push('类型', card.type ? `${assetTypeLabelOf(card.type)}（${card.type}）` : '')
+      push('状态', card.status)
+      push('版本', card.version ? `v${card.version}` : '')
+      push('变体引用', card.variantOf)
+      if (card.aliases && card.aliases.length) push('别名', card.aliases.join('、'))
+      const flattenObject = (source, prefix) => {
+        if (!source || typeof source !== 'object') return
+        for (const [key, raw] of Object.entries(source)) {
+          if (entries.length >= 30) return
+          if (raw == null) continue
+          let text = ''
+          if (Array.isArray(raw)) text = raw.map((item) => (item == null ? '' : String(item).trim())).filter(Boolean).join('；')
+          else if (typeof raw === 'object') text = ''
+          else text = String(raw)
+          push(`${prefix} · ${key}`, text)
+        }
+      }
+      flattenObject(card.fields, '字段')
+      flattenObject(card.relations, '关联')
+      flattenObject(card.prompts, '提示词')
+      const history = Array.isArray(card.history) ? card.history.slice(-3) : []
+      for (const item of history) push('历史', `v${item && item.version ? item.version : '?'} ${item && item.change ? item.change : ''}`)
+      return entries
+    }
+
+    /* ---------------- v0.15.3（task-115 / VB-C）：视觉圣经专区只读数据 helper ---------------- */
+    const STYLE_DIMENSION_ORDER = [
+      ['palette', '色板'],
+      ['lighting', '光感'],
+      ['texture', '质感'],
+      ['composition', '构图偏好'],
+      ['motion', '运镜节奏'],
+    ]
+    const VISUAL_STYLE_TEXT_MAX = 300
+
+    /** 归一 styleDNA（只保留五维非空字符串；无有效维返回 null → 视觉基调空态）。 */
+    function normalizeVisualStyle(raw) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+      const style = {}
+      for (const [key] of STYLE_DIMENSION_ORDER) {
+        const value = typeof raw[key] === 'string' ? raw[key].trim().slice(0, VISUAL_STYLE_TEXT_MAX) : ''
+        if (value) style[key] = value
+      }
+      return Object.keys(style).length ? style : null
+    }
+
+    /** 归一场景卡（防御式；仅展示用字段；无 id/name 跳过；按 id 排序）。 */
+    function normalizeVisualScenes(raw) {
+      if (!Array.isArray(raw)) return []
+      const scenes = []
+      const seen = new Set()
+      for (const item of raw) {
+        if (!item || typeof item !== 'object') continue
+        const id = typeof item.id === 'string' ? item.id.trim().toUpperCase() : ''
+        const name = typeof item.name === 'string' ? item.name.trim() : ''
+        if (!id || !name || seen.has(id)) continue
+        seen.add(id)
+        const space = item.space && typeof item.space === 'object' && !Array.isArray(item.space) ? item.space : {}
+        const text = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max || 120) : '')
+        scenes.push({
+          id,
+          name,
+          interior: text(space.interior, 10),
+          timeOfDay: text(space.timeOfDay, 40),
+          weather: text(space.weather, 40),
+          location: text(space.location, 120),
+          lighting: text(item.lighting, 300),
+          description: text(item.description, 300),
+          assetRefs: Array.isArray(item.assetRefs) ? item.assetRefs.map((ref) => String(ref).trim()).filter(Boolean) : [],
+        })
+      }
+      return scenes.sort((a, b) => String(a.id).localeCompare(String(b.id), 'en'))
+    }
+
+    /** 聚合资产卡 media.images（全部类型，按 URL 去重；thumbnail 不参与图墙）。 */
+    function collectVisualImages(cards) {
+      const entries = []
+      const seen = new Set()
+      for (const card of Array.isArray(cards) ? cards : []) {
+        if (!card || !card.media || !Array.isArray(card.media.images)) continue
+        for (const raw of card.media.images) {
+          const src = assetImageSourceOf(raw)
+          if (src.kind === 'none' || src.kind === 'invalid') continue
+          if (seen.has(src.value)) continue
+          seen.add(src.value)
+          entries.push({ src: src.value, kind: src.kind, cardId: card.id, cardName: card.name, type: String(card.type || '').toUpperCase() })
+        }
+      }
+      return entries
+    }
+
+    /** 场景缩略图兜底：同 id 的 SPC 资产卡 media.thumbnail || media.images[0]（场景卡 schema 无 media）。 */
+    function sceneThumbOf(scene, cardsById) {
+      const card = scene && cardsById ? cardsById.get(String(scene.id || '').toUpperCase()) : null
+      if (!card || !card.media) return ''
+      return card.media.thumbnail || (Array.isArray(card.media.images) ? card.media.images[0] : '') || ''
+    }
+
+    /* ---------------- v0.15.4（task-119 / M20-C）：素材库 2.0 · legacy 登记统一视图 helper ---------------- */
+    const LEGACY_ASSET_KIND_ORDER = ['image', 'video', 'audio', 'doc', 'other']
+    const LEGACY_ASSET_KIND_LABELS = { image: '图片', video: '视频', audio: '音频', doc: '文档', other: '其他' }
+    const legacyImageLoadState = new Map()
+
+    function normalizeLegacyAssets(raw) {
+      const list = []
+      const seen = new Set()
+      for (const item of Array.isArray(raw) ? raw : []) {
+        if (!item || typeof item !== 'object') continue
+        const id = typeof item.id === 'string' ? item.id.trim() : ''
+        const name = typeof item.name === 'string' ? item.name.trim() : ''
+        if (!id || !name || seen.has(id)) continue
+        seen.add(id)
+        const kindRaw = String(item.kind || '').trim().toLowerCase()
+        const kind = LEGACY_ASSET_KIND_ORDER.includes(kindRaw) ? kindRaw : 'other'
+        const bytes = Number(item.bytes)
+        list.push({
+          id,
+          name,
+          kind,
+          bytes: Number.isFinite(bytes) && bytes >= 0 ? bytes : 0,
+          sha256: typeof item.sha256 === 'string' ? item.sha256 : '',
+          note: typeof item.note === 'string' ? item.note.trim().slice(0, 500) : '',
+          linkedShots: Array.isArray(item.linkedShots) ? item.linkedShots.map((shot) => String(shot).trim()).filter(Boolean) : [],
+          source: typeof item.source === 'string' ? item.source : '',
+        })
+      }
+      return list
+    }
+
+    function formatAssetBytes(bytes) {
+      const value = Number(bytes) || 0
+      if (value >= 1024 * 1024) return Math.round((value / (1024 * 1024)) * 10) / 10 + ' MB'
+      if (value >= 1024) return Math.round((value / 1024) * 10) / 10 + ' KB'
+      return value + ' B'
+    }
+
+    function legacyAssetSearchText(asset) {
+      return [asset.name, asset.note, asset.id, ...(asset.linkedShots || []), asset.source].join(' ').toLowerCase()
+    }
+
+    function filterLegacyAssets(list, kind, query) {
+      const kindKey = String(kind || 'all').toLowerCase()
+      const keyword = String(query || '').trim().toLowerCase()
+      return (Array.isArray(list) ? list : []).filter((asset) => {
+        if (kindKey !== 'all' && asset.kind !== kindKey) return false
+        if (!keyword) return true
+        return legacyAssetSearchText(asset).includes(keyword)
+      })
+    }
+
+    function sortLegacyAssets(list, sortKey) {
+      const items = (Array.isArray(list) ? list : []).slice()
+      if (sortKey === 'size-desc') return items.sort((a, b) => (Number(b.bytes) || 0) - (Number(a.bytes) || 0) || String(a.name).localeCompare(String(b.name), 'zh'))
+      return items.sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh'))
+    }
+
+    // v0.15.5（task-121）：lightbox 关闭热修 —— 触发元素与 body overflow 原值（关闭时恢复焦点/滚动）
+    let lightboxTriggerEl = null
+    let lightboxPrevBodyOverflow = ''
 
     /* ------------------------------------------------------------ 通用控件 */
 
@@ -2804,9 +3183,121 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
       const [sharedText, setSharedText] = React.useState('')
       const [sharedPath, setSharedPath] = React.useState('')
       const [dialogue, setDialogue] = React.useState(null)
+      // v0.15.2（task-112）：剧本页「正文 | 台词」视图 + 台词筛选 + legacy dialogue 重定向提示
+      const [episodeView, setEpisodeView] = React.useState('text') // text | dialogue
+      const [dialogueEpisodeFilter, setDialogueEpisodeFilter] = React.useState('all')
+      const [dialogueCharacterFilter, setDialogueCharacterFilter] = React.useState('all')
+      const [dialogueRedirectNotice, setDialogueRedirectNotice] = React.useState(false)
       const [assets, setAssets] = React.useState([])
       const [assetSource, setAssetSource] = React.useState('')
       const [assetShots, setAssetShots] = React.useState('')
+      // v0.15.1（task-108 / B2S-C）：素材库分类 + 图片可见（只读）UI 态
+      const [assetCards, setAssetCards] = React.useState([])
+      const [assetTypeFilter, setAssetTypeFilter] = React.useState('全部')
+      const [assetQuery, setAssetQuery] = React.useState('')
+      const [assetSelectedId, setAssetSelectedId] = React.useState(null)
+      const [assetImageIndex, setAssetImageIndex] = React.useState(0)
+      // 项目相对路径图片缓存：path → { status:'loading'|'ok'|'error', dataUrl? }；http 图不走缓存
+      const [assetImageCache, setAssetImageCache] = React.useState({})
+      const [assetBrokenImages, setAssetBrokenImages] = React.useState({})
+      // v0.15.2（task-112）：角色卡音色参考试听（media.audio 数组；默认 audio[0]，可切换）
+      const [assetAudioIndex, setAssetAudioIndex] = React.useState(0)
+      const [assetBrokenAudios, setAssetBrokenAudios] = React.useState({})
+      // v0.15.3（task-115 / VB-C）：素材库内「卡片视图 | 视觉圣经」只读专区
+      const [visualStyle, setVisualStyle] = React.useState(null)
+      const [visualScenes, setVisualScenes] = React.useState([])
+      const [assetView, setAssetView] = React.useState('cards') // cards | visual
+      const [visualType, setVisualType] = React.useState('all')
+      const [visualQuery, setVisualQuery] = React.useState('')
+      const [visualSort, setVisualSort] = React.useState('id-asc')
+      const [visualLightbox, setVisualLightbox] = React.useState(null)
+      const [visualAudioIndex, setVisualAudioIndex] = React.useState({})
+      // v0.15.4（task-119 / M20-C）：素材库 2.0 · legacy 登记统一卡片视图
+      const [legacyImageCache, setLegacyImageCache] = React.useState({})
+      const [legacyKindFilter, setLegacyKindFilter] = React.useState('all')
+      const [legacyQuery, setLegacyQuery] = React.useState('')
+      const [legacySort, setLegacySort] = React.useState('name-asc')
+      const [assetRegistrationOpen, setAssetRegistrationOpen] = React.useState(false)
+
+      // v0.15.5（task-121）：lightbox 关闭热修 —— 统一关闭函数 + Esc/背景/焦点/滚动锁（三方式关闭）
+      const closeVisualLightbox = () => setVisualLightbox(null)
+      React.useEffect(() => {
+        if (!visualLightbox) return undefined
+        const doc = typeof document === 'undefined' ? null : document
+        const overlay = doc && typeof doc.querySelector === 'function' ? doc.querySelector('[data-lightbox-overlay]') : null
+        const focusableSelector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        const listFocusables = () => {
+          if (!overlay || typeof overlay.querySelectorAll !== 'function') return []
+          return Array.prototype.slice.call(overlay.querySelectorAll(focusableSelector)).filter((el) => !el.disabled)
+        }
+        if (!lightboxTriggerEl && doc && doc.activeElement) lightboxTriggerEl = doc.activeElement
+        const onKeyDown = (event) => {
+          if (event.key === 'Escape' || event.key === 'Esc') {
+            event.preventDefault()
+            event.stopPropagation()
+            setVisualLightbox(null)
+            return
+          }
+          if (event.key !== 'Tab') return
+          const items = listFocusables()
+          if (!items.length) return
+          const first = items[0]
+          const last = items[items.length - 1]
+          const active = doc ? doc.activeElement : null
+          if (items.indexOf(active) < 0) { event.preventDefault(); first.focus(); return }
+          if (event.shiftKey && active === first) { event.preventDefault(); last.focus() }
+          else if (!event.shiftKey && active === last) { event.preventDefault(); first.focus() }
+        }
+        if (doc && typeof doc.addEventListener === 'function') doc.addEventListener('keydown', onKeyDown, true)
+        const closeBtn = overlay && typeof overlay.querySelector === 'function' ? overlay.querySelector('[data-lightbox-close]') : null
+        if (closeBtn && typeof closeBtn.focus === 'function') closeBtn.focus()
+        if (doc && doc.body) {
+          lightboxPrevBodyOverflow = doc.body.style.overflow
+          document.body.style.overflow = 'hidden'
+        }
+        return () => {
+          if (doc && typeof doc.removeEventListener === 'function') doc.removeEventListener('keydown', onKeyDown, true)
+          if (doc && doc.body) document.body.style.overflow = lightboxPrevBodyOverflow
+          const trigger = lightboxTriggerEl
+          lightboxTriggerEl = null
+          if (trigger && trigger.isConnected !== false && typeof trigger.focus === 'function') {
+            try { trigger.focus() } catch { /* 触发元素可能已卸载 */ }
+          }
+        }
+      }, [visualLightbox])
+      const visualLightboxNode = visualLightbox
+        ? h('div', {
+            className: 'ad-visual-lightbox',
+            key: 'visual-lightbox',
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-label': '大图预览',
+            'data-lightbox-overlay': 'true',
+            onClick: (event) => {
+              // 背景点击关闭（target === currentTarget）；图片/按钮点击不误关
+              if (event && event.target === event.currentTarget) closeVisualLightbox()
+            },
+          },
+            h('button', {
+              type: 'button',
+              className: 'ad-btn ad-sm ad-visual-lightbox-close',
+              'aria-label': '关闭大图预览',
+              'data-lightbox-close': 'true',
+              onClick: (event) => {
+                if (event && typeof event.preventDefault === 'function') event.preventDefault()
+                if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
+                closeVisualLightbox()
+              },
+            }, '关闭（Esc）'),
+            h('div', { className: 'ad-visual-lightbox-hint', 'aria-hidden': 'true' }, '点击背景或按 Esc 关闭'),
+            h('img', {
+              className: 'ad-visual-lightbox-img',
+              src: visualLightbox.src,
+              alt: visualLightbox.alt || '大图预览',
+              loading: 'lazy',
+              onClick: (event) => { if (event && typeof event.stopPropagation === 'function') event.stopPropagation() },
+            }))
+        : null
       const [finalized, setFinalized] = React.useState([])
       const [ledger, setLedger] = React.useState(null)
       const [genBackends, setGenBackends] = React.useState(null)
@@ -3023,9 +3514,37 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         // 账本 / 台词 / 素材 / 导入预览：跨项目不串扰
         setLedger(null)
         setDialogue(null)
+        setEpisodeView('text')
+        setDialogueEpisodeFilter('all')
+        setDialogueCharacterFilter('all')
+        setDialogueRedirectNotice(false)
         setAssets([])
         setAssetSource('')
         setAssetShots('')
+        setAssetCards([])
+        setAssetTypeFilter('全部')
+        setAssetQuery('')
+        setAssetSelectedId(null)
+        setAssetImageIndex(0)
+        setAssetImageCache({})
+        setAssetBrokenImages({})
+        setAssetAudioIndex(0)
+        setAssetBrokenAudios({})
+        setVisualStyle(null)
+        setVisualScenes([])
+        setAssetView('cards')
+        setVisualType('all')
+        setVisualQuery('')
+        setVisualSort('id-asc')
+        setVisualLightbox(null)
+        setVisualAudioIndex({})
+        setLegacyImageCache({})
+        setLegacyKindFilter('all')
+        setLegacyQuery('')
+        setLegacySort('name-asc')
+        setAssetRegistrationOpen(false)
+        legacyImageLoadState.clear()
+        assetImageLoadState.clear()
         setImportText('')
         setImportPreview(null)
         setShowImport(false)
@@ -4076,7 +4595,13 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
       }
 
       const switchTab = (tabKey) => {
-        const blocked = strictGateBlock(tabKey)
+        // v0.15.2（task-112）：legacy dialogue → 剧本页台词视图（无 URL 深链机制，按 tab-key 别名重定向）
+        const targetTab = normalizeTabKey(tabKey)
+        if (isLegacyDialogueTab(tabKey)) {
+          setEpisodeView('dialogue')
+          setDialogueRedirectNotice(true)
+        }
+        const blocked = strictGateBlock(targetTab)
         if (blocked) {
           setFlowMsg(blocked)
           return
@@ -4084,11 +4609,21 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         // P0-1（task-4）：切页签是「离开当前编辑页」路径，有未保存修改时先走三选一守卫
         requestLeave(() => {
           setFlowMsg('')
-          setTab(tabKey)
+          setTab(targetTab)
+          // v0.15.4（task-119 / M20-C）：进入素材库自动加载（不再要求先点「刷新」）
+          if (targetTab === 'assets' && openTitle) loadAssets().catch(() => {})
           // P2-3：进入「检查」页时若无报告则尝试读取最新审读报告（未就绪时静默降级为空态+指引）
-          if (tabKey === 'check' && openTitle && !reviewReport && !reviewBusy) loadReview().catch(() => {})
+          if (targetTab === 'check' && openTitle && !reviewReport && !reviewBusy) loadReview().catch(() => {})
         })
       }
+
+      // v0.15.2（task-112）：legacy `dialogue` tab key 统一重定向到「剧本」页台词视图 + 提示（无外部深链参数）。
+      React.useEffect(() => {
+        if (tab !== 'dialogue') return
+        setEpisodeView('dialogue')
+        setDialogueRedirectNotice(true)
+        setTab('episode')
+      }, [tab])
 
       /* --------------------------------- P2-3 审读报告（只读展示 / 跳转 / 裁决） */
 
@@ -4257,10 +4792,105 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           say(`已导出 ${result.written.length} 份配音稿（共 ${result.total} 句）`)
         })
 
+      // v0.15.1（task-108）：项目相对路径图片经只读 media-read 取 base64 → data URL（失败占位；去重/缓存；不写盘）。
+      const ensureAssetImages = (rawList) => {
+        if (!openTitle) return
+        const candidates = []
+        for (const raw of Array.isArray(rawList) ? rawList : [rawList]) {
+          const src = assetImageSourceOf(raw)
+          if (src.kind !== 'relative') continue
+          if (!candidates.includes(src.value)) candidates.push(src.value)
+        }
+        const pending = candidates.filter((pathValue) => !assetImageLoadState.has(pathValue))
+        if (!pending.length) return
+        setAssetImageCache((prev) => {
+          const next = { ...prev }
+          let changed = false
+          for (const pathValue of pending) {
+            if (!next[pathValue]) {
+              next[pathValue] = { status: 'loading' }
+              changed = true
+            }
+          }
+          return changed ? next : prev
+        })
+        for (const pathValue of pending.slice(0, 12)) {
+          assetImageLoadState.set(pathValue, 'loading')
+          api('media-read', { title: openTitle, path: pathValue })
+            .then((result) => {
+              // v0.15.2（task-112）：media-read 同时服务图片/音频；使用宿主返回的 MIME（不再固定 image/png）。
+              const rawMime = result && typeof result.mime === 'string' ? result.mime.trim() : ''
+              const mime = /^[a-z]+\/[a-z0-9.+-]+$/i.test(rawMime) ? rawMime : 'application/octet-stream'
+              const base64 = result && typeof result.base64 === 'string' ? result.base64 : ''
+              if (!base64) throw new Error('media-read 返回为空')
+              assetImageLoadState.set(pathValue, 'ok')
+              setAssetImageCache((prev) => ({ ...prev, [pathValue]: { status: 'ok', dataUrl: `data:${mime};base64,${base64}` } }))
+            })
+            .catch(() => {
+              assetImageLoadState.set(pathValue, 'error')
+              setAssetImageCache((prev) => ({ ...prev, [pathValue]: { status: 'error' } }))
+            })
+        }
+      }
+
+      // v0.15.4（task-119 / M20-C）：legacy 登记图片经 media-read({assetId}) 只读预览（不传客户端路径；host 白名单读已登记 source）。
+      const ensureLegacyImages = (list) => {
+        if (!openTitle) return
+        const pending = (Array.isArray(list) ? list : []).filter((asset) => asset && asset.kind === 'image' && asset.id && !legacyImageLoadState.has(asset.id))
+        if (!pending.length) return
+        const batch = pending.slice(0, 8)
+        for (const asset of batch) {
+          legacyImageLoadState.set(asset.id, 'loading')
+          setLegacyImageCache((prev) => (prev[asset.id] ? prev : { ...prev, [asset.id]: { status: 'loading' } }))
+          api('media-read', { title: openTitle, assetId: asset.id })
+            .then((result) => {
+              const rawMime = result && typeof result.mime === 'string' ? result.mime.trim() : ''
+              const mime = /^[a-z]+\/[a-z0-9.+-]+$/i.test(rawMime) ? rawMime : 'application/octet-stream'
+              const base64 = result && typeof result.base64 === 'string' ? result.base64 : ''
+              if (!base64) throw new Error('media-read 返回为空')
+              legacyImageLoadState.set(asset.id, 'ok')
+              setLegacyImageCache((prev) => ({ ...prev, [asset.id]: { status: 'ok', dataUrl: `data:${mime};base64,${base64}` } }))
+            })
+            .catch(() => {
+              legacyImageLoadState.set(asset.id, 'error')
+              setLegacyImageCache((prev) => ({ ...prev, [asset.id]: { status: 'error' } }))
+            })
+            .finally(() => {
+              const rest = pending.slice(batch.length)
+              if (rest.length) ensureLegacyImages(rest)
+            })
+        }
+      }
+
       const loadAssets = () =>
         guard(async () => {
           const result = await api('assets-get', { title: openTitle })
+          const cards = normalizeAssetCards(result.cards)
+          const legacyList = normalizeLegacyAssets(result.assets)
           setAssets(result.assets || [])
+          setAssetCards(cards)
+          setLegacyKindFilter('all')
+          setLegacyQuery('')
+          setLegacySort('name-asc')
+          legacyImageLoadState.clear()
+          setLegacyImageCache({})
+          ensureLegacyImages(legacyList)
+          // v0.15.3（task-115 / VB-C）：读取 add-only scenes/styleDNA（缺失 → 空态；零新调用点）
+          setVisualScenes(normalizeVisualScenes(result.scenes))
+          setVisualStyle(normalizeVisualStyle(result.styleDNA))
+          setAssetTypeFilter('全部')
+          setAssetQuery('')
+          setAssetSelectedId(null)
+          setAssetImageIndex(0)
+          setAssetView('cards')
+          setVisualType('all')
+          setVisualQuery('')
+          setVisualSort('id-asc')
+          setVisualLightbox(null)
+          setVisualAudioIndex({})
+          assetImageLoadState.clear()
+          setAssetImageCache({})
+          ensureAssetImages(assetCardImagePaths(cards))
         })
 
       const addAsset = () =>
@@ -5497,6 +6127,67 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         }
 
         if (tab === 'episode') {
+          // v0.15.2（task-112）：剧本页内「正文 | 台词」视图（不新增页签；legacy dialogue 重定向落入台词视图）。
+          body.push(
+            h('div', { key: 'ep-viewtabs', className: 'ad-row', style: { marginBottom: 10, flexWrap: 'wrap', gap: 8 } },
+              h('button', { type: 'button', className: 'ad-btn ad-sm', 'aria-pressed': episodeView === 'text', onClick: () => { setEpisodeView('text'); setDialogueRedirectNotice(false) } }, '正文'),
+              h('button', { type: 'button', className: 'ad-btn ad-sm', 'aria-pressed': episodeView === 'dialogue', onClick: () => setEpisodeView('dialogue') }, '台词'),
+              h('span', { className: 'ad-sub' }, '剧本页内视图切换（原「台词与音效」页签已并入本页）')),
+            dialogueRedirectNotice
+              ? h('div', { className: 'ad-warn', key: 'dlg-redirect', role: 'status' }, '原「台词与音效」页签已并入「剧本」页 · 台词视图（无数据迁移）',
+                  h('button', { type: 'button', className: 'ad-btn ad-sm', style: { marginLeft: 8 }, onClick: () => setDialogueRedirectNotice(false) }, '知道了'))
+              : null,
+          )
+          if (episodeView === 'dialogue') {
+            const dialogueLines = dialogue && Array.isArray(dialogue.lines) ? dialogue.lines : []
+            const dialogueSfx = dialogue && Array.isArray(dialogue.sfx) ? dialogue.sfx : []
+            const episodeOptions = [...new Set(dialogueLines.map((line) => Number(line.episode)).filter((order) => Number.isFinite(order) && order > 0))].sort((a, b) => a - b)
+            const characterOptions = dialogue && Array.isArray(dialogue.byCharacter) ? dialogue.byCharacter.map((item) => item.character).filter(Boolean) : []
+            const episodeFilterValue = dialogueEpisodeFilter === 'all' ? 'all' : String(dialogueEpisodeFilter)
+            const characterFilterValue = dialogueCharacterFilter || 'all'
+            const filteredLines = dialogueLines.filter((line) => (episodeFilterValue === 'all' || String(line.episode) === episodeFilterValue) && (characterFilterValue === 'all' || line.character === characterFilterValue))
+            const filteredSfx = dialogueSfx.filter((item) => episodeFilterValue === 'all' || String(item.episode) === episodeFilterValue)
+            body.push(
+              h('div', { key: 'ep-dialogue', className: 'ad-episode-dialogue' },
+                h('div', { className: 'ad-row', style: { marginBottom: 10, flexWrap: 'wrap', gap: 8 } },
+                  h('button', { className: 'ad-btn ad-primary ad-sm', onClick: loadDialogue, disabled: busy }, '刷新台词'),
+                  h('button', { className: 'ad-btn ad-sm', onClick: exportVoiceScript, disabled: busy }, '导出配音稿'),
+                  h('label', { className: 'ad-sub' }, '集数'),
+                  h('select', { className: 'ad-input ad-sm', 'aria-label': '台词按集筛选', value: episodeFilterValue, onChange: (e) => setDialogueEpisodeFilter(e.target.value === 'all' ? 'all' : Number(e.target.value)) },
+                    h('option', { value: 'all' }, '全部集'),
+                    episodeOptions.map((order) => h('option', { key: order, value: String(order) }, `第 ${order} 集`))),
+                  h('label', { className: 'ad-sub' }, '角色'),
+                  h('select', { className: 'ad-input ad-sm', 'aria-label': '台词按角色筛选', value: characterFilterValue, onChange: (e) => setDialogueCharacterFilter(e.target.value) },
+                    h('option', { value: 'all' }, '全部角色'),
+                    characterOptions.map((character) => h('option', { key: character, value: character }, character))),
+                  h('span', { className: 'ad-sub' }, '从分集剧本自动抽取「角色：台词」；音效取自分镜表；只读')),
+                dialogue
+                  ? h('div', null,
+                      h('div', { className: 'ad-sec', style: { marginTop: 4 } }, `角色戏份 · ${characterOptions.length} 人 / ${dialogueLines.length} 句 · 当前筛选 ${filteredLines.length} 句`),
+                      h('div', { className: 'ad-row', style: { flexWrap: 'wrap', gap: 6, marginBottom: 12 } },
+                        (dialogue.byCharacter || []).map((item) => h('span', { className: 'ad-count', key: item.character },
+                          `${item.character} ${item.count} 句（第 ${item.episodes.join('、')} 集）`))),
+                      h('div', { className: 'ad-sec' }, '逐句台词'),
+                      filteredLines.length
+                        ? h('div', { className: 'ad-hits', style: { maxHeight: 320, overflow: 'auto' } },
+                            filteredLines.slice(0, 300).map((line, index) =>
+                              h('div', { className: 'ad-hit', key: index },
+                                h('div', { className: 'ad-hit-path' }, `第 ${line.episode} 集 · ${line.scene || '—'}`),
+                                h('div', null, h('strong', null, line.character + '：'), line.text))))
+                        : h('div', { className: 'ad-table-empty' }, dialogueLines.length ? '当前筛选没有台词（换个集数 / 角色试试）' : '还没有台词数据，点「刷新台词」从分集剧本抽取'),
+                      filteredLines.length > 300 ? h('div', { className: 'ad-count' }, `（仅显示前 300 句，共 ${filteredLines.length} 句）`) : null,
+                      filteredSfx.length
+                        ? h('div', null,
+                            h('div', { className: 'ad-sec' }, `音效 · ${filteredSfx.length} 条（只读，来自分镜表）`),
+                            h('div', { className: 'ad-hits' },
+                              filteredSfx.slice(0, 100).map((item, index) =>
+                                h('div', { className: 'ad-hit', key: index },
+                                  h('div', { className: 'ad-hit-path' }, `第 ${item.episode} 集 · ${item.shotNumber}`),
+                                  h('div', null, item.sfx)))))
+                        : null)
+                  : emptyState({ key: 'dialogue-empty', title: '还没有台词数据', description: '从分集剧本自动抽取「角色：台词」，并生成可交付的配音稿。', next: '点上方「刷新台词」开始', actions: [{ label: '刷新台词', onClick: loadDialogue, disabled: busy }] })),
+            )
+          } else {
           const scenes = parseEpisodeScenes(episodeText)
           const episodeIsLoaded = loadedEpisodeOrder === (Number(episodeOrder) || 1)
           body.push(
@@ -5621,6 +6312,7 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
                 : null,
             ),
           )
+          }
         }
 
         if (tab === 'storyboard') {
@@ -5743,64 +6435,517 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           )
         }
 
-        if (tab === 'dialogue') {
-          body.push(
-            h('div', { key: 'dl' },
-              h('div', { className: 'ad-row', style: { marginBottom: 10 } },
-                h('button', { className: 'ad-btn ad-primary ad-sm', onClick: loadDialogue, disabled: busy }, '汇总台词'),
-                h('button', { className: 'ad-btn ad-sm', onClick: exportVoiceScript, disabled: busy }, '导出配音稿'),
-                h('span', { className: 'ad-sub' }, '从分集剧本自动抽取「角色：台词」，音效取自分镜表')),
-              dialogue
-                ? h('div', null,
-                    h('div', { className: 'ad-sec', style: { marginTop: 4 } }, `角色戏份 · ${dialogue.byCharacter.length} 人 / ${dialogue.lines.length} 句`),
-                    h('div', { className: 'ad-row', style: { flexWrap: 'wrap', gap: 6, marginBottom: 12 } },
-                      dialogue.byCharacter.map((c) =>
-                        h('span', { className: 'ad-count', key: c.character },
-                          `${c.character} ${c.count} 句（第 ${c.episodes.join('、')} 集）`))),
-                    h('div', { className: 'ad-sec' }, '逐句台词'),
-                    h('div', { className: 'ad-hits', style: { maxHeight: 320, overflow: 'auto' } },
-                      dialogue.lines.slice(0, 200).map((l, i) =>
-                        h('div', { className: 'ad-hit', key: i },
-                          h('div', { className: 'ad-hit-path' }, `第 ${l.episode} 集 · ${l.scene || '—'}`),
-                          h('div', null, h('strong', null, l.character + '：'), l.text)))),
-                    dialogue.lines.length > 200 ? h('div', { className: 'ad-count' }, `（仅显示前 200 句，共 ${dialogue.lines.length} 句）`) : null,
-                    dialogue.sfx.length
-                      ? h('div', null,
-                          h('div', { className: 'ad-sec' }, `音效 · ${dialogue.sfx.length} 条`),
-                          h('div', { className: 'ad-hits' },
-                            dialogue.sfx.slice(0, 100).map((s, i) =>
-                              h('div', { className: 'ad-hit', key: i },
-                                h('div', { className: 'ad-hit-path' }, `第 ${s.episode} 集 · ${s.shotNumber}`),
-                                h('div', null, s.sfx)))))
-                      : null)
-                : emptyState({ key: 'dialogue-empty', title: '还没有台词数据', description: '从分集剧本自动抽取「角色：台词」，并生成可交付的配音稿。', next: '点上方「汇总台词」开始', actions: [{ label: '汇总台词', onClick: loadDialogue, disabled: busy }] })),
-          )
-        }
-
         if (tab === 'assets') {
+          // v0.15.1（task-108 / B2S-C）：素材库分类 + 图片可见（只读，迭代 1）。
+          // 数据：assets-get 响应 add-only `cards`（旧 assets 字段与旧视图原样保留；无 cards → 零新显示）。
+          const visibleAssetCards = filterAssetCards(assetCards, assetTypeFilter, assetQuery)
+          const typeCounts = new Map()
+          for (const card of assetCards) {
+            const typeKey = String(card.type || '').toUpperCase()
+            typeCounts.set(typeKey, (typeCounts.get(typeKey) || 0) + 1)
+          }
+          const typeChips = ASSET_TYPE_ORDER.filter(([type]) => typeCounts.has(type))
+          const selectedCard = assetCards.find((card) => card.id === assetSelectedId) || null
+          const markBroken = (src) => setAssetBrokenImages((prev) => (prev[src] ? prev : { ...prev, [src]: true }))
+          const assetPlaceholder = (text, className) => h('span', { className: className || 'ad-asset-placeholder' }, text)
+          const assetImageNode = (raw, options) => {
+            const opts = options || {}
+            const src = assetImageSourceOf(raw)
+            if (src.kind === 'http') {
+              if (assetBrokenImages[src.value]) return assetPlaceholder('图片加载失败', opts.placeholderClass)
+              return h('img', {
+                className: opts.className || '',
+                src: src.value,
+                alt: opts.alt || '素材图片',
+                loading: 'lazy',
+                onError: () => markBroken(src.value),
+              })
+            }
+            if (src.kind === 'relative') {
+              const cached = assetImageCache[src.value]
+              if (cached && cached.status === 'ok') return h('img', { className: opts.className || '', src: cached.dataUrl, alt: opts.alt || '素材图片', loading: 'lazy' })
+              if (cached && cached.status === 'error') return assetPlaceholder('图片读取失败', opts.placeholderClass)
+              return assetPlaceholder('加载中…', opts.placeholderClass)
+            }
+            if (src.kind === 'absolute') return assetPlaceholder('本地路径不可预览', opts.placeholderClass)
+            return assetPlaceholder('无图', opts.placeholderClass)
+          }
+          const assetCardThumb = (card) => {
+            const media = card.media || null
+            const raw = media ? media.thumbnail || (media.images && media.images[0]) || '' : ''
+            const src = assetImageSourceOf(raw)
+            if (src.kind === 'http' && !assetBrokenImages[src.value]) {
+              return h('span', { className: 'ad-asset-thumb' }, h('img', { src: src.value, alt: `${card.name} 缩略图`, loading: 'lazy', onError: () => markBroken(src.value) }))
+            }
+            if (src.kind === 'relative') {
+              const cached = assetImageCache[src.value]
+              if (cached && cached.status === 'ok') return h('span', { className: 'ad-asset-thumb' }, h('img', { src: cached.dataUrl, alt: `${card.name} 缩略图`, loading: 'lazy' }))
+              if (cached && cached.status === 'error') return h('span', { className: 'ad-asset-thumb' }, h('span', { className: 'ad-asset-placeholder' }, '图片读取失败'))
+              return h('span', { className: 'ad-asset-thumb' }, h('span', { className: 'ad-asset-placeholder' }, '加载中…'))
+            }
+            const fallbackText = src.kind === 'absolute' ? '本地路径不可预览' : src.kind === 'invalid' ? '图片地址无效' : '无图'
+            return h('span', { className: 'ad-asset-thumb' }, h('span', { className: 'ad-asset-placeholder' }, `${assetTypeLabelOf(card.type)} · ${fallbackText}`))
+          }
+          const assetDetail = (card) => {
+            const media = card.media || null
+            const images = media && Array.isArray(media.images) ? media.images : []
+            const candidates = images.length ? images : media && media.thumbnail ? [media.thumbnail] : []
+            const currentIndex = Math.min(Math.max(assetImageIndex, 0), Math.max(candidates.length - 1, 0))
+            const currentImage = candidates[currentIndex] || ''
+            const fieldEntries = assetFieldEntries(card)
+            return h('div', { className: 'ad-asset-detail', 'aria-label': `资产详情 ${card.id}` },
+              h('div', { className: 'ad-asset-detail-head' },
+                h('strong', null, `${card.id} ${card.name}`),
+                h('span', { className: 'ad-asset-badge' }, assetTypeLabelOf(card.type)),
+                h('span', { className: 'ad-count' }, `${card.status || '—'} · v${card.version || 1}`),
+                h('div', { style: { flex: 1 } }),
+                h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: () => setAssetSelectedId(null) }, '关闭详情')),
+              candidates.length
+                ? h('div', { className: 'ad-asset-detail-main' }, assetImageNode(currentImage, { className: 'ad-asset-detail-img', alt: `${card.name} 大图 ${currentIndex + 1}` }))
+                : h('div', { className: 'ad-asset-detail-empty' }, '该资产暂无图片（media.images 为空）'),
+              candidates.length > 1
+                ? h('div', { className: 'ad-asset-detail-thumbs', role: 'group', 'aria-label': '切换图片' },
+                    candidates.map((raw, index) => h('button', {
+                      key: index,
+                      type: 'button',
+                      className: 'ad-asset-detail-thumb',
+                      'aria-label': `查看第 ${index + 1} 张图片`,
+                      'aria-pressed': index === currentIndex,
+                      onClick: () => setAssetImageIndex(index),
+                    }, assetImageNode(raw, { className: 'ad-asset-detail-thumb-img', alt: `${card.name} 第 ${index + 1} 张` }))))
+                : null,
+              // v0.15.2（task-112）：角色卡 media.audio 试听（数组；默认 audio[0]，可切换；不 autoplay、不提取时长）
+              (() => {
+                const audioCandidates = media && Array.isArray(media.audio) ? media.audio : []
+                if (!audioCandidates.length) return null
+                const currentAudioIndex = Math.min(Math.max(assetAudioIndex, 0), Math.max(audioCandidates.length - 1, 0))
+                const audioSource = assetImageSourceOf(audioCandidates[currentAudioIndex] || '')
+                const audioLabel = `${card.name} 音色试听第 ${currentAudioIndex + 1} 段`
+                const audioNode = (() => {
+                  if (audioSource.kind === 'http') {
+                    if (assetBrokenAudios[audioSource.value]) return h('div', { className: 'ad-asset-detail-empty' }, '音频不可试听（加载失败）')
+                    return h('audio', {
+                      className: 'ad-asset-audio-el',
+                      controls: true,
+                      preload: 'metadata',
+                      src: audioSource.value,
+                      'aria-label': audioLabel,
+                      onError: () => setAssetBrokenAudios((prev) => (prev[audioSource.value] ? prev : { ...prev, [audioSource.value]: true })),
+                    })
+                  }
+                  if (audioSource.kind === 'relative') {
+                    const cached = assetImageCache[audioSource.value]
+                    if (cached && cached.status === 'ok') return h('audio', { className: 'ad-asset-audio-el', controls: true, preload: 'metadata', src: cached.dataUrl, 'aria-label': audioLabel })
+                    if (cached && cached.status === 'error') return h('div', { className: 'ad-asset-detail-empty' }, '音频不可试听（读取失败）')
+                    return h('div', { className: 'ad-asset-detail-empty' }, '音频加载中…')
+                  }
+                  if (audioSource.kind === 'absolute') return h('div', { className: 'ad-asset-detail-empty' }, '本地路径音频不可试听')
+                  return h('div', { className: 'ad-asset-detail-empty' }, '音频不可试听')
+                })()
+                return h('div', { className: 'ad-asset-audio', role: 'group', 'aria-label': '音色参考（试听）' },
+                  h('div', { className: 'ad-sec', style: { marginBottom: 4 } }, `音色参考（试听） · ${currentAudioIndex + 1}/${audioCandidates.length}`),
+                  audioNode,
+                  audioCandidates.length > 1
+                    ? h('div', { className: 'ad-asset-detail-thumbs', role: 'group', 'aria-label': '切换音色片段' },
+                        audioCandidates.map((raw, index) => h('button', {
+                          key: index,
+                          type: 'button',
+                          className: 'ad-asset-detail-thumb',
+                          'aria-label': `试听第 ${index + 1} 段音色`,
+                          'aria-pressed': index === currentAudioIndex,
+                          onClick: () => setAssetAudioIndex(index),
+                        }, `片段 ${index + 1}`)))
+                    : null)
+              })(),
+              fieldEntries.length
+                ? h('div', { className: 'ad-asset-fields' }, fieldEntries.map(([label, value], index) => h('div', { className: 'ad-asset-field', key: index },
+                    h('span', { className: 'ad-asset-field-label' }, label + '：'),
+                    h('span', { className: 'ad-asset-field-value' }, value))))
+                : null)
+          }
+
+          /* ---------------- v0.15.3（task-115 / VB-C）：视觉圣经只读专区（素材库内视图切换） ---------------- */
+          const visualImages = collectVisualImages(assetCards)
+          const visualCardById = new Map(assetCards.map((card) => [card.id, card]))
+          const visualTypes = ASSET_TYPE_ORDER.filter(([type]) => {
+            if (type === 'SPC' && visualScenes.length) return true
+            if (type === 'CHR') return assetCards.some((card) => card.type === 'CHR')
+            return visualImages.some((entry) => entry.type === type)
+          })
+          const hasVisualData = Boolean(visualStyle) || visualScenes.length > 0 || visualImages.length > 0
+          const visualMatch = (value) => {
+            const keyword = visualQuery.trim().toLowerCase()
+            if (!keyword) return true
+            return String(value == null ? '' : value).toLowerCase().includes(keyword)
+          }
+          const visualSortList = (list) => list.slice().sort((a, b) => {
+            const left = String(a.id || a.cardId || '')
+            const right = String(b.id || b.cardId || '')
+            const result = left.localeCompare(right, 'en')
+            return visualSort === 'id-desc' ? -result : result
+          })
+          const visualWallImages = visualSortList(visualImages.filter((entry) =>
+            (visualType === 'all' || entry.type === visualType) && (visualMatch(entry.cardId) || visualMatch(entry.cardName))))
+          const visualSceneCards = visualSortList(visualScenes.filter((scene) =>
+            (visualType === 'all' || visualType === 'SPC') && (visualMatch(scene.id) || visualMatch(scene.name))))
+          const visualCharacterCards = visualSortList(assetCards.filter((card) => card.type === 'CHR' &&
+            (visualType === 'all' || visualType === 'CHR') &&
+            (visualMatch(card.id) || visualMatch(card.name) || card.aliases.some((alias) => visualMatch(alias)))))
+          const visualHeadImage = visualImages.length ? visualImages[0] : null
+          const ensureVisualAssets = () => {
+            const paths = []
+            for (const entry of visualWallImages.slice(0, 80)) paths.push(entry.src)
+            for (const scene of visualSceneCards.slice(0, 40)) paths.push(sceneThumbOf(scene, visualCardById))
+            for (const card of visualCharacterCards.slice(0, 40)) {
+              if (!card.media) continue
+              paths.push(card.media.thumbnail || '')
+              for (const image of (card.media.images || []).slice(0, 2)) paths.push(image)
+              for (const audio of (card.media.audio || []).slice(0, 2)) paths.push(audio)
+            }
+            ensureAssetImages(paths)
+          }
+          const visualImageThumb = (raw, alt) => {
+            const src = assetImageSourceOf(raw)
+            const broken = src.kind === 'http' && assetBrokenImages[src.value]
+            const cached = src.kind === 'relative' ? assetImageCache[src.value] : null
+            const openSrc = src.kind === 'http' && !broken ? src.value : cached && cached.status === 'ok' ? cached.dataUrl : ''
+            const node = assetImageNode(raw, { className: 'ad-visual-thumb-img', alt })
+            if (!openSrc) return h('span', { className: 'ad-visual-thumb' }, node)
+            return h('button', {
+              type: 'button',
+              className: 'ad-visual-thumb',
+              'aria-label': `查看大图：${alt}`,
+              onClick: (event) => {
+                lightboxTriggerEl = event && event.currentTarget ? event.currentTarget : null
+                setVisualLightbox({ src: openSrc, alt })
+              },
+            }, node)
+          }
+          const visualAudioNode = (card) => {
+            const audioCandidates = card.media && Array.isArray(card.media.audio) ? card.media.audio : []
+            if (!audioCandidates.length) return null
+            const currentIndex = Math.min(Math.max(Number(visualAudioIndex[card.id]) || 0, 0), Math.max(audioCandidates.length - 1, 0))
+            const audioSource = assetImageSourceOf(audioCandidates[currentIndex] || '')
+            const audioLabel = `${card.name} 音色试听第 ${currentIndex + 1} 段`
+            const audioNode = (() => {
+              if (audioSource.kind === 'http') {
+                if (assetBrokenAudios[audioSource.value]) return h('div', { className: 'ad-visual-empty' }, '音频不可试听（加载失败）')
+                return h('audio', {
+                  className: 'ad-visual-audio',
+                  controls: true,
+                  preload: 'metadata',
+                  src: audioSource.value,
+                  'aria-label': audioLabel,
+                  onError: () => setAssetBrokenAudios((prev) => (prev[audioSource.value] ? prev : { ...prev, [audioSource.value]: true })),
+                })
+              }
+              if (audioSource.kind === 'relative') {
+                const cached = assetImageCache[audioSource.value]
+                if (cached && cached.status === 'ok') return h('audio', { className: 'ad-visual-audio', controls: true, preload: 'metadata', src: cached.dataUrl, 'aria-label': audioLabel })
+                if (cached && cached.status === 'error') return h('div', { className: 'ad-visual-empty' }, '音频不可试听（读取失败）')
+                return h('div', { className: 'ad-visual-empty' }, '音频加载中…')
+              }
+              if (audioSource.kind === 'absolute') return h('div', { className: 'ad-visual-empty' }, '本地路径音频不可试听')
+              return h('div', { className: 'ad-visual-empty' }, '音频不可试听')
+            })()
+            return h('div', { className: 'ad-visual-audio-box', role: 'group', 'aria-label': `音色参考（试听）：${card.id}` },
+              audioNode,
+              audioCandidates.length > 1
+                ? h('div', { className: 'ad-visual-audio-switches' }, audioCandidates.map((raw, index) => h('button', {
+                    key: index,
+                    type: 'button',
+                    className: 'ad-asset-chip',
+                    'aria-label': `试听 ${card.id} 第 ${index + 1} 段音色`,
+                    'aria-pressed': index === currentIndex,
+                    onClick: () => setVisualAudioIndex((prev) => ({ ...prev, [card.id]: index })),
+                  }, `片段 ${index + 1}`)))
+                : null)
+          }
+          const visualStyleNode = h('div', { className: 'ad-visual-section', key: 'visual-style' },
+            h('div', { className: 'ad-sec' }, '视觉基调'),
+            visualStyle
+              ? h('div', { className: 'ad-visual-style' },
+                  visualHeadImage ? h('div', { className: 'ad-visual-style-head' }, visualImageThumb(visualHeadImage.src, '视觉基调头图')) : null,
+                  h('div', { className: 'ad-visual-style-grid' },
+                    STYLE_DIMENSION_ORDER.filter(([key]) => visualStyle[key]).map(([key, label]) => h('div', { className: 'ad-visual-style-dim', key },
+                      h('div', { className: 'ad-visual-style-label' }, label),
+                      h('div', { className: 'ad-visual-style-text' }, visualStyle[key])))))
+              : h('div', { className: 'ad-visual-empty' }, '暂无风格 DNA：在项目里配置五维风格后显示'))
+          const visualScenesNode = h('div', { className: 'ad-visual-section', key: 'visual-scenes' },
+            h('div', { className: 'ad-sec' }, `场景卡区 · ${visualSceneCards.length}`),
+            visualSceneCards.length
+              ? h('div', { className: 'ad-visual-grid' }, visualSceneCards.map((scene) => {
+                  const thumb = sceneThumbOf(scene, visualCardById)
+                  const meta = [scene.interior, scene.timeOfDay, scene.weather, scene.location].filter(Boolean).join(' · ')
+                  return h('div', { className: 'ad-visual-card', key: scene.id },
+                    h('div', { className: 'ad-visual-thumb-wrap' }, thumb ? visualImageThumb(thumb, `${scene.id} ${scene.name}`) : h('span', { className: 'ad-visual-placeholder' }, '场景 · 无图')),
+                    h('div', { className: 'ad-visual-card-body' },
+                      h('strong', null, `${scene.id} ${scene.name}`),
+                      meta ? h('div', { className: 'ad-visual-meta' }, meta) : null,
+                      scene.lighting ? h('div', { className: 'ad-visual-meta' }, `光源：${scene.lighting.slice(0, 120)}`) : null))
+                }))
+              : h('div', { className: 'ad-visual-empty' }, visualScenes.length ? '当前筛选没有场景卡' : '暂无场景卡：在项目里配置场景卡后出现'))
+          const visualCharactersNode = h('div', { className: 'ad-visual-section', key: 'visual-characters' },
+            h('div', { className: 'ad-sec' }, `角色卡区 · ${visualCharacterCards.length}`),
+            visualCharacterCards.length
+              ? h('div', { className: 'ad-visual-grid' }, visualCharacterCards.map((card) => {
+                  const rawThumb = card.media ? card.media.thumbnail || (card.media.images && card.media.images[0]) || '' : ''
+                  return h('div', { className: 'ad-visual-card', key: card.id },
+                    h('div', { className: 'ad-visual-thumb-wrap' }, rawThumb ? visualImageThumb(rawThumb, `${card.id} ${card.name}`) : h('span', { className: 'ad-visual-placeholder' }, '角色 · 无图')),
+                    h('div', { className: 'ad-visual-card-body' },
+                      h('strong', null, `${card.id} ${card.name}`),
+                      card.aliases.length ? h('div', { className: 'ad-visual-meta' }, `别名：${card.aliases.join('、')}`) : null,
+                      visualAudioNode(card)))
+                }))
+              : h('div', { className: 'ad-visual-empty' }, '暂无角色卡：为角色资产卡添加图片/音频后出现'))
+          const visualWallNode = h('div', { className: 'ad-visual-section', key: 'visual-wall' },
+            h('div', { className: 'ad-sec' }, `关键参考图墙 · ${visualWallImages.length}`),
+            visualWallImages.length
+              ? h('div', { className: 'ad-visual-wall', role: 'list', 'aria-label': '关键参考图墙' }, visualWallImages.map((entry) => visualImageThumb(entry.src, `${entry.cardId} ${entry.cardName}`)))
+              : h('div', { className: 'ad-visual-empty' }, '暂无参考图：为资产卡添加图片后出现在图墙'))
+          const visualBibleNode = h('div', { key: 'visual-bible', className: 'ad-visual-bible' },
+            h('div', { className: 'ad-visual-toolbar', role: 'group', 'aria-label': '视觉圣经筛选' },
+              h('button', { type: 'button', className: 'ad-asset-chip', 'aria-pressed': visualType === 'all', onClick: () => setVisualType('all') }, '全部'),
+              visualTypes.map(([type, label]) => h('button', {
+                key: type,
+                type: 'button',
+                className: 'ad-asset-chip',
+                'aria-pressed': visualType === type,
+                onClick: () => setVisualType(type),
+              }, label)),
+              h('input', {
+                className: 'ad-input ad-sm',
+                style: { maxWidth: 220 },
+                type: 'search',
+                'aria-label': '搜索视觉资产编号或名称',
+                placeholder: '搜索编号或名称…',
+                value: visualQuery,
+                onChange: (e) => setVisualQuery(e.target.value),
+              }),
+              h('select', {
+                className: 'ad-input ad-sm',
+                style: { maxWidth: 140 },
+                'aria-label': '视觉资产排序',
+                value: visualSort,
+                onChange: (e) => setVisualSort(e.target.value),
+              }, h('option', { value: 'id-asc' }, '编号 ↑'), h('option', { value: 'id-desc' }, '编号 ↓'))),
+            visualStyleNode,
+            visualScenesNode,
+            visualCharactersNode,
+            visualWallNode)
+
+          /* ---------------- v0.15.4（task-119 / M20-C）：素材库 2.0 · legacy 登记统一卡片视图 ---------------- */
+          const legacyAssetList = normalizeLegacyAssets(assets)
+          const hasAssetData = assets.length > 0 || assetCards.length > 0
+          const legacyKindCounts = new Map()
+          for (const asset of legacyAssetList) legacyKindCounts.set(asset.kind, (legacyKindCounts.get(asset.kind) || 0) + 1)
+          const legacyKindChips = LEGACY_ASSET_KIND_ORDER.filter((kind) => legacyKindCounts.has(kind))
+          const legacyVisibleAssets = sortLegacyAssets(filterLegacyAssets(legacyAssetList, legacyKindFilter, legacyQuery), legacySort)
+          const assetRegistrationExpanded = assetRegistrationOpen || assets.length === 0
+          const legacyImageNode = (asset) => {
+            if (asset.kind !== 'image') {
+              return h('span', { className: 'ad-legacy-placeholder' }, `${LEGACY_ASSET_KIND_LABELS[asset.kind] || '素材'} · 不支持预览`)
+            }
+            const cached = legacyImageCache[asset.id]
+            if (cached && cached.status === 'ok') {
+              return h('button', {
+                type: 'button',
+                className: 'ad-legacy-thumb',
+                'aria-label': `查看大图：${asset.name}`,
+                onClick: (event) => {
+                  lightboxTriggerEl = event && event.currentTarget ? event.currentTarget : null
+                  setVisualLightbox({ src: cached.dataUrl, alt: asset.name })
+                },
+              }, h('img', {
+                src: cached.dataUrl,
+                alt: `${asset.name} 缩略图`,
+                loading: 'lazy',
+                onError: () => setLegacyImageCache((prev) => ({ ...prev, [asset.id]: { status: 'error' } })),
+              }))
+            }
+            if (cached && cached.status === 'error') return h('span', { className: 'ad-legacy-placeholder ad-legacy-missing' }, '文件缺失')
+            return h('span', { className: 'ad-legacy-placeholder' }, '加载中…')
+          }
+          const legacyCardNode = (asset) => h('div', { className: 'ad-legacy-card', key: asset.id },
+            h('div', { className: 'ad-legacy-thumb-wrap' }, legacyImageNode(asset)),
+            h('div', { className: 'ad-legacy-body' },
+              h('strong', { className: 'ad-legacy-name', title: asset.name }, asset.name),
+              h('div', { className: 'ad-legacy-meta' },
+                h('span', { className: 'ad-asset-badge' }, LEGACY_ASSET_KIND_LABELS[asset.kind] || '素材'),
+                h('span', null, formatAssetBytes(asset.bytes))),
+              asset.linkedShots.length ? h('div', { className: 'ad-legacy-meta' }, `关联镜头：${asset.linkedShots.join('、')}`) : null,
+              asset.note ? h('div', { className: 'ad-legacy-meta ad-legacy-note', title: asset.note }, asset.note) : null,
+              asset.sha256 ? h('div', { className: 'ad-legacy-meta' }, `校验：${asset.sha256.slice(0, 8)}`) : null))
+          const legacyUnifiedNode = h('div', { key: 'legacy-unified', className: 'ad-legacy-view' },
+            h('div', { className: 'ad-row', style: { marginBottom: 8, flexWrap: 'wrap', gap: 8 } },
+              h('span', { className: 'ad-sub' }, `素材库 · 已登记 ${legacyAssetList.length} 条${assetCards.length ? ` · 资产卡 ${assetCards.length} 张` : ''}（只读预览）`),
+              h('div', { style: { flex: 1 } }),
+              h('input', {
+                className: 'ad-input ad-sm',
+                style: { maxWidth: 240 },
+                type: 'search',
+                'aria-label': '搜索登记素材名称/备注/镜号',
+                placeholder: '搜索名称/备注/镜号…',
+                value: legacyQuery,
+                onChange: (e) => {
+                  const value = e.target.value
+                  setLegacyQuery(value)
+                  ensureLegacyImages(filterLegacyAssets(legacyAssetList, legacyKindFilter, value))
+                },
+              }),
+              h('select', {
+                className: 'ad-input ad-sm',
+                style: { maxWidth: 130 },
+                'aria-label': '登记素材排序',
+                value: legacySort,
+                onChange: (e) => setLegacySort(e.target.value),
+              }, h('option', { value: 'name-asc' }, '名称'), h('option', { value: 'size-desc' }, '大小'))),
+            legacyAssetList.length
+              ? h('div', { className: 'ad-asset-toolbar', role: 'group', 'aria-label': '登记素材类型筛选' },
+                  h('button', {
+                    type: 'button',
+                    className: 'ad-asset-chip',
+                    'aria-pressed': legacyKindFilter === 'all',
+                    onClick: () => {
+                      setLegacyKindFilter('all')
+                      ensureLegacyImages(filterLegacyAssets(legacyAssetList, 'all', legacyQuery))
+                    },
+                  }, `全部 ${legacyAssetList.length}`),
+                  legacyKindChips.map((kind) => h('button', {
+                    key: kind,
+                    type: 'button',
+                    className: 'ad-asset-chip',
+                    'aria-pressed': legacyKindFilter === kind,
+                    onClick: () => {
+                      setLegacyKindFilter(kind)
+                      ensureLegacyImages(filterLegacyAssets(legacyAssetList, kind, legacyQuery))
+                    },
+                  }, `${LEGACY_ASSET_KIND_LABELS[kind]} ${legacyKindCounts.get(kind)}`)))
+              : null,
+            h('div', { className: 'ad-sec' }, `已登记素材 · ${legacyVisibleAssets.length}`),
+            legacyVisibleAssets.length
+              ? h('div', { className: 'ad-asset-grid ad-legacy-grid', role: 'list', 'aria-label': '已登记素材卡片' }, legacyVisibleAssets.map(legacyCardNode))
+              : h('div', { className: 'ad-table-empty' }, legacyAssetList.length ? '当前筛选没有登记素材（换个类型/关键词试试）' : '还没有登记素材：粘贴文件路径 → 登记后自动出现在这里'),
+            h('div', { className: 'ad-visual-empty', style: { marginTop: 10 } }, '登记=引用外部文件路径，不复制文件；用于把出图/出片/文档与镜号关联；登记后自动出现在上方卡片视图。'))
+          const visualBibleHintNode = !hasVisualData
+            ? h('div', { key: 'visual-bible-hint', className: 'ad-visual-empty', style: { marginTop: 10 } }, '配置风格 DNA / 场景卡后，可在此查看视觉圣经（只读）。')
+            : null
+          const assetRegistrationNode = h('div', { key: 'asset-registration', className: 'ad-registration' },
+            h('button', {
+              type: 'button',
+              className: 'ad-btn ad-sm',
+              'aria-expanded': assetRegistrationExpanded,
+              onClick: () => setAssetRegistrationOpen((prev) => !prev),
+            }, `登记管理（${assets.length} 条）${assetRegistrationExpanded ? ' · 收起 ▴' : ' · 展开 ▾'}`),
+            assetRegistrationExpanded
+              ? h('div', { className: 'ad-registration-body' },
+                  h('div', { className: 'ad-visual-empty', style: { marginBottom: 8 } }, '登记=引用外部文件路径，不复制文件；用于把出图/出片/文档与镜号关联；登记后自动出现在上方卡片视图；「刷新/重扫」= 重新读取登记并同步外部文件变化。'),
+                  h('div', { className: 'ad-row', style: { marginBottom: 6 } },
+                    h('input', { className: 'ad-input', placeholder: '素材文件绝对路径，例如 D:\\素材\\shot-1-1.png', value: assetSource, onChange: (e) => setAssetSource(e.target.value) }),
+                    h('input', { className: 'ad-input', style: { maxWidth: 160 }, placeholder: '关联镜号 1-1、1-2', value: assetShots, onChange: (e) => setAssetShots(e.target.value) }),
+                    h('button', { className: 'ad-btn ad-primary ad-sm', onClick: addAsset, disabled: busy || !assetSource.trim() }, '登记'),
+                    h('button', { className: 'ad-btn ad-sm', onClick: loadAssets, disabled: busy }, icon('refresh'), '刷新/重扫')),
+                  h('div', { className: 'ad-sub', style: { marginBottom: 10 } }, '只登记路径与校验信息，**不复制原始文件**（大文件不会塞进项目目录）'),
+                  h('table', { className: 'ad-table' },
+                    h('caption', { className: 'ad-sr-only' }, '素材资产登记表'),
+                    h('thead', null, h('tr', null, ['名称', '类型', '大小', '关联镜头', '校验', '路径', ''].map((t, i) => h('th', { key: i, scope: 'col' }, t)))),
+                    h('tbody', null,
+                      assets.length
+                        ? assets.map((a) =>
+                            h('tr', { key: a.id },
+                              h('td', null, a.name),
+                              h('td', null, a.kind),
+                              h('td', null, ((Number(a.bytes) || 0) / 1024).toFixed(1) + ' KB'),
+                              h('td', null, (a.linkedShots || []).join('、') || '—'),
+                              h('td', { title: a.sha256 || '未计算' }, a.sha256 ? a.sha256.slice(0, 8) : '—'),
+                              h('td', { style: { maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }, title: a.source }, a.source),
+                              h('td', null, h('button', { type: 'button', className: 'ad-btn ad-sm ad-btn-danger ad-icon-btn ad-icon-btn-sm', 'data-tone': 'danger', 'aria-label': '移除素材', title: '移除素材', onClick: () => removeAsset(a.id) }, icon('trash')))))
+                        : h('tr', null, h('td', { colSpan: 7, className: 'ad-table-empty' }, '还没有登记素材：粘贴文件路径后点「登记」→ 会自动出现在上方卡片视图。')))))
+              : null)
           body.push(
             h('div', { key: 'as' },
-              h('div', { className: 'ad-row', style: { marginBottom: 6 } },
-                h('input', { className: 'ad-input', placeholder: '素材文件绝对路径，例如 D:\\素材\\shot-1-1.png', value: assetSource, onChange: (e) => setAssetSource(e.target.value) }),
-                h('input', { className: 'ad-input', style: { maxWidth: 160 }, placeholder: '关联镜号 1-1、1-2', value: assetShots, onChange: (e) => setAssetShots(e.target.value) }),
-                h('button', { className: 'ad-btn ad-primary ad-sm', onClick: addAsset, disabled: busy || !assetSource.trim() }, '登记'),
-                h('button', { className: 'ad-btn ad-sm', onClick: loadAssets, disabled: busy }, icon('refresh'), '刷新')),
-              h('div', { className: 'ad-sub', style: { marginBottom: 10 } }, '只登记路径与校验信息，**不复制原始文件**（大文件不会塞进项目目录）'),
-              h('table', { className: 'ad-table' },
-                h('caption', { className: 'ad-sr-only' }, '素材资产登记表'),
-                h('thead', null, h('tr', null, ['名称', '类型', '大小', '关联镜头', '校验', '路径', ''].map((t, i) => h('th', { key: i, scope: 'col' }, t)))),
-                h('tbody', null,
-                  assets.length
-                    ? assets.map((a) =>
-                        h('tr', { key: a.id },
-                          h('td', null, a.name),
-                          h('td', null, a.kind),
-                          h('td', null, (a.bytes / 1024).toFixed(1) + ' KB'),
-                          h('td', null, (a.linkedShots || []).join('、') || '—'),
-                          h('td', { title: a.sha256 || '未计算' }, a.sha256 ? a.sha256.slice(0, 8) : '—'),
-                          h('td', { style: { maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }, title: a.source }, a.source),
-                          h('td', null, h('button', { type: 'button', className: 'ad-btn ad-sm ad-btn-danger ad-icon-btn ad-icon-btn-sm', 'data-tone': 'danger', 'aria-label': '移除素材', title: '移除素材', onClick: () => removeAsset(a.id) }, icon('trash')))))
-                    : h('tr', null, h('td', { colSpan: 7, className: 'ad-table-empty' }, '还没有登记素材。出图/出片后把文件路径登记进来，就能和镜号对上。')))),
+              hasVisualData
+                ? h('div', { key: 'asset-view-switch', className: 'ad-row', style: { marginBottom: 10, flexWrap: 'wrap', gap: 8 }, role: 'group', 'aria-label': '素材库视图切换' },
+                    h('button', { type: 'button', className: 'ad-btn ad-sm', 'aria-pressed': assetView === 'cards', onClick: () => { setAssetView('cards'); closeVisualLightbox() } }, '卡片视图'),
+                    h('button', { type: 'button', className: 'ad-btn ad-sm', 'aria-pressed': assetView === 'visual', onClick: () => { setAssetView('visual'); closeVisualLightbox(); ensureVisualAssets() } }, '视觉圣经'))
+                : null,
+              assetView === 'visual'
+                ? visualBibleNode
+                : hasAssetData
+                ? h('div', { key: 'asset-unified' },
+                    legacyUnifiedNode,
+                    assetCards.length
+                    ? h('div', { key: 'asset-card-view' },
+                    h('div', { className: 'ad-row', style: { marginBottom: 8, flexWrap: 'wrap', gap: 8 } },
+                      h('span', { className: 'ad-sub' }, `素材卡 · 共 ${assetCards.length} 张（按资产卡类型分类；只读）`),
+                      h('div', { style: { flex: 1 } }),
+                      h('input', {
+                        className: 'ad-input ad-sm',
+                        style: { maxWidth: 240 },
+                        type: 'search',
+                        'aria-label': '搜索素材编号或名称',
+                        placeholder: '搜索编号或名称…',
+                        value: assetQuery,
+                        onChange: (e) => {
+                          const value = e.target.value
+                          setAssetQuery(value)
+                          ensureAssetImages(assetCardImagePaths(filterAssetCards(assetCards, assetTypeFilter, value)))
+                        },
+                      })),
+                    h('div', { className: 'ad-asset-toolbar', role: 'group', 'aria-label': '素材类型筛选' },
+                      h('button', {
+                        type: 'button',
+                        className: 'ad-asset-chip',
+                        'aria-pressed': assetTypeFilter === '全部',
+                        onClick: () => {
+                          setAssetTypeFilter('全部')
+                          setAssetImageIndex(0)
+                          ensureAssetImages(assetCardImagePaths(filterAssetCards(assetCards, '全部', assetQuery)))
+                        },
+                      }, `全部 ${assetCards.length}`),
+                      typeChips.map(([type, label]) => h('button', {
+                        key: type,
+                        type: 'button',
+                        className: 'ad-asset-chip',
+                        'aria-pressed': assetTypeFilter === type,
+                        onClick: () => {
+                          setAssetTypeFilter(type)
+                          setAssetImageIndex(0)
+                          ensureAssetImages(assetCardImagePaths(filterAssetCards(assetCards, type, assetQuery)))
+                        },
+                      }, `${label} ${typeCounts.get(type)}`))),
+                    visibleAssetCards.length
+                      ? h('div', { className: 'ad-asset-grid', role: 'list', 'aria-label': '素材卡网格' },
+                          visibleAssetCards.map((card) => {
+                            const pressed = assetSelectedId === card.id
+                            return h('button', {
+                              key: card.id,
+                              type: 'button',
+                              className: 'ad-asset-card',
+                              role: 'listitem',
+                              'aria-pressed': pressed,
+                              'aria-label': `查看资产 ${card.id} ${card.name}`,
+                              onClick: () => {
+                                setAssetSelectedId(pressed ? null : card.id)
+                                setAssetImageIndex(0)
+                                setAssetAudioIndex(0)
+                                if (!pressed && card.media) {
+                                  ensureAssetImages([...(card.media.images || []), ...(card.media.audio || []), card.media.thumbnail || ''])
+                                }
+                              },
+                            },
+                              assetCardThumb(card),
+                              h('span', { className: 'ad-asset-card-meta' },
+                                h('span', { className: 'ad-asset-card-id' }, card.id),
+                                h('span', { className: 'ad-asset-card-name' }, card.name)),
+                              h('span', { className: 'ad-asset-badge' }, assetTypeLabelOf(card.type)))
+                          }))
+                      : h('div', { className: 'ad-table-empty' }, assetQuery.trim() ? '没有匹配的素材卡（换个编号或名称试试）' : '该分类下暂时没有素材卡'),
+                    selectedCard ? assetDetail(selectedCard) : null)
+                      : null)
+                : null,
+              visualBibleHintNode,
+              assetRegistrationNode,
           ))
         }
 
@@ -6265,7 +7410,8 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
               h('div', { className: 'ad-row', key: 'exb' },
                 h('button', { className: 'ad-btn ad-sm', onClick: () => runExport('markdown'), disabled: busy }, 'Markdown 全本'),
                 h('button', { className: 'ad-btn ad-sm', onClick: () => runExport('json'), disabled: busy }, 'JSON 结构化包'),
-                h('button', { className: 'ad-btn ad-sm', onClick: () => runExport('csv'), disabled: busy }, 'CSV 分镜表')),
+                h('button', { className: 'ad-btn ad-sm', onClick: () => runExport('csv'), disabled: busy }, 'CSV 分镜表'),
+                h('button', { className: 'ad-btn ad-sm', onClick: exportVoiceScript, disabled: busy }, '导出配音稿')),
               h('div', { className: 'ad-path', key: 'exn' },
                 'CSV 分镜表含镜号 / 景别 / 运镜 / 画面 / 台词 / 音效 / 时长（宿主 v0.4.0+ 追加「视频提示词」列）。'),
               exported.length
@@ -6657,6 +7803,8 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
               }, handoffBusy ? '准备中…' : (handoffCopyError ? '重试复制' : (handoffCopied ? '再次复制' : '复制交接指令'))),
               h('button', { className: 'ad-btn', onClick: closeHandoff }, '关闭')))))
       }
+      // v0.15.5（task-121）：lightbox 提升到面板根层级（.ad-body 滚动容器之外；关闭三方式：按钮 / Esc / 背景）
+      if (visualLightboxNode) children.push(visualLightboxNode)
       return h('div', { className: 'ad-shell', role: 'region', 'aria-label': 'AI 短剧工作区' }, children)
     }
 

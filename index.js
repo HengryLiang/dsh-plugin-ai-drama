@@ -30,6 +30,7 @@ import * as generation from './lib/generation.js'
 import * as orchestrator from './lib/orchestrator.js'
 import * as guard from './lib/guard.js'
 import * as importBridge from './lib/import-bridge.js'
+import * as media from './lib/media.js'
 
 export const name = 'ai-drama'
 
@@ -121,6 +122,8 @@ const METHODS = [
   'consistency-check',
   'export-project',
   'agents-status',
+  // v0.15.1（task-110，H 类契约，Lead 批准）：本地图片只读通道；68→69，工具面仍 34。
+  'media-read',
 ]
 
 /* ------------------------------------------------------------------ 工具 */
@@ -581,8 +584,40 @@ async function dispatch(method, input, root, scope) {
     case 'voice-script-export':
       return { ok: true, ...(await store.exportVoiceScript(root, input.title, input.order)) }
 
-    case 'assets-get':
-      return { ok: true, assets: await store.getAssets(root, input.title) }
+    case 'assets-get': {
+      // v0.15.1（task-107）：add-only cards（资产卡 media 读侧；旧 assets 字段不变）
+      const assets = await store.getAssets(root, input.title)
+      const cards = await store.getAssetCards(root, input.title)
+      // v0.15.3（task-114 / 迭代3 VB-H）：add-only scenes/styleDNA（E 类；仅存在数据时出现；损坏视为无）
+      let scenes = []
+      try {
+        scenes = await store.getScenes(root, input.title)
+      } catch {
+        scenes = []
+      }
+      let styleDNA = null
+      try {
+        styleDNA = await store.getStyleDNA(root, input.title)
+      } catch {
+        styleDNA = null
+      }
+      const style = styleDNA && typeof styleDNA === 'object'
+        ? Object.fromEntries(
+            ['palette', 'lighting', 'texture', 'composition', 'motion'].map((dimension) => {
+              const value = styleDNA[dimension]
+              return [dimension, String(value == null ? '' : value)]
+            }),
+          )
+        : null
+      const hasStyle = style !== null && Object.values(style).some((value) => value.trim())
+      return {
+        ok: true,
+        assets,
+        cards,
+        ...(Array.isArray(scenes) && scenes.length ? { scenes } : {}),
+        ...(hasStyle ? { styleDNA: style } : {}),
+      }
+    }
 
     case 'assets-add':
       return { ok: true, asset: await store.addAsset(root, input.title, input.asset || input) }
@@ -590,6 +625,17 @@ async function dispatch(method, input, root, scope) {
     case 'assets-remove': {
       const result = await store.removeAsset(root, input.title, input.id)
       return { ok: true, removed: true, id: result.id }
+    }
+
+    // v0.15.1（task-110，H 类契约，Lead 批准）：本地图片只读通道（media-read，METHODS 68→69）
+    case 'media-read': {
+      try {
+        return { ok: true, ...(await media.readMedia(root, input)) }
+      } catch (error) {
+        const code = error && typeof error.code === 'string' ? error.code : 'invalid-args'
+        const status = code === 'forbidden' ? 403 : code === 'not-found' ? 404 : code === 'too-large' ? 413 : 400
+        return fail(status, code, error instanceof Error ? error.message : '读取图片失败')
+      }
     }
 
     case 'finalized-list':

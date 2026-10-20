@@ -10,7 +10,7 @@
  *   A6 subject/groupId 文本原生宽松匹配
  *   A7 version 递增 + history add-only（不覆盖旧记录/未提供字段沿用旧卡/expectedVersion 冲突）
  *   A8 确定性（两独立项目同输入 cards.json 字节一致；normalize 幂等；按 id 排序；v1 无时间戳）+ variantOf/aliases 约束
- *   A9 工具 34 / METHODS 68 / client 调用 68（M4 批1+批2 +10 已批准）/ 无新依赖
+ *   A9 工具 34 / METHODS 69（task-110 media-read +1） / client 调用 68（M4 批1+批2 +10 已批准）/ 无新依赖
  *   A10 all.mjs 32 套件 0 failed（本套件为第 32 套件）+ 旧数据 32 hash（套件外复核）
  *
  * 版本自适应：无 `lib/assets.js`（≤v0.10.4 安装包）→ 整套件 SKIP（exit 0）。
@@ -76,7 +76,7 @@ check('0.1 lib/assets.js 导出核心纯函数', ['ASSET_PREFIXES', 'ASSET_STATU
 check('0.2 9 类前缀齐全', JSON.stringify(assets.ASSET_PREFIXES) === JSON.stringify(['CHR', 'SPC', 'PRP', 'SHT', 'CST', 'EXP', 'SFX', 'VOX', 'MUS']))
 check('0.3 canonical status = draft|active|retired', JSON.stringify(assets.ASSET_STATUSES) === JSON.stringify(['draft', 'active', 'retired']))
 check('0.4 store 资产存储 API（getAssetCards/getAssetCard/nextAssetCardId/saveAssetCard）', ['getAssetCards', 'getAssetCard', 'nextAssetCardId', 'saveAssetCard'].every((name) => typeof store[name] === 'function'))
-check('0.5 工具 34 / METHODS 68 / client 调用 68（M4 批1+批2 +10 已批准）/ 无新依赖', toolCount === 34 && methods.size === 68 && clientCalls.size === 68 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ tools: toolCount, methods: methods.size, clientCalls: clientCalls.size }))
+check('0.5 工具 34 / METHODS 69（task-110 media-read +1） / client 调用 68（M4 批1+批2 +10 已批准）/ 无新依赖', toolCount === 34 && methods.size === 69 && clientCalls.size === 69 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ tools: toolCount, methods: methods.size, clientCalls: clientCalls.size }))
 
 group('[1] AC-A1 编号规范（9 前缀/3 位/变体/大小写/非法拒绝/确定性）')
 const legalIds = ['CHR001', 'SPC999', 'PRP001', 'SHT001', 'CST001', 'EXP001', 'SFX001', 'VOX001', 'MUS001', 'CHR001_01', 'CHR001_99', 'chr001', 'Chr001', 'chr001_02']
@@ -214,7 +214,7 @@ const nextId2 = await store.nextAssetCardId(workspace, TITLE, 'CHR')
 check('A8.9 nextAssetCardId 基于现有基础编号递增（CHR002→CHR003，变体不占位）', nextId === 'CHR002' && nextId2 === 'CHR003', JSON.stringify({ nextId, nextId2 }))
 
 group('[9] AC-A9/A10 契约 + 清理')
-check('A9.1 工具 34 / METHODS 68 / client 68（M4 批1+批2 已批准）', toolCount === 34 && methods.size === 68 && clientCalls.size === 68)
+check('A9.1 工具 34 / METHODS 69（task-110 media-read +1） / client 69（task-110 media-read +1）（M4 批1+批2 已批准）', toolCount === 34 && methods.size === 69 && clientCalls.size === 69)
 check('A9.2 无新依赖', Object.keys(pkg.dependencies || {}).length === 0)
 check('A9.3 无新增 asset-card route（仅既有 assets-get/add/remove 三个素材接口）', JSON.stringify([...methods].filter((name) => /asset/i.test(name)).sort()) === JSON.stringify(['assets-add', 'assets-get', 'assets-remove']), JSON.stringify([...methods].filter((name) => /asset/i.test(name))))
 await fs.rm(workspace, { recursive: true, force: true })

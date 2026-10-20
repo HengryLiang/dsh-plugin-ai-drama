@@ -7,7 +7,7 @@
  *   AC-22-3 五维风格 DNA（.aidrama/style.json）存储/读取/缺省不生成/缺省不注入
  *   AC-22-4 零相机锁合（场景卡含 camera/lens/shotSize/framing → 校验拒绝）
  *   AC-22-5 旧项目只读/不建文件/不报错；legacy 数据零改动
- *   AC-22-6 工具 34 / METHODS 68 / client 68（M4 批1+批2 +10 已批准）/ 无新 route / 无新依赖 / all.mjs 36 套件
+ *   AC-22-6 工具 34 / METHODS 69（task-110 media-read +1） / client 69（task-110 media-read +1）（M4 批1+批2 +10 已批准）/ 无新 route / 无新依赖 / all.mjs 36 套件
  *
  * 版本自适应：无 lib/scenes.js（≤v0.11.0 安装包）→ 整套件 SKIP（exit 0）。
  * 运行：node test/scenes.mjs
@@ -74,7 +74,7 @@ check('0.1 lib/scenes.js 导出场景卡核心纯函数', ['SCENE_ID_PATTERN', '
 check('0.2 lib/style-dna.js 导出五维 DNA 核心纯函数', ['STYLE_DIMENSIONS', 'STYLE_DIMENSION_LABELS', 'STYLE_TEXT_LIMIT', 'normalizeStyleDNA', 'validateStyleDNA', 'buildStyleDoc', 'normalizeStyleDoc'].every((name) => name in styleDna))
 check('0.3 store 场景/风格 API（getScenes/saveSceneCard/nextSceneCardId/getStyleDNA/saveStyleDNA）', ['getScenes', 'saveSceneCard', 'nextSceneCardId', 'getStyleDNA', 'saveStyleDNA'].every((name) => typeof store[name] === 'function'))
 check('0.4 SHOT_OPTIONAL_FIELDS 含 sceneRef（10→11）', Array.isArray(store.SHOT_OPTIONAL_FIELDS) && store.SHOT_OPTIONAL_FIELDS.length === 11 && store.SHOT_OPTIONAL_FIELDS.includes('sceneRef'), JSON.stringify(store.SHOT_OPTIONAL_FIELDS))
-check('0.5 工具 34 / METHODS 68 / client 68（M4 批1+批2 +10 已批准）/ 无新依赖', toolCount === 34 && methods.size === 68 && clientCalls.size === 68 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ tools: toolCount, methods: methods.size, clientCalls: clientCalls.size }))
+check('0.5 工具 34 / METHODS 69（task-110 media-read +1） / client 69（task-110 media-read +1）（M4 批1+批2 +10 已批准）/ 无新依赖', toolCount === 34 && methods.size === 69 && clientCalls.size === 69 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ tools: toolCount, methods: methods.size, clientCalls: clientCalls.size }))
 
 group('[1] AC-22-1/AC-22-4 场景编号 / schema / 零相机锁合')
 check('1.1 SPCxxx 编号：3 位序号合法（含小写归一）', ['SPC001', 'SPC999', 'spc001', 'Spc001'].every((id) => scenes.isValidSceneId(id)))
@@ -232,7 +232,7 @@ if (injectionActive) {
 }
 
 group('[5] 契约 / 清理（AC-22-6）')
-check('5.1 工具 34 / METHODS 68 / client 68（M4 批1+批2 已批准）', toolCount === 34 && methods.size === 68 && clientCalls.size === 68)
+check('5.1 工具 34 / METHODS 69（task-110 media-read +1） / client 69（task-110 media-read +1）（M4 批1+批2 已批准）', toolCount === 34 && methods.size === 69 && clientCalls.size === 69)
 check('5.2 无新增 scene/style route（METHODS 未增）', ![...methods].some((name) => /^(scenes?|style)(-|$)/i.test(name)), JSON.stringify([...methods].filter((name) => /scene|style/i.test(name))))
 check('5.3 无新依赖', Object.keys(pkg.dependencies || {}).length === 0)
 await fs.rm(workspace, { recursive: true, force: true })

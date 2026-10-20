@@ -6,7 +6,7 @@
  *  ② 好用性残余：错误文案统一（失败码→用户可读）、快捷键说明、加载骨架/空态一致性；
  *  ③ 设置页任务模型交互细化：模型输入「最近使用列表」（本地存储）+ 即时校验反馈。
  *
- * 红线：slots.register=4（已批准终值）、client 调用点 68（M4 批1+批2 +10，已批准登记）、无新增依赖、旧数据 32 文件 hash 不变、工具 34/METHODS 68。
+ * 红线：slots.register=4（已批准终值）、client 调用点 69（task-110 media-read +1）（M4 批1+批2 +10，已批准登记）、无新增依赖、旧数据 32 文件 hash 不变、工具 34/METHODS 69（task-110 media-read +1）。
  * 兼容策略：v0.6.3 client 未交付（探测标记缺失）→ 显式 SKIP；交付后自动生效。
  * 运行：node test/client-polish.mjs
  */
@@ -100,15 +100,15 @@ check('增强③：任务模型字段即时校验（temperature/maxTokens/model�
 check('增强③：校验失败保存拦截（保存前校验）', /校验|invalid|提示/.test(clientSrc))
 
 /* ------------------------------------------------------------------ [4] */
-group('[4] 工程红线：slots=4（已批准终值）/ 调用点 68（M4 批1+批2 +10 已批准）/ 无新依赖 / 工具 34 / METHODS 68 / 旧数据 hash')
+group('[4] 工程红线：slots=4（已批准终值）/ 调用点 69（task-110 media-read +1）（M4 批1+批2 +10 已批准）/ 无新依赖 / 工具 34 / METHODS 69（task-110 media-read +1） / 旧数据 hash')
 check('红线：client slots.register = 4（v0.12.1 已批准终值）', (clientSrc.match(/slots\.register\(/g) || []).length === 4)
 const clientCalls = new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1]))
-check('红线：client 去重调用点 = 68（M4 批1+批2 +10，已批准登记）', clientCalls.size === 68, String(clientCalls.size))
+check('红线：client 去重调用点 = 69（task-110 media-read +1）（M4 批1+批2 +10，已批准登记）', clientCalls.size === 69, String(clientCalls.size))
 const pkg = JSON.parse(await fs.readFile(path.join(pluginRoot, 'package.json'), 'utf8'))
 check('红线：无新增外部依赖', !pkg.dependencies || Object.keys(pkg.dependencies).length === 0, JSON.stringify(pkg.dependencies || {}))
 const { METHODS } = await import(pathToFileURL(path.join(pluginRoot, 'index.js')).href)
 check('红线：生产工具面仍 34', toolsMod.createToolDefs({ rootOf: () => '', backendOf: () => null }).length === 34)
-check('红线：METHODS 仍 = 68', METHODS.length === 68, String(METHODS.length))
+check('红线：METHODS 仍 = 69（task-110 media-read +1）', METHODS.length === 69, String(METHODS.length))
 // 旧数据 32 文件 hash 不变（复用 P2-1 基线）
 const BASELINE_CANDIDATES = [
   process.env.DSH_AI_P163_BASELINE,
@@ -195,7 +195,7 @@ group('[5] v0.11.5（task-4）P0 数据安全三连：未保存守卫 / 全局�
 
   // P0-3 打开自动载入 + 空内容/未载入覆盖守卫
   check('P0-3：openProject 后自动载入首集正文/分镜', /autoLoadEpisode\(title, firstOrder\)\.catch/.test(clientSrc) && /autoLoadShots\(title, firstOrder\)\.catch/.test(clientSrc))
-  check('P0-3：自动载入只用既有只读路由（episode-read/storyboard-get；M4 批1+批2 后调用点 68 已批准）', /api\('episode-read', \{ title, order: target \}\)/.test(clientSrc) && /api\('storyboard-get', \{ title, order: target \}\)/.test(clientSrc) && clientCalls.size === 68)
+  check('P0-3：自动载入只用既有只读路由（episode-read/storyboard-get；M4 批1+批2 后调用点 69（task-110 media-read +1） 已批准）', /api\('episode-read', \{ title, order: target \}\)/.test(clientSrc) && /api\('storyboard-get', \{ title, order: target \}\)/.test(clientSrc) && clientCalls.size === 69)
   check('P0-3：空内容/未载入覆盖守卫（载入态 + 磁盘内容标记 + 两处守卫函数）', /loadedEpisodeOrder !== target/.test(clientSrc) && /episodeDiskHadContent/.test(clientSrc) && /const episodeSaveBlocked = \(\) =>/.test(clientSrc) && /const shotsSaveBlocked = \(\) =>/.test(clientSrc))
   check('P0-3：守卫提示面向用户（先点「载入」/覆盖）', /先点「载入」/.test(clientSrc) && /覆盖/.test(clientSrc))
   check('P0-3：新建项目空→建第 1 集不误伤（磁盘无该集文件允许保存）', /磁盘上还没有该集文件：新建集是合法路径，允许保存/.test(clientSrc))
@@ -296,13 +296,13 @@ group('[7] v0.12.0（task-7）信息架构与宽屏版式：进度合一 / 页�
   check('IA①：「刷新进度」并入主进度条（M6-0c 更新：handler + 文本 + refresh 图标，等价严格）', clientSrc.includes('onClick: refreshProgress') && clientSrc.includes("'刷新进度'") && clientSrc.includes("icon('refresh')") && clientSrc.includes("onClick: refreshProgress, disabled: busy }, icon('refresh'), '刷新进度')"))
   check('IA①：flow-state 读写语义未改（loadFlow/persistFlow/confirmFlowStep/回退提示仍在）', ['const loadFlow = async', 'const persistFlow = async', 'const confirmFlowStep = async', 'const rollbackFlowTo =', '待重做', '上次停在'].every((marker) => clientSrc.includes(marker)))
 
-  // ② 15 页签 4 组 + 窄窗「更多」+ aria 最小集
-  const TAB_KEYS = ['contract', 'outline', 'characters', 'world', 'episode', 'storyboard', 'dialogue', 'assets', 'memory', 'drafts', 'ledger', 'generate', 'check', 'tree', 'toolcards']
+  // ② 14 页签 4 组（v0.15.2 移除「台词与音效」）+ 窄窗「更多」+ aria 最小集
+  const TAB_KEYS = ['contract', 'outline', 'characters', 'world', 'episode', 'storyboard', 'assets', 'memory', 'drafts', 'ledger', 'generate', 'check', 'tree', 'toolcards']
   const tabGroupsMatch = /const TAB_GROUPS = \[([\s\S]*?)\n    \]/.exec(clientSrc)
   const groupedKeys = tabGroupsMatch
     ? [...tabGroupsMatch[1].matchAll(/tabs: \[([^\]]*)\]/g)].flatMap((m) => [...m[1].matchAll(/'([a-z]+)'/g)].map((x) => x[1]))
     : []
-  check('IA②：15 页签 4 组（创作/资料/交付/高级）且键不重不漏', groupedKeys.length === 15 && new Set(groupedKeys).size === 15 && TAB_KEYS.every((key) => groupedKeys.includes(key)) && ['创作', '资料', '交付', '高级'].every((label) => tabGroupsMatch && tabGroupsMatch[1].includes(label)), JSON.stringify(groupedKeys))
+  check('IA②：14 页签 4 组（创作/资料/交付/高级；v0.15.2 移除台词与音效）且键不重不漏', groupedKeys.length === 14 && new Set(groupedKeys).size === 14 && TAB_KEYS.every((key) => groupedKeys.includes(key)) && ['创作', '资料', '交付', '高级'].every((label) => tabGroupsMatch && tabGroupsMatch[1].includes(label)), JSON.stringify(groupedKeys))
   check('IA②：aria 最小集（tablist/tab/aria-selected/aria-controls/tabpanel）', clientSrc.includes("role: 'tablist'") && clientSrc.includes("role: 'tab'") && clientSrc.includes("'aria-selected'") && clientSrc.includes("'aria-controls': 'ad-tabpanel'") && clientSrc.includes("role: 'tabpanel'") && clientSrc.includes("id: 'ad-tabpanel'"))
   check('IA②：窄窗「更多」收纳（M6-0c 更新：ellipsis 图标 + aria-label 更多页签 + menuitem + tabsMoreOpen，等价严格）', clientSrc.includes("icon('ellipsis')") && clientSrc.includes("'aria-label': '更多页签'") && clientSrc.includes("role: 'menuitem'") && /const tabsMoreOpen|setTabsMoreOpen/.test(clientSrc) && !clientSrc.includes("'更多 ▾'"))
   check('IA②：窄窗断点收纳 CSS（@media max-width:900px 隐藏分组/显示更多）', /@media \(max-width:900px\)\{[\s\S]{0,200}?\.ad-tabs-more\{display:block\}/.test(css7))
@@ -324,7 +324,7 @@ group('[7] v0.12.0（task-7）信息架构与宽屏版式：进度合一 / 页�
   check('IA③：字号层级收敛（无 11/11.5px；标题 16 / section 14）', !css7.includes('font-size:11px') && !css7.includes('font-size:11.5px') && css7.includes('.ad-title{font-size:16px') && css7.includes('.ad-sec{font-size:14px'))
 
   // ④ 空态统一 + 危险按钮
-  check('IA④：裸 className「ad-empty」归零，表格行内统一 ad-table-empty ×5', (clientSrc.match(/className: 'ad-empty'/g) || []).length === 0 && (clientSrc.match(/className: 'ad-table-empty'/g) || []).length === 5)
+  check('IA④：裸 className「ad-empty」归零，表格行内统一 ad-table-empty ×8（v0.15.1 素材库旧视图 +1；v0.15.2 台词视图/音频 +1；v0.15.4 登记管理空态 +1）', (clientSrc.match(/className: 'ad-empty'/g) || []).length === 0 && (clientSrc.match(/className: 'ad-table-empty'/g) || []).length === 8)
   check('IA④：emptyState 根类只保留 ad-empty-state（无裸 ad-empty 组合）', clientSrc.includes("className: 'ad-empty-state', key: options.key, role: 'status'") && !clientSrc.includes("className: 'ad-empty ad-empty-state'"))
   check('IA④：页面级空态统一走 emptyState（≥8 处）', (clientSrc.match(/emptyState\(\{/g) || []).length >= 8, String((clientSrc.match(/emptyState\(\{/g) || []).length))
   check('IA④：危险按钮 .ad-btn-danger 定义 + 应用 ≥6 处', css7.includes('.ad-btn-danger{border-color:var(--ad-error-border);color:var(--ad-error)}') && css7.includes('.ad-btn-danger:hover{background:var(--ad-error-bg)}') && (clientSrc.match(/ad-btn ad-sm ad-btn-danger/g) || []).length >= 6)
@@ -345,9 +345,9 @@ group('[7] v0.12.0（task-7）信息架构与宽屏版式：进度合一 / 页�
     const adRefs = [...new Set([...clientSrc.matchAll(/var\((--ad-[a-z0-9-]+)\)/g)].map((m) => m[1]))]
     return uniq.length === 9 && ![...outside.matchAll(/--dsw-[a-z0-9-]+/g)].length && adRefs.every((token) => adDefs.has(token))
   })())
-  check('红线：client 调用点 = 68（M4 批1+批2 +10，已批准登记）', (() => {
+  check('红线：client 调用点 = 69（task-110 media-read +1）（M4 批1+批2 +10，已批准登记）', (() => {
     const calls = new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1]))
-    return calls.size === 68
+    return calls.size === 69
   })())
 }
 
@@ -361,7 +361,7 @@ group('[8] v0.12.1（task-8）独立设置页 settings.section：注册契约 / 
     /function SettingsSection\(props\) \{/.test(clientSrc) &&
     clientSrc.includes("typeof options.close === 'function'"))
   check('设置页①：slots.register=4（2→3 设置页 +1、3→4 工具卡 +1，均已批准）', (clientSrc.match(/slots\.register\(/g) || []).length === 4)
-  check('设置页①：inject 仍仅 slots；client 调用点 = 68（M4 批1+批2 已批准）', /inject: \['slots'\]/.test(clientSrc) && new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 68)
+  check('设置页①：inject 仍仅 slots；client 调用点 = 69（task-110 media-read +1）（M4 批1+批2 已批准）', /inject: \['slots'\]/.test(clientSrc) && new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 69)
   // ② 两棵 React 树状态共享
   check('设置页②：每次挂载 Promise.all([status, settings-get]) 重读', /Promise\.all\(\[api\('status'\), api\('settings-get'\)\]\)/.test(clientSrc))
   check('设置页②：保存走既有 settings-save（共 3 处：设置页 2 + 面板流程条 1）', (clientSrc.match(/api\('settings-save'/g) || []).length === 3)
@@ -399,7 +399,7 @@ group('[9] v0.12.1（task-17）会话内工具卡 tool.call.toolview K=1：注�
     clientSrc.includes("{ name: 'tool.call.toolview', key: 'drama_check_consistency' }") &&
     (clientSrc.match(/name: 'tool\.call\.toolview'/g) || []).length === 1)
   check('工具卡①：slots.register=4（3→4 已批准终值）且 inject 仍仅 slots', (clientSrc.match(/slots\.register\(/g) || []).length === 4 && /inject: \['slots'\]/.test(clientSrc))
-  check('工具卡①：调用点 = 68（M4 批1+批2 +10 已批准）', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 68)
+  check('工具卡①：调用点 = 69（task-110 media-read +1）（M4 批1+批2 +10 已批准）', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 69)
   check('工具卡②：三阶段渲染 marker（准备参数 / 检查中… / 已完成 / 失败 / 已停止）', ['准备参数', '检查中…', '已完成', '失败', '已停止'].every((m) => cardRegion.includes(m)))
   check('工具卡②：result 文本解析（汇总/问题/严重度/定位/AI 审读/证据建议/落盘/下一步）', ['一致性检查：error', 'model.issues', 'model.findings', 'model.deep', 'AI 审读', '证据：', '建议：', '报告已落盘', '下一步'].every((m) => cardRegion.includes(m)))
   check('工具卡②：只读（卡片区无 onClick/onChange/onInput/api()，裁决指向面板「检查」页）', !/\bonClick\b|\bonChange\b|\bonInput\b|\bapi\(/.test(cardCode) && cardRegion.includes('只读卡片') && cardRegion.includes('裁决'))
@@ -415,13 +415,13 @@ group('[9] v0.12.1（task-17）会话内工具卡 tool.call.toolview K=1：注�
 }
 
 /* ------------------------------------------------------------------ [10] */
-group('[10] v0.12.2/0.12.3（M4 批1+批2）10 条既有路由面板接线：调用点 68 / UI / 降级 / 无自动加载')
+group('[10] v0.12.2/0.12.3（M4 批1+批2）10 条既有路由面板接线：调用点 69（task-110 media-read +1） / UI / 降级 / 无自动加载')
 {
   const m4Routes = ['estimate-generation', 'search-context', 'canvas-reconcile', 'task-create', 'task-update']
   const m4bRoutes = ['intake-artifact', 'catalog', 'backends-status', 'agents-status', 'ping']
   const m4All = [...m4Routes, ...m4bRoutes]
   const callNames = new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1]))
-  check('M4①：调用点 = 68（58+5+5 唯一路由名，M4 批1+批2）', callNames.size === 68, String(callNames.size))
+  check('M4①：调用点 = 69（task-110 media-read +1）（58+5+5 唯一路由名，M4 批1+批2）', callNames.size === 69, String(callNames.size))
   check('M4①：10 条新路由各 1 处且无其他新增名', m4All.every((n) => (clientSrc.match(new RegExp("api\\('" + n + "'", 'g')) || []).length === 1))
   check('M4①：无自动加载调用（loadList/openProject/loadGenerate 不含 5 新路由）', (() => {
     const region = (startMarker, endMarker) => {
@@ -438,11 +438,11 @@ group('[10] v0.12.2/0.12.3（M4 批1+批2）10 条既有路由面板接线：调
   check('M4③：task-create/update 仅本地台账（注释明确 .aidrama/tasks.json，不提交生成）', clientSrc.includes('task-create / task-update：仅写 .aidrama/tasks.json 台账（不提交生成）') && clientSrc.includes('登记任务（只写台账，不提交生成）'))
   check('M4③：真实模型 0（新 5 路由不含 generate/submit/审读触发）', !m4Routes.some((n) => ['submit-batch', 'generate', 'consistency-check', 'collect-batch'].includes(n)))
   check('M4④：CSS 0 diff（无新样式类；--dsw-* 仍 9）', !clientSrc.includes('.ad-m4') && (clientSrc.match(/--dsw-[a-z0-9-]+/g) || []).length >= 9)
-  check('M4④：METHODS/工具/slots 不变（68 / 34 / 4）', clientSrc.includes("inject: ['slots']") && (clientSrc.match(/slots\.register\(/g) || []).length === 4)
+  check('M4④：METHODS/工具/slots 不变（69 / 34 / 4）', clientSrc.includes("inject: ['slots']") && (clientSrc.match(/slots\.register\(/g) || []).length === 4)
 }
 
 /* ------------------------------------------------------------------ [11] */
-group('[11] v0.12.3（task-21 / M4 批2）产物入库 + 诊断 4 条既有路由：调用点 68 / 只读 / 无自动加载 / 写入路径')
+group('[11] v0.12.3（task-21 / M4 批2）产物入库 + 诊断 4 条既有路由：调用点 69（task-110 media-read +1） / 只读 / 无自动加载 / 写入路径')
 {
   const m4bRoutes = ['intake-artifact', 'catalog', 'backends-status', 'agents-status', 'ping']
   const callNames = new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1]))
@@ -457,7 +457,7 @@ group('[11] v0.12.3（task-21 / M4 批2）产物入库 + 诊断 4 条既有路�
   const intakeHandler = region('const intakeGeneratedArtifact = async () => {', '/* ---------------------- v0.11.5')
   const checkRegion = region("if (tab === 'check') {", "if (tab === 'toolcards') {")
 
-  check('M4B①：调用点 = 68（63+5 唯一路由名，精确）', callNames.size === 68, String(callNames.size))
+  check('M4B①：调用点 = 69（task-110 media-read +1）（63+5 唯一路由名，精确）', callNames.size === 69, String(callNames.size))
   check('M4B①：5 条新路由各 1 处且无其他新增', m4bRoutes.every((n) => (clientSrc.match(new RegExp("api\\('" + n + "'", 'g')) || []).length === 1))
   check('M4B①：无自动加载调用（loadList/openProject/loadGenerate/设置页 load 均不含 5 新路由）', m4bRoutes.every((n) => !autoLoad.includes("api('" + n + "'")))
   check('M4B②：诊断 4 项只读 handler（仅 4 条只读路由；无写盘/生成/审读）', ['backends-status', 'catalog', 'agents-status', 'ping'].every((n) => diagHandlers.includes("api('" + n + "'")) && !/submit-batch|generate|consistency-check|intake-artifact|settings-save/.test(diagHandlers))
@@ -487,7 +487,7 @@ group('[12] v0.12.4（task-24 / M5-A）可访问性：键盘导航 / focus trap 
   check('M5-A：focus trap 全防御（无 DOM/容器缺失 no-op；cleanup 恢复焦点；Tab/Shift+Tab 循环）', clientSrc.includes("typeof document === 'undefined'") && clientSrc.includes('previous.focus()') && clientSrc.includes("event.key !== 'Tab'") && clientSrc.includes('event.shiftKey'))
   check('M5-A：:focus-visible 仅 --ad-*（无 hex/无 --dsw-*），不改既有像素断言（纯追加类样式）', focusRules.includes('.ad-btn:focus-visible') && focusRules.includes('var(--ad-brand)') && !/--dsw-/.test(focusRules) && !/#[0-9a-fA-F]{3,8}\b/.test(focusRules))
   check('M5-A：既有 CSS 红线仍成立（--dsw-* 9 / 业务 hex 0 / 既有字号层级未变）', new Set([...css.matchAll(/--dsw-[a-z0-9-]+/g)].map((m) => m[0])).size === 9 && !css.includes('.ad-title{font-size:15px') && css.includes('.ad-title{font-size:16px'))
-  check('M5-A：无新增 API 调用点（仍 68）/ slots=4 / 无新依赖', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 68 && (clientSrc.match(/slots\.register\(/g) || []).length === 4)
+  check('M5-A：无新增 API 调用点（仍 68）/ slots=4 / 无新依赖', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 69 && (clientSrc.match(/slots\.register\(/g) || []).length === 4)
   check('M5-A：P0/flow/分镜/审读/设置页/工具卡/批1/批2 marker 保留', ['const requestLeave = (action) => {', 'const persistFlow = async', 'function mergeShotsPreservingExtraFields(', 'function normalizeReviewReport(raw)', 'function SettingsSection(props) {', 'function DramaCheckToolCard(props) {', 'const estimateGeneration = async () => {', 'const intakeGeneratedArtifact = async () => {'].every((m) => clientSrc.includes(m)))
 }
 
@@ -518,7 +518,7 @@ group('[13] v0.12.4（task-28 / M5-H hotfix）设置浮层背景/遮罩：CSS �
   check('hotfix⑨：诊断属性 data-ad-overlay-bg 记录实测值与实际采用值（shell:/canvas:/native: 语义）', selfheal.includes("setAttribute('data-ad-overlay-bg'") && selfheal.includes('panel=') && selfheal.includes('backdrop=') && selfheal.includes('shell=') && selfheal.includes("';adopted='") && selfheal.includes("'native:' + panelBg"))
   check('hotfix⑩：自愈不绑事件、不改结构（effect 内无 addEventListener/children.push/JSX）', !selfheal.includes('addEventListener') && !selfheal.includes('children.push') && !selfheal.includes("h('"))
   check('hotfix⑪：离开守卫共用类行为不回归（三按钮 onClick/autoFocus 原样、3 处 backdrop：离开守卫/设置浮层/交给 Agent 弹窗；v0.14.0 机械更新只增）', clientSrc.includes('onClick: cancelLeave') && clientSrc.includes('onClick: confirmLeaveDiscard') && clientSrc.includes('onClick: confirmLeaveSave') && clientSrc.includes('autoFocus: true') && (clientSrc.match(/className: 'ad-modal-backdrop'/g) || []).length === 3)
-  check('hotfix⑫：红线不变——调用点 68 / slots=4 / --ad-* 引用完整', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 68 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && (() => { const defs = new Set([...css.slice(rootStart, rootEnd).matchAll(/(--ad-[a-z0-9-]+)\s*:/g)].map((m) => m[1])); return [...new Set([...clientSrc.matchAll(/var\((--ad-[a-z0-9-]+)\)/g)].map((m) => m[1]))].every((t) => defs.has(t)) })())
+  check('hotfix⑫：红线不变——调用点 69（task-110 media-read +1） / slots=4 / --ad-* 引用完整', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 69 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && (() => { const defs = new Set([...css.slice(rootStart, rootEnd).matchAll(/(--ad-[a-z0-9-]+)\s*:/g)].map((m) => m[1])); return [...new Set([...clientSrc.matchAll(/var\((--ad-[a-z0-9-]+)\)/g)].map((m) => m[1]))].every((t) => defs.has(t)) })())
 }
 
 /* ------------------------------------------------------------------ [14] */
@@ -553,7 +553,7 @@ group('[14] v0.12.4（task-25 / M5-B）视觉细节 P2：表格 a11y / 长列表
   check('M5-B⑥：深色仅记录不改色（语义 token 配对仍在用、无新 hex）', ['var(--ad-error-bg)', 'var(--ad-warning-bg)', 'var(--ad-subtle-bg)'].every((t) => clientSrc.includes(t)) && !/#[0-9a-fA-F]{3,8}\b/.test(outside))
   check('M5-B⑦：M5-A 不回归（roving tabindex/focus trap/focus-visible/aria-keyshortcuts）', clientSrc.includes('tabIndex: tab === key ? 0 : -1') && clientSrc.includes("installDialogFocusTrap('ad-settings-dialog')") && css.includes('.ad-btn:focus-visible') && (clientSrc.match(/'aria-keyshortcuts': 'Control\+S Meta\+S'/g) || []).length >= 6)
   check('M5-B⑦：IA/结构不变（tablist/tabpanel/aria-controls 保留）', clientSrc.includes("role: 'tablist'") && clientSrc.includes("'aria-controls': 'ad-tabpanel'") && clientSrc.includes("role: 'tabpanel', id: 'ad-tabpanel'"))
-  check('M5-B⑧：红线不变——调用点 68 / slots=4 / --dsw-* 9 仅在 body 定义层 / --ad-* 完整', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 68 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && dsw.size === 9 && (outside.match(/--dsw-[a-z0-9-]+/g) || []).length === 0 && (() => { const defs = new Set([...css.slice(rootStart, rootEnd).matchAll(/(--ad-[a-z0-9-]+)\s*:/g)].map((m) => m[1])); return [...new Set([...clientSrc.matchAll(/var\((--ad-[a-z0-9-]+)\)/g)].map((m) => m[1]))].every((t) => defs.has(t)) })())
+  check('M5-B⑧：红线不变——调用点 69（task-110 media-read +1） / slots=4 / --dsw-* 9 仅在 body 定义层 / --ad-* 完整', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 69 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && dsw.size === 9 && (outside.match(/--dsw-[a-z0-9-]+/g) || []).length === 0 && (() => { const defs = new Set([...css.slice(rootStart, rootEnd).matchAll(/(--ad-[a-z0-9-]+)\s*:/g)].map((m) => m[1])); return [...new Set([...clientSrc.matchAll(/var\((--ad-[a-z0-9-]+)\)/g)].map((m) => m[1]))].every((t) => defs.has(t)) })())
 }
 
 /* ------------------------------------------------------------------ [15] */
@@ -579,7 +579,7 @@ group('[15] v0.12.4（task-26 / M5-C）性能优化：memo 派生 / 依赖精确
   check('M5-C：不改 UI/文案（9 caption / 6 用途说明 / 2 截断提示仍在）', (clientSrc.match(/h\('caption'/g) || []).length === 9 && ['生成前查看各后端预计消耗（只查价目，不触发生成）', '把已生成的文件/链接登记到素材库（记录 sha256）', '技术自检，排障用；日常可忽略（只读）'].every((h) => clientSrc.includes(h)) && clientSrc.includes('canvas-truncated') && clientSrc.includes('task-truncated'))
   check('M5-C：请求结构不变（openProject 仍 10 项 Promise.all + autoLoad×2 + loadFlow；13 请求语义不变）', clientSrc.includes('const [t, c, o, ch, eps, dr, mem, wrld, prg, fin] = await Promise.all([') && clientSrc.includes('autoLoadEpisode(title, firstOrder).catch(() => {})') && clientSrc.includes('autoLoadShots(title, firstOrder).catch(() => {})') && clientSrc.includes('loadFlow(title, prg.progress).catch(() => {})'))
   check('M5-C：既有 P0/flow/分镜/审读/工具卡/批1/批2/M5-A/B/H marker 保留', ['const requestLeave = (action) => {', 'const persistFlow = async', 'function mergeShotsPreservingExtraFields(', 'function normalizeReviewReport(raw)', 'function SettingsSection(props) {', 'function DramaCheckToolCard(props) {', 'const estimateGeneration = async () => {', 'const intakeGeneratedArtifact = async () => {', 'data-ad-overlay-bg', 'tabIndex: tab === key ? 0 : -1'].every((m) => clientSrc.includes(m)))
-  check('M5-C：红线不变——调用点 68 / slots=4 / --dsw-* 9 仅在 body 定义层 / 业务 hex 0', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 68 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && dsw.size === 9 && (outside.match(/--dsw-[a-z0-9-]+/g) || []).length === 0 && !/#[0-9a-fA-F]{3,8}\b/.test(outside))
+  check('M5-C：红线不变——调用点 69（task-110 media-read +1） / slots=4 / --dsw-* 9 仅在 body 定义层 / 业务 hex 0', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 69 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && dsw.size === 9 && (outside.match(/--dsw-[a-z0-9-]+/g) || []).length === 0 && !/#[0-9a-fA-F]{3,8}\b/.test(outside))
 }
 
 /* ------------------------------------------------------------------ [16] */
@@ -617,7 +617,7 @@ group('[16] v0.13.0（task-31 / M6-0a）列表页卡片化：影视内容风规�
   check('M6-0a⑤：既有锚点保留（.ad-content 原串/ad-list-toolbar 原串/ad-cta/emptyState 根串/旧 .ad-card* 未删）', clientSrc.includes('.ad-content{width:100%;max-width:1200px;margin:0 auto}') && clientSrc.includes("className: 'ad-list-toolbar', key: 'search'") && clientSrc.includes('ad-btn ad-primary ad-cta') && clientSrc.includes("className: 'ad-empty-state', key: options.key, role: 'status'") && clientSrc.includes('.ad-card{') && clientSrc.includes('.ad-card-title{font-size:14px'))
   check('M6-0a⑤：字号仍 16/14/13/12（无 11/11.5/12.5；44px 为装饰首字）', !css.includes('font-size:11px') && !css.includes('font-size:11.5px') && !css.includes('font-size:12.5px') && css.includes('.ad-title{font-size:16px') && css.includes('.ad-sec{font-size:14px') && css.includes('font-size:13px') && cssAdd.includes('font-size:44px'))
   check('M6-0a⑤：M5-A focus 规则未改 / 键盘 roving 保留 / 9 caption / 6 用途说明', css.includes('.ad-shell :focus-visible,.ad-btn:focus-visible') && clientSrc.includes('tabIndex: tab === key ? 0 : -1') && (clientSrc.match(/h\('caption'/g) || []).length === 9 && (clientSrc.match(/className: 'ad-hint-next', key: 'hint-/g) || []).length === 6)
-  check('M6-0a⑥：调用点 68 不变 / slots=4 / --dsw-* 9 仅在 body 定义层 / 业务 CSS 0 hex', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 68 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && dsw.size === 9 && (outside.match(/--dsw-[a-z0-9-]+/g) || []).length === 0 && !/#[0-9a-fA-F]{3,8}\b/.test(outside))
+  check('M6-0a⑥：调用点 69（task-110 media-read +1） 不变 / slots=4 / --dsw-* 9 仅在 body 定义层 / 业务 CSS 0 hex', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 69 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && dsw.size === 9 && (outside.match(/--dsw-[a-z0-9-]+/g) || []).length === 0 && !/#[0-9a-fA-F]{3,8}\b/.test(outside))
   check('M6-0a 预检修复：共享资料空态图形锚点 / 海报位单一边框 / 进度 label 与 aria 钳制一致', cssAdd.includes('.ad-shared-empty::before{') && cssAdd.includes('.ad-empty-poster .ad-empty-state{border:0;padding:0;background:none;line-height:inherit}') && clientSrc.includes("'aria-label': '进度 ' + Math.min(count, target) + ' / ' + target + ' 集（按默认目标估算）'") && clientSrc.includes("Math.min(count, target) + ' / ' + target + ' 集'))"))
   check('M6-0a⑥：未新增依赖 / package 版本未被本卡改动痕迹（v0.13.0 由 Lead 打包）', (() => { try { return true } catch { return true } })())
 }
@@ -655,7 +655,7 @@ group('[17] v0.13.1（task-33）视觉根因修复 + 增强 v2：token 块 body 
   check('v0.13.1③：enhanced 仅在 @supports(color: color-mix(... red 1%, blue)) 内（高对比渐变/双层阴影/淡底/进度 14%）', supportsIdx > 0 && enhancedPart.includes('color-mix(in srgb,var(--ad-brand) 78%') && enhancedPart.includes('0 1px 2px color-mix(in srgb,var(--ad-label-primary) 8%,transparent),0 10px 26px color-mix(in srgb,var(--ad-label-primary) 12%,transparent)') && enhancedPart.includes('color-mix(in srgb,var(--ad-warn) 16%,var(--ad-bg-base))') && enhancedPart.includes('color-mix(in srgb,var(--ad-success) 14%,var(--ad-bg-base))') && enhancedPart.includes('color-mix(in srgb,var(--ad-label-primary) 14%,transparent)'))
   check('v0.13.1④：data-ad-surface=card|hero|shared|poster|badge 各 1 处（仅属性）；封面不再标 cover', ['card', 'hero', 'shared', 'poster', 'badge'].every((v) => (clientSrc.match(new RegExp("'data-ad-surface': '" + v + "'", 'g')) || []).length === 1) && !clientSrc.includes("'data-ad-surface': 'cover'"))
   check('v0.13.1④：共享资料 wrapper id=ad-shared-surface 存在；卡片/徽标/工具条渲染结构不变', clientSrc.includes("id: 'ad-shared-surface', 'data-ad-surface': 'shared'") && cardRegion.includes("'data-ad-surface': 'card'") && cardRegion.includes("'data-ad-surface': 'badge'"))
-  check('v0.13.1⑤：红线——调用点 68 / slots=4 / --ad-* 17 / 0 新 hex / cssAdd 无 --dsw-*', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 68 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && !/#[0-9a-fA-F]{3,8}\b/.test(add) && !/--dsw-/.test(add))
+  check('v0.13.1⑤：红线——调用点 69（task-110 media-read +1） / slots=4 / --ad-* 17 / 0 新 hex / cssAdd 无 --dsw-*', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 69 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && !/#[0-9a-fA-F]{3,8}\b/.test(add) && !/--dsw-/.test(add))
   check('v0.13.1⑤：锚点保留（emptyState 源码/ad-list-toolbar 原串/ad-cta/.ad-content/旧 .ad-card*；M5-A/B/C/H marker）', clientSrc.includes("className: 'ad-empty-state', key: options.key, role: 'status'") && clientSrc.includes("className: 'ad-list-toolbar', key: 'search'") && clientSrc.includes('ad-btn ad-primary ad-cta') && clientSrc.includes('.ad-content{width:100%;max-width:1200px;margin:0 auto}') && clientSrc.includes('.ad-card{') && ['data-ad-overlay-bg', 'tabIndex: tab === key ? 0 : -1', "installDialogFocusTrap('ad-settings-dialog')", '.ad-shell :focus-visible'].every((m) => clientSrc.includes(m)))
 }
 
@@ -692,13 +692,13 @@ group('[18] v0.13.2（task-34 / M6-0b）项目页/设置页视觉层级：唯一
   check('M6-0b⑧：sticky footer（position:sticky/bottom:0/顶 divider/padding 12 16）+ .ad-settings-page padding-bottom 防遮挡 + 窄窗适配', add.includes('.ad-settings-footer{position:sticky;bottom:0;z-index:20;') && add.includes('.ad-settings-footer{position:sticky;bottom:0;z-index:20;display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;background:var(--ad-bg-base);border-top:1px solid var(--ad-divider);padding:12px 16px;margin-top:8px}') && add.includes('.ad-settings-page{gap:14px;padding-bottom:72px}') && add.includes('@media (max-width:900px)') && add.includes('@media (max-width:560px)'))
   check('M6-0b⑨：诊断折叠样式（summary 13/600/隐藏默认 marker/▸▾ 指示/body 内边距）', add.includes('.ad-settings-diag-summary{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--ad-label-primary);cursor:pointer;padding:12px 16px;list-style:none;margin:0}') && add.includes('.ad-settings-diag-summary::-webkit-details-marker{display:none}') && add.includes('content:"▸"') && add.includes('.ad-settings-diag[open] .ad-settings-diag-summary::before{content:"▾"}') && add.includes('.ad-settings-diag-body{padding:4px 16px 14px}'))
   check('M6-0b⑩：base 纯 token + enhanced 全在 @supports（胶片当前步 10%/确认 8%/页签 6%/卡片阴影/focus 环/footer 上影）', basePart.length > 0 && !/color-mix/.test(basePart) && enhancedPart.includes('.ad-flow-step[data-state="current"]{background:color-mix(in srgb,var(--ad-brand) 10%,var(--ad-bg-base));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ad-brand) 35%,transparent)}') && enhancedPart.includes('.ad-flow-step[data-state="confirmed"]{background:color-mix(in srgb,var(--ad-success) 8%,var(--ad-bg-base))}') && enhancedPart.includes('.ad-tab[data-on="1"]{background:color-mix(in srgb,var(--ad-brand) 6%,transparent)}') && enhancedPart.includes('.ad-settings-footer{box-shadow:0 -6px 16px color-mix(in srgb,var(--ad-label-primary) 6%,transparent)}'))
-  check('M6-0b⑪：红线不变——调用点 68 / slots=4 / token 块 body / dsw 9 仅 token 块 / M5-A/B/M6-0a 锚点', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 68 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && new Set([...css.matchAll(/--dsw-[a-z0-9-]+/g)].map((m) => m[0])).size === 9 && ['tabIndex: tab === key ? 0 : -1', "installDialogFocusTrap('ad-settings-dialog')", '.ad-shell :focus-visible', "'data-ad-surface': 'card'", "className: 'ad-empty-state', key: options.key, role: 'status'"].every((m) => clientSrc.includes(m)))
+  check('M6-0b⑪：红线不变——调用点 69（task-110 media-read +1） / slots=4 / token 块 body / dsw 9 仅 token 块 / M5-A/B/M6-0a 锚点', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 69 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && new Set([...css.matchAll(/--dsw-[a-z0-9-]+/g)].map((m) => m[0])).size === 9 && ['tabIndex: tab === key ? 0 : -1', "installDialogFocusTrap('ad-settings-dialog')", '.ad-shell :focus-visible', "'data-ad-surface': 'card'", "className: 'ad-empty-state', key: options.key, role: 'status'"].every((m) => clientSrc.includes(m)))
   check('M6-0b⑫：IA/文案/唯一主进度语义不变（4 组页签 / 6 步流程常量 / 文案 marker / 设置项 marker）', clientSrc.includes('const TAB_GROUPS = [') && ["id: 'create'", "id: 'assets'", "id: 'deliver'", "id: 'advanced'"].every((m) => clientSrc.includes(m)) && clientSrc.includes("'aria-label': '创作进度（流程状态机 + 内容计数）'") && ['环境信息 / 诊断（只读）', '默认契约', '默认模型与检索', '任务模型', '流程模式', '提示词模板', '保存设置'].every((m) => clientSrc.includes(m)))
   check('M6-0b⑬（DEF-DARK-SELECT-01）：select/option 显式 token 颜色（浅/深跟随）+ checked/hover 态', add.includes('select.ad-select{color:var(--ad-label-primary);background-color:var(--ad-bg-base)}') && add.includes('select.ad-select option,select.ad-select optgroup{color:var(--ad-label-primary);background-color:var(--ad-bg-base)}') && add.includes('select.ad-select option:checked,select.ad-select option:hover{color:var(--ad-label-primary);background-color:var(--ad-hover-bg)}'))
   check('M6-0b⑭（DEF-DARK-SELECT-01）：原生控件 date/time/number/search/url/email/password/checkbox/radio/textarea 均有 token 色 + accent-color', ['.ad-input[type="date"]', '.ad-input[type="time"]', '.ad-input[type="number"]', '.ad-input[type="search"]', '.ad-input[type="url"]', '.ad-input[type="email"]', '.ad-input[type="password"]', '.ad-input[type="checkbox"]', '.ad-input[type="radio"]', '.ad-area{color:var(--ad-label-primary);background-color:var(--ad-bg-base)}'].every((m) => add.includes(m)) && add.includes('.ad-input[type="checkbox"],.ad-input[type="radio"],.ad-check{accent-color:var(--ad-brand)}'))
   check('M6-0b⑮（DEF-DARK-SELECT-01）：深色 color-scheme 作用域（body[data-ds-dark-theme] 下容器+select/input/area；浅色默认 light）', add.includes('.ad-shell,.ad-settings-page,.ad-settings-overlay-panel,.ad-toolview{color-scheme:light}') && add.includes('body[data-ds-dark-theme] .ad-shell,body[data-ds-dark-theme] .ad-settings-page,body[data-ds-dark-theme] .ad-settings-overlay-panel,body[data-ds-dark-theme] .ad-toolview,body[data-ds-dark-theme] select.ad-select,body[data-ds-dark-theme] .ad-input,body[data-ds-dark-theme] .ad-area{color-scheme:dark}') && add.includes('body[data-ds-dark-theme] select.ad-select option,body[data-ds-dark-theme] select.ad-select optgroup{color:var(--ad-label-primary);background-color:var(--ad-bg-base)}'))
   check('M6-0b⑯（DEF-DARK-SELECT-01）：.ad-select 自身 color-scheme light + 深色分支 + option 通用形式（PM/QA marker 对齐）', add.includes('.ad-select{color:var(--ad-label-primary);background-color:var(--ad-bg-base);color-scheme:light}') && add.includes('body[data-ds-dark-theme] .ad-select{color-scheme:dark}') && add.includes('.ad-select option,.ad-select optgroup{color:var(--ad-label-primary);background-color:var(--ad-bg-base)}'))
-  check('M6-0b⑰（DEF-DARK-SELECT-01 覆盖补强）：容器作用域通用 select/option 规则覆盖全部 20 处 h(select)（含无 class 7 处）', [...clientSrc.matchAll(/h\('select'/g)].length === 20 && add.includes('.ad-shell select,.ad-settings-page select,.ad-settings-overlay-panel select,.ad-toolview select{color:var(--ad-label-primary);background-color:var(--ad-bg-base);color-scheme:light}') && add.includes('.ad-shell select option,.ad-shell select optgroup,.ad-settings-page select option,.ad-settings-page select optgroup,.ad-settings-overlay-panel select option,.ad-settings-overlay-panel select optgroup,.ad-toolview select option,.ad-toolview select optgroup{color:var(--ad-label-primary);background-color:var(--ad-bg-base)}') && add.includes('body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-page select,body[data-ds-dark-theme] .ad-settings-overlay-panel select,body[data-ds-dark-theme] .ad-toolview select{color-scheme:dark}'))
+  check('M6-0b⑰（DEF-DARK-SELECT-01 覆盖补强）：容器作用域通用 select/option 规则覆盖全部 24 处 h(select)（含无 class 处；v0.15.2 台词按集/角色 +2；v0.15.3 视觉资产排序 +1；v0.15.4 登记素材排序 +1）', [...clientSrc.matchAll(/h\('select'/g)].length === 24 && add.includes('.ad-shell select,.ad-settings-page select,.ad-settings-overlay-panel select,.ad-toolview select{color:var(--ad-label-primary);background-color:var(--ad-bg-base);color-scheme:light}') && add.includes('.ad-shell select option,.ad-shell select optgroup,.ad-settings-page select option,.ad-settings-page select optgroup,.ad-settings-overlay-panel select option,.ad-settings-overlay-panel select optgroup,.ad-toolview select option,.ad-toolview select optgroup{color:var(--ad-label-primary);background-color:var(--ad-bg-base)}') && add.includes('body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-page select,body[data-ds-dark-theme] .ad-settings-overlay-panel select,body[data-ds-dark-theme] .ad-toolview select{color-scheme:dark}'))
   check('M6-0b⑱（P2 并入）：人物卡删除按钮=inline SVG 垃圾桶+aria-label/title+原 removeCard 行为；.ad-icon-btn token 样式（hover error/focus brand 环）', clientSrc.includes("className: 'ad-btn ad-sm ad-icon-btn', 'data-tone': 'danger', 'aria-label': '删除人物', title: '删除人物', onClick: () => removeCard(i)") && add.includes('.ad-btn.ad-icon-btn[data-tone="danger"]:hover,.ad-btn.ad-icon-btn[data-tone="danger"]:focus-visible{color:var(--ad-error);background:var(--ad-error-bg)}') && clientSrc.includes("h('svg', { width: 16, height: 16, viewBox: '0 0 16 16'") && clientSrc.includes("'aria-hidden': 'true', focusable: 'false'") && add.includes('.ad-icon-btn{min-width:28px;min-height:28px;padding:4px;display:inline-flex') && add.includes('.ad-icon-btn:hover{color:var(--ad-error);background:var(--ad-error-bg)}') && add.includes('.ad-icon-btn:focus-visible{outline:2px solid var(--ad-brand);outline-offset:2px}') && !clientSrc.includes("className: 'ad-btn ad-sm', onClick: () => removeCard(i) }, '删')"))
 }
 
@@ -729,7 +729,7 @@ group('[19] v0.13.3（task-35 / M6-0c）统一图标集 / DEV-ICON-HOVER-BG 修�
   check('M6-0c⑤：微交互 120ms（btn/icon/表格行/菜单项）+ 无布局位移属性 + prefers-reduced-motion 关闭', add.includes('.ad-btn{transition:background-color 120ms ease,border-color 120ms ease,color 120ms ease}') && add.includes('.ad-icon-btn{transition:color 120ms ease,background-color 120ms ease}') && add.includes('.ad-table tbody tr{transition:background-color 120ms ease}') && add.includes('.ad-project-more-item,.ad-project-more-path{transition:background-color 120ms ease,color 120ms ease}') && add.includes('@media (prefers-reduced-motion: reduce)') && !/transition:[^;}]*\b(width|height|padding|margin|top|left|right|bottom)\b/.test(add))
   check('M6-0c⑥：主操作/关闭保留文字（保存设置/保存人物卡/关闭/新建短剧/刷新诊断未被 icon-only 化）', ['保存设置', '保存人物卡', '关闭', '新建短剧', '刷新诊断'].every((t) => clientSrc.includes(t)) && !clientSrc.includes("icon('refresh'), '关闭'") && !clientSrc.includes("icon('refresh'), '保存设置'"))
   check('M6-0c⑦：零遗留文字操作（无「删」文本/无「更多 ▾」/无「+ 增加」）+ 0 新 hex/0 新 token/业务 dsw=0', !clientSrc.includes("}, '删')") && !clientSrc.includes("'更多 ▾'") && !clientSrc.includes("'+ 增加") && !/#[0-9a-fA-F]{3,8}\b/.test(add) && !/--ad-[a-z0-9-]+\s*:/.test(add) && ![...outside.matchAll(/--dsw-[a-z0-9-]+/g)].length)
-  check('M6-0c⑧：红线——token 块 body / 17 --ad-* / 调用点 68 / slots 4 / M5-A·B·M6-0a·b 锚点', blockStart >= 0 && new Set([...block.matchAll(/(--ad-[a-z0-9-]+)\s*:/g)].map((m) => m[1])).size === 17 && new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 68 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && ['tabIndex: tab === key ? 0 : -1', "installDialogFocusTrap('ad-settings-dialog')", '.ad-shell :focus-visible', "'data-ad-surface': 'card'"].every((m) => clientSrc.includes(m)))
+  check('M6-0c⑧：红线——token 块 body / 17 --ad-* / 调用点 69（task-110 media-read +1） / slots 4 / M5-A·B·M6-0a·b 锚点', blockStart >= 0 && new Set([...block.matchAll(/(--ad-[a-z0-9-]+)\s*:/g)].map((m) => m[1])).size === 17 && new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 69 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && ['tabIndex: tab === key ? 0 : -1', "installDialogFocusTrap('ad-settings-dialog')", '.ad-shell :focus-visible', "'data-ad-surface': 'card'"].every((m) => clientSrc.includes(m)))
 }
 
 /* ------------------------------------------------------------------ [20] */
@@ -764,7 +764,7 @@ group('[20] v0.14.0（task-38 / M6-1 C 路径）「交给 Agent」：两入口 /
   check('M6-1④：复制=点击手势内同步 writeText + 存在性守卫；成功「已复制交接指令」+粘贴指引+「再次复制」', clientSrc.includes("if (typeof navigator === 'undefined' || !navigator.clipboard || typeof navigator.clipboard.writeText !== 'function')") && clientSrc.includes('const pending = navigator.clipboard.writeText(text)') && clientSrc.includes("'已复制交接指令。请到 Agent 对话输入框粘贴并发送。'") && clientSrc.includes("'再次复制'"))
   check('M6-1④：失败=.ad-err-box「复制失败」+手动全选指引+「重试复制」+ 预览始终保留（不卸载弹窗）', clientSrc.includes("className: 'ad-err-box', role: 'alert'") && clientSrc.includes("'复制失败'") && clientSrc.includes("'下一步：请手动全选下方指令复制，粘贴到 Agent 对话发送。'") && clientSrc.includes("'重试复制'") && clientSrc.includes('setHandoffCopyError(String('))
   check('M6-1⑤：三态（生成中骨架+aria-busy/成功/失败）且弹窗不自动关闭', clientSrc.includes("'正在准备交接…'") && clientSrc.includes("className: 'ad-skeleton', role: 'status', 'aria-live': 'polite'") && clientSrc.includes("'准备中…'") && !/setHandoffOpen\(false\)[\s\S]{0,80}setHandoffCopied\(true\)/.test(clientSrc))
-  check('M6-1⑥：红线——0 新 hex / 0 新 --ad-* 定义 / 业务 dsw=0 / 17 --ad-* 定义 / token 块 body / 调用点 68 / slots 4', !/#[0-9a-fA-F]{3,8}\b/.test(add) && !/--ad-[a-z0-9-]+\s*:/.test(add) && ![...outside.matchAll(/--dsw-[a-z0-9-]+/g)].length && new Set([...block.matchAll(/(--ad-[a-z0-9-]+)\s*:/g)].map((m) => m[1])).size === 17 && blockStart >= 0 && calls.size === 68 && (clientSrc.match(/slots\.register\(/g) || []).length === 4)
+  check('M6-1⑥：红线——0 新 hex / 0 新 --ad-* 定义 / 业务 dsw=0 / 17 --ad-* 定义 / token 块 body / 调用点 69（task-110 media-read +1） / slots 4', !/#[0-9a-fA-F]{3,8}\b/.test(add) && !/--ad-[a-z0-9-]+\s*:/.test(add) && ![...outside.matchAll(/--dsw-[a-z0-9-]+/g)].length && new Set([...block.matchAll(/(--ad-[a-z0-9-]+)\s*:/g)].map((m) => m[1])).size === 17 && blockStart >= 0 && calls.size === 69 && (clientSrc.match(/slots\.register\(/g) || []).length === 4)
   check('M6-1⑥：既有锚点不回归（emptyState/唯一主进度/9 caption/IA 15 页签 4 组/M5-A/B/M6-0a/b/c）', clientSrc.includes("className: 'ad-empty-state', key: options.key, role: 'status'") && clientSrc.includes("'aria-label': '创作进度（流程状态机 + 内容计数）'") && (clientSrc.match(/h\('caption'/g) || []).length === 9 && clientSrc.includes("role: 'tablist'") && clientSrc.includes('const TAB_GROUPS = [') && ['tabIndex: tab === key ? 0 : -1', '.ad-shell :focus-visible', "'data-ad-surface': 'card'", 'installDialogFocusTrap'].every((m) => clientSrc.includes(m)))
   check('M6-1⑥：C-only（无 A 投递/无会话选择/无新 Remote；指令生成不调用 api）', !clientSrc.includes('投递到 Agent') && !clientSrc.includes('remote.session') && !clientSrc.includes('@Remote') && clientSrc.includes('function buildHandoffInstruction(args)') && !/buildHandoffInstruction\([^)]*api\(/.test(clientSrc))
 }
@@ -791,7 +791,7 @@ group('[21] v0.15.0（task-39 / M6-2）页头「下一步」CTA：FLOW_STEP_TAB 
   check('M6-2⑦：aria-label/title 含动作+目标页签；chip aria-hidden；hint title 全文', clientSrc.includes("'aria-label': nextStep.ariaLabel,") && clientSrc.includes("title: nextStep.ariaLabel,") && clientSrc.includes("'aria-hidden': 'true' } , nextStep.chipLabel") === false ? true : true, true)
   check('M6-2⑦：chip aria-hidden + tone（neutral/warn/success）+ hint title', clientSrc.includes("'data-tone': nextStep.tone || 'neutral'") && clientSrc.includes("title: nextStep.hint") && clientSrc.includes("'aria-hidden': 'true'"))
   check('M6-2⑧：CSS token-only（.ad-next-step/.cta/.label-short/.alt/.hint/.chip + ≤900/≤560）+ 0 hex/0 新 token', (() => { const cssStart = clientSrc.indexOf('const CSS = `'); const cssEnd = clientSrc.indexOf('\n`\n', cssStart); const css = cssStart >= 0 && cssEnd > cssStart ? clientSrc.slice(cssStart, cssEnd) : ''; const a = css.indexOf('/* v0.15.0（task-39 / M6-2）'); const add = a >= 0 ? css.slice(a) : ''; return ['.ad-next-step{', '.ad-next-cta{', '.ad-next-label-short', '.ad-next-alt{', '.ad-next-hint{', '.ad-next-chip{', '@media (max-width:900px)', '@media (max-width:560px)'].every((m) => add.includes(m)) && !/#[0-9a-fA-F]{3,8}\b/.test(add) && !/--ad-[a-z0-9-]+\s*:/.test(add) })())
-  check('M6-2⑧：IA/红线——68 调用点 / slots4 / 15 页签 4 组 / 唯一主进度 / emptyState / 9 caption / icon chevron', (() => { const calls = new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])); return calls.size === 68 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && (clientSrc.match(/className: 'ad-flow'/g) || []).length === 1 && clientSrc.includes('const TAB_GROUPS = [') && clientSrc.includes("className: 'ad-empty-state', key: options.key, role: 'status'") && (clientSrc.match(/h\('caption'/g) || []).length === 9 && (clientSrc.match(/icon\('chevron'\)/g) || []).length === 1 })())
+  check('M6-2⑧：IA/红线——68 调用点 / slots4 / 15 页签 4 组 / 唯一主进度 / emptyState / 9 caption / icon chevron', (() => { const calls = new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])); return calls.size === 69 && (clientSrc.match(/slots\.register\(/g) || []).length === 4 && (clientSrc.match(/className: 'ad-flow'/g) || []).length === 1 && clientSrc.includes('const TAB_GROUPS = [') && clientSrc.includes("className: 'ad-empty-state', key: options.key, role: 'status'") && (clientSrc.match(/h\('caption'/g) || []).length === 9 && (clientSrc.match(/icon\('chevron'\)/g) || []).length === 1 })())
 }
 
 console.log(`\n结果：${passed} passed, ${failed} failed`)

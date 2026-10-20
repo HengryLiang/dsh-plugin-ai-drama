@@ -298,7 +298,7 @@ for (const [name, output] of Object.entries(TOOL_OUTPUTS)) {
   if (!text || !String(text).trim()) schemaProblems.push(`${name}: render 返回空文本`)
 }
 check('34 工具 output.schema/render 规范（object 根/required ok/render 非空）', schemaProblems.length === 0, JSON.stringify(schemaProblems).slice(0, 500))
-check('METHODS 仍 = 68', METHODS.length === 68, String(METHODS.length))
+check('METHODS 仍 = 69（task-110 media-read +1）', METHODS.length === 69, String(METHODS.length))
 
 
 /* ------------------------------------------------------------------ [5] P3-F：meta.promptVersion 三路径契约（model/deterministic/agent-mediated + 落盘） */

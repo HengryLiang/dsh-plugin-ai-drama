@@ -8,7 +8,7 @@
  *   D groupPrompt = notes（非空才出现，≤2000 确定性截断）
  *   E sidecar 损坏 → 无 groups、不报错；只读不写盘
  *   F 确定性（同输入两次响应严格相等）、项目目录 hash 不变、真实万界倒爷复制只读
- *   G METHODS 68 / 工具 34 / 无新依赖 / helper 缺省口径
+ *   G METHODS 69（task-110 media-read +1） / 工具 34 / 无新依赖 / helper 缺省口径
  *
  * 版本自适应：无 getStoryboardReadView/buildStoryboardGroupsView（≤v0.11.1 安装包）→ 整套件 SKIP（exit 0）。
  * 运行：node test/groups-read.mjs
@@ -69,8 +69,8 @@ if (!hasReadView) {
 }
 check('0.1 store 新增只读 helper（buildStoryboardGroupsView/getStoryboardReadView）', hasReadView)
 check('0.2 读侧上限常量 100 / groupPrompt 上限 2000', store.GROUPS_READ_LIMIT === 100 && store.GROUP_PROMPT_READ_LIMIT === 2000, JSON.stringify({ groups: store.GROUPS_READ_LIMIT, prompt: store.GROUP_PROMPT_READ_LIMIT }))
-check('0.3 METHODS 68 且含 storyboard-get（无新 route）', methods.length === 68 && methods.includes('storyboard-get'), String(methods.length))
-check('0.4 工具 34 / client 调用 68（M4 批1+批2 +10 已批准）/ 无新依赖', toolCount === 34 && clientCalls.size === 68 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ tools: toolCount, clientCalls: clientCalls.size }))
+check('0.3 METHODS 69（task-110 media-read +1） 且含 storyboard-get（无新 route）', methods.length === 69 && methods.includes('storyboard-get'), String(methods.length))
+check('0.4 工具 34 / client 调用 68（M4 批1+批2 +10 已批准）/ 无新依赖', toolCount === 34 && clientCalls.size === 69 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ tools: toolCount, clientCalls: clientCalls.size }))
 
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'groups-read-'))
 const TITLE = 'groups读侧测试剧'
@@ -193,7 +193,7 @@ if (await fileExists(REAL_STORYBOARD)) {
 group('[G] helper 缺省口径 / 契约')
 const helperView = store.buildStoryboardGroupsView([{ id: 'g1' }, { id: 'g2', name: 'N', emotion: { intensity: 55 } }])
 check('G1 helper 缺省：name/emotionCue 输出空串、truncated=false', helperView.groups[0].name === '' && helperView.groups[0].emotionCue === '' && helperView.groups[1].emotionCue === '' && helperView.truncated === false, JSON.stringify(helperView))
-check('G2 METHODS 68 / 工具 34 / client 68（M4 批1+批2 已批准）/ 无新依赖', methods.length === 68 && toolCount === 34 && clientCalls.size === 68 && Object.keys(pkg.dependencies || {}).length === 0)
+check('G2 METHODS 69（task-110 media-read +1） / 工具 34 / client 69（task-110 media-read +1）（M4 批1+批2 已批准）/ 无新依赖', methods.length === 69 && toolCount === 34 && clientCalls.size === 69 && Object.keys(pkg.dependencies || {}).length === 0)
 
 await fs.rm(workspace, { recursive: true, force: true })
 check('G3 临时工作区已清理', !(await fileExists(workspace)))

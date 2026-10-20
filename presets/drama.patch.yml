@@ -17,7 +17,10 @@
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:
-              suffix: Your working directory is {{cwd}}.
+              # DSH 0.2.1 起，persona 模板按「该段落已注册变量」严格解析：
+              # 桌面部系的 deployment:persona-suffix 仅注册 provider / model，
+              # 旧版随包模板里的工作目录变量（cwd）在 0.2.1 会直接报 unknown prompt variable。
+              # 因此这里不再写 suffix（默认 '' 同时遮蔽部署级后缀，符合本插件自有短剧人设的原意）。
               prefix: You are a short-drama director agent powered by the {{model}} model.
           - id: agent-instructions
             name: '@deepseek-ai/dsh-agent-instructions'

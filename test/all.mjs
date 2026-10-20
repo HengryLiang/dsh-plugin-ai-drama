@@ -47,6 +47,11 @@ const suites = [
   ['v0.11.2 groups 读侧（E7）', 'groups-read.mjs'],
   ['v0.11.3 风格注入（2-2 二期）', 'style-injection.mjs'],
   ['v0.11.4 互通导入导出（2-5）', 'import-export.mjs'],
+  ['v0.15.1 素材媒体（迭代1）', 'asset-media.mjs'],
+  ['v0.15.2 台词音效重定位（迭代2）', 'dialogue-audio.mjs'],
+  ['v0.15.3 视觉圣经专区（迭代3）', 'visual-bible.mjs'],
+  ['v0.15.4 素材库2.0 旧登记统一视图', 'legacy-media.mjs'],
+  ['Harness 兼容性（preset 变量/peer 范围）', 'preset-vars.mjs'],
 ]
 /** 显式 skip 理由（登记在此处，验收证据引用同一份清单）。 */
 const SKIP_REASONS = {

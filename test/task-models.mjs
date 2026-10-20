@@ -7,7 +7,7 @@
  * Q3 运行时探测（llm.resolveModelInfo）+ 失败降级标记 `modelFallback:true`，不报错不阻断；
  * Q4 provider/model/temperature(0~2)/maxTokens(≤60000)/timeoutMs(1000~60000) 可配；
  * Q5 设置页区块（client 侧），不改页签/`slots.register=4`（task-8 设置页 +1、task-17 工具卡 +1，均已批准终值）。
- * 实现约束：工具 34 / METHODS 68 / 零新增 route / 无新增依赖 / 旧 settings 兼容 / settings 响应形状不变。
+ * 实现约束：工具 34 / METHODS 69（task-110 media-read +1） / 零新增 route / 无新增依赖 / 旧 settings 兼容 / settings 响应形状不变。
  *
  * 模型调用隔离：fake llm（stream 流协议 + resolveModelInfo 探测），零成本可重复。
  * 运行：node test/task-models.mjs
@@ -39,7 +39,7 @@ if (!hasFeature) {
 }
 
 const { apply, METHODS } = await import(pathToFileURL(path.join(pluginRoot, 'index.js')).href)
-const CLIENT_CALLS_EXPECTED = 68 // v0.12.3（task-20+task-21 / M4 批1+批2）：58→63→68（+10 已批准）
+const CLIENT_CALLS_EXPECTED = 69 // task-110 media-read +1（v0.15.1：68→69）；历史：v0.12.3 M4 批1+批2 58→63→68（+10 已批准）
 const TASK_KEYS_EXPECTED = store.TASK_MODEL_KEYS || ['audit', 'review', 'outline', 'characters', 'episode', 'storyboard']
 
 let passed = 0
@@ -266,10 +266,10 @@ const stream4 = fake4.calls[0] || {}
 check('AC-M5：默认 temperature 0.2、输出 maxTokens 4000（与 v0.6.0 一致）', stream4.temperature === 0.2 && Number(stream4.maxTokens) === 4000, JSON.stringify({ temperature: stream4.temperature, maxTokens: stream4.maxTokens }))
 
 /* ------------------------------------------------------------------ [5] */
-group('[5] AC-M6：工程红线（工具 34 / METHODS 68 / slots=4（v0.12.1 已批准终值）/ 无新依赖 / 旧数据 hash / client 调用点）')
+group('[5] AC-M6：工程红线（工具 34 / METHODS 69（task-110 media-read +1） / slots=4（v0.12.1 已批准终值）/ 无新依赖 / 旧数据 hash / client 调用点）')
 const defs = toolsMod.createToolDefs({ rootOf: () => workspace, backendOf: () => null })
 check('AC-M6：生产工具面仍 34', defs.length === 34, String(defs.length))
-check('AC-M6：METHODS 仍 = 68', METHODS.length === 68, String(METHODS.length))
+check('AC-M6：METHODS 仍 = 69（task-110 media-read +1）', METHODS.length === 69, String(METHODS.length))
 const pkg = JSON.parse(await fs.readFile(path.join(pluginRoot, 'package.json'), 'utf8'))
 check('AC-M6：无新增外部依赖', !pkg.dependencies || Object.keys(pkg.dependencies).length === 0, JSON.stringify(pkg.dependencies || {}))
 check('AC-M6：client slots.register = 4（v0.12.1 已批准终值）', (clientSrc.match(/slots\.register\(/g) || []).length === 4)

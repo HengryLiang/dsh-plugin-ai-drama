@@ -11,7 +11,7 @@
  *   [6] 中断续跑：先 submit episodes:[1] → 再补齐其余集，第 1 集不重复、后端调用数=任务数
  *   [7] 上限：maxEpisodes 超限 blocked（不登记任务）、maxPoints → over-batch-points、maxDurationMs=0 → deferred + stoppedBy=duration-cap
  *   [8] 默认行为不变：无 episodes/batchId = 旧单集 plan 路径
- *   [9] 红线：工具 34 / METHODS 68 / 无新增依赖 / 旧数据 32 文件 hash
+ *   [9] 红线：工具 34 / METHODS 69（task-110 media-read +1） / 无新增依赖 / 旧数据 32 文件 hash
  *
  * 运行：node test/v071-acceptance.mjs
  */
@@ -267,7 +267,7 @@ const toolsMod = await load('tools.js')
 const defs = toolsMod.createToolDefs({ rootOf: () => workspace, backendOf: () => null })
 check('工具面仍 = 34', defs.length === 34, String(defs.length))
 const { METHODS } = await import(pathToFileURL(path.join(pluginRoot, 'index.js')).href)
-check('METHODS 仍 = 68（无新增 route）', METHODS.length === 68, String(METHODS.length))
+check('METHODS 仍 = 69（task-110 media-read +1）（无新增 route）', METHODS.length === 69, String(METHODS.length))
 const pkg = JSON.parse(await fs.readFile(path.join(pluginRoot, 'package.json'), 'utf8'))
 check('无新增外部依赖', !pkg.dependencies || Object.keys(pkg.dependencies).length === 0, JSON.stringify(pkg.dependencies || {}))
 const BASELINE_JSON = process.env.DSH_AI_DRAMA_BASELINE || path.join(pluginRoot, '..', 'AI短剧工作区', '证据', 'P2-1-旧数据基线-2026-10-17.json')

@@ -1,8 +1,8 @@
 {
   "name": "dsh-plugin-ai-drama",
-  "version": "0.15.0",
+  "version": "0.15.7",
   "type": "module",
-  "description": "DeepSeek Harness 插件：AI 短剧工作区（立项/总纲/人物/剧本/分镜/导出）+「短剧模式」Agent 预设（34 个 drama_* 工具、10 个随包技能、15 页签面板）",
+  "description": "DeepSeek Harness 插件：AI 短剧工作区（立项/总纲/人物/剧本/分镜/导出）+「短剧模式」Agent 预设（34 个 drama_* 工具、10 个随包技能、14 页签面板）",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
@@ -50,8 +50,7 @@
     }
   },
   "engines": {
-    "node": "^22.19.0 || ^24.0.0",
-    "dsh": ">=0.2.0-rc.2 <0.2.1-0 || >=0.2.1-rc.1 <0.3.0-0"
+    "node": "^22.19.0 || ^24.0.0"
   },
   "scripts": {
     "test": "node test/all.mjs",
@@ -61,13 +60,7 @@
     "check": "node --check index.js && node --check client.js && node --check preset.js"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-skill-filesystem": ">=0.2.0-rc.2 <0.2.1-0 || >=0.2.1-rc.1 <0.3.0-0",
-    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2 <0.2.1-0 || >=0.2.1-rc.1 <0.3.0-0"
-  },
-  "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-llm": {
-      "optional": true
-    }
+    "@deepseek-ai/dsh-skill-filesystem": ">=0.2.0-rc.2 <0.3.0"
   },
   "keywords": [
     "dsh-plugin",

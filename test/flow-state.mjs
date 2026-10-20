@@ -281,7 +281,7 @@ const progressSteps = progress.body?.progress?.steps || (Array.isArray(progress.
 check('AC-F8：progress-get 形状不变（progress.steps 6 步数组）', progress.status === 200 && Array.isArray(progressSteps) && progressSteps.length === 6 && STEP_KEYS.every((k) => progressSteps.some((s) => s.key === k)), JSON.stringify(progress.body).slice(0, 240))
 const statusRes = await call('status', {})
 check('AC-F8：status 形状不变（200 + workspace/projectCount）', statusRes.status === 200 && typeof statusRes.body?.workspace === 'string' && typeof statusRes.body?.projectCount === 'number', JSON.stringify(statusRes.body).slice(0, 160))
-check('E6：METHODS 仍 = 68（零新增 route）', METHODS.length === 68, String(METHODS.length))
+check('E6：METHODS 仍 = 69（task-110 media-read +1）（零新增 route）', METHODS.length === 69, String(METHODS.length))
 check('AC-F8：client slots.register = 4（v0.12.1 已批准终值）', (clientSrc.match(/slots\.register\(/g) || []).length === 4)
 // 旧数据 hash 不变（复用 P2-1 基线快照，跨 P2-2 期间不变）
 const BASELINE_CANDIDATES = [

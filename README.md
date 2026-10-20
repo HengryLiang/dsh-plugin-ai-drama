@@ -5,14 +5,14 @@
 [![topic: dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-6f42c1)](https://github.com/topics/dsh-plugin)
 
 > DeepSeek Harness（DSH）插件：把 AI 短剧的 **立项 → 总纲 → 人物 → 世界观 → 剧本 → 分镜 → 生成 → 导出** 收进侧栏工作区，
-> 并附带「短剧模式」Agent 预设——**34 个 `drama_*` 工具**、**10 个随包技能**、**68 个宿主路由**、**15 页签面板**，
+> 并附带「短剧模式」Agent 预设——**34 个 `drama_*` 工具**、**10 个随包技能**、**69 个宿主路由**、**14 页签面板**，
 > 以及与 LibTV / NeoWoW 画布 CLI 对接的生成编排适配层。
 
 > English: An AI short-drama workspace plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 > Sidebar + main-panel workspace covering the full short-drama pipeline, a dedicated `drama` agent preset with
 > 34 agent tools, 10 bundled skills, a `/drama` slash command, criteria/quality gates, an asset & style system,
-> shot-prompt import / VCS export bridge, and adapters that drive external canvas CLIs (LibTV / NeoWoW).
-> UI and docs are in Chinese.
+> a safe local media read channel, shot-prompt import / VCS export bridge, and adapters that drive external
+> canvas CLIs (LibTV / NeoWoW). UI and docs are in Chinese.
 
 ---
 
@@ -34,10 +34,12 @@
 
 | 模块 | 能力 |
 |---|---|
-| 工作区 | 侧栏「AI 短剧」入口 + 中央面板（**15 页签 / 4 组**：创作、资料、交付、高级），不遮蔽内置工作区浏览器，可与其它工作区插件共存 |
+| 工作区 | 侧栏「AI 短剧」入口 + 中央面板（**14 页签 / 4 组**：创作、资料、交付、高级），不遮蔽内置工作区浏览器，可与其它工作区插件共存 |
 | 项目 | 新建 / 打开 / 重命名 / 删除；固定中文目录结构；全文检索；目录树子节点展开折叠并持久化 |
 | 内容 | 剧集契约、分集总纲、人物设定卡、世界观、分集剧本、分镜表、本剧记忆（伏笔/已用桥段/时间线/待回收） |
 | 分镜增强 | 情绪与强度、光影、现场声、禁令、起止体态、衔接、自然语言段、焦段、主体、分组；**情绪总控分组 sidecar**（不改分镜数组形状） |
+| 台词与音效 | 台词视图并入「剧本」、配音稿迁至「交付 / 导出」；角色卡音频（`media.audio`）与 `<audio>` 试听；旧 `dialogue` 深链自动重定向 |
+| 素材与媒体 | **本地安全只读媒体通道**（`media-read`：项目内相对路径、realpath 校验、图片/音频 MIME 白名单、≤8MB）；资产卡图片 / 音频 / 缩略图（add-only）；**素材库 2.0** 统一卡片视图与自动刷新；**视觉圣经专区**（素材 / 场景 / 风格 / 角色 / 参考图墙） |
 | AI 能力 | 34 个 `drama_*` Agent 工具（仅在「短剧模式」会话注册）；检索增强；一致性检查；草稿区与采纳/丢弃 |
 | 质量体系 | 创作判据（写作侧 + 结构侧，默认 WARN 不阻断）、判据规则单一源 `presets/rules/*.json`、评测门禁、资产质量门禁 |
 | 资产与风格 | 9 类资产编号（CHR/SPC/PRP/SHT/CST/EXP/SFX/VOX/MUS）、资产卡与 `{{Asset_*}}` 占位符、场景卡、五维风格 DNA、风格注入 |
@@ -53,7 +55,7 @@
 
 要求：
 
-- **DeepSeek Harness ≥ `0.2.0-rc.2`**（`engines.dsh` 会校验；桌面端与 npm 版 `dsh` 均可）
+- **DeepSeek Harness ≥ `0.2.0-rc.2`**（`0.2.x` 线；已验证 0.2.0-rc.2 与 0.2.1-rc.2，见「Harness 兼容性」）
 - **Node.js `^22.19.0 || ^24.0.0`**
 - Web 界面（插件含客户端半，需要 `dsh web` / 桌面端的 Web 面）
 
@@ -62,7 +64,7 @@
 ### 方式一：直接从 GitHub 安装（推荐）
 
 ```sh
-dsh plugin --profile <profile> add github:HengryLiang/dsh-plugin-ai-drama#v0.15.0
+dsh plugin --profile <profile> add github:HengryLiang/dsh-plugin-ai-drama#v0.15.7
 ```
 
 `<profile>` 换成你的 profile 名（`dsh web` 对应 `web`，桌面端通常是 `desktop`）。首次使用 `dsh plugin` 会自动创建 profile。
@@ -108,7 +110,8 @@ dsh --profile <profile> --dump-config    # 应出现 "# == dsh-plugin-ai-drama" 
 /drama 定稿 3                # 冻结第 3 集剧本与分镜为快照，可回滚
 ```
 
-4. 在面板里可以逐页编辑：总纲 / 人物 / 世界观 / 剧本 / 分镜 / 记忆 / 素材 / 草稿 / 定稿 / 账本 / 生成 / 检查 / 目录树 / 工具卡 / 导出等。
+4. 面板 14 个页签：创作（契约 / 总纲 / 人物 / 世界观 / 剧本 / 分镜）、资料（素材 / 记忆 / 草稿 / 账本）、
+   交付（生成 / 检查）、高级（目录树 / 工具卡）。
 
 ## 「短剧模式」预设
 
@@ -168,6 +171,19 @@ dsh --profile <profile> --dump-config    # 应出现 "# == dsh-plugin-ai-drama" 
 情绪总控分组存 `.aidrama/storyboard-groups/<集>.json`（隐藏 sidecar，不新增可见节点），
 与分镜同事务提交；定稿快照与回滚会一并保留 / 恢复。
 
+## 素材与媒体（v0.15.1 – v0.15.4）
+
+- **`media-read` 本地安全只读通道**（第 69 个宿主路由）：
+  仅接受项目内相对路径（禁止绝对路径 / 盘符 / UNC / `..` 及其编码变体），
+  `realpath` 校验防 symlink 逃逸，图片（png/jpg/jpeg/webp/gif）与音频（mp3/wav/m4a/ogg 等）MIME 白名单，
+  单次读取 ≤ 8MB；错误码 `invalid-args | forbidden | not-found | too-large`，错误信息不泄露绝对路径；
+- **资产卡媒体字段**：`media.images`（1–6 项）、`media.thumbnail`、`media.audio`（1–6 项），全部 add-only；
+  旧项目无 `media` 键、字节级不变；
+- **素材库 2.0**：旧登记与资产卡统一卡片视图（kind 筛选 / 搜索 / 排序 / 登记后自动刷新 / 文件缺失占位），
+  图片经 `assetId` 预览为 data URL；视频/文档显示占位与信息（无缩略图）；
+- **视觉圣经专区**（素材库内入口，不新增一级页签）：视觉基调 + 场景卡区 + 角色卡区（音频多段试听）+
+  关键参考图墙（去重 / lazy 加载 / lightbox / 占位），旧项目零新 UI。
+
 ## 导入桥与 VCS 视图
 
 - **分镜提示词 MD 导入**：`drama_import_script` 的 `format=shot-prompt` 支持「草帽」式分镜提示词
@@ -189,7 +205,7 @@ dsh --profile <profile> --dump-config    # 应出现 "# == dsh-plugin-ai-drama" 
 
 - **9 类资产编号**：`CHR` 角色 / `SPC` 场景 / `PRP` 道具 / `SHT` 镜头资产 / `CST` 服装 / `EXP` 表情 /
   `SFX` 特效 / `VOX` 配音 / `MUS` 音乐，基础编号 `<前缀><3 位序号>`，可选变体后缀 `_01`–`_99`；
-- 资产卡存 `.aidrama/assets.json`，提示词中用 `{{Asset_<ID>_<字段>}}` 占位符引用并做式样校验；
+- 资产卡存 `.aidrama/assets/cards.json`，提示词中用 `{{Asset_<ID>_<字段>}}` 占位符引用并做式样校验；
 - 场景卡（`.aidrama/scenes/cards.json`）：空间 / 光线 / 资产引用 / 情绪基线，**零相机锁合**（不含镜头参数）；
 - 风格 DNA（`.aidrama/style.json`）：色板 / 光感 / 质感 / 构图 / 运动五维，可注入到视频提示词。
 
@@ -221,7 +237,8 @@ dsh --profile <profile> --dump-config    # 应出现 "# == dsh-plugin-ai-drama" 
     .aidrama/                       ← 机读源数据 + history/ 历史快照
       contract.json  outline.json  characters.json  world.json  memory.json
       storyboard/  storyboard-groups/  finalized.json  drafts/
-      budget.json  tasks.json  assets.json  scenes/cards.json  style.json
+      budget.json  tasks.json  assets/（legacy assets.json + cards.json）
+      scenes/cards.json  style.json
   共享资料/                         ← 跨项目共享资料
 ```
 
@@ -234,11 +251,12 @@ dsh --profile <profile> --dump-config    # 应出现 "# == dsh-plugin-ai-drama" 
 dsh-plugin-ai-drama/
   package.json            # dsh.manifestVersion / dsh.bundle.patch[2] / dsh.client
   cordis.patch.yml        # 把主插件插入组合树
-  index.js                # 宿主半：68 个 POST /api/ai-drama/<method> 路由 + 工具白名单挂载 + /drama
+  index.js                # 宿主半：69 个 POST /api/ai-drama/<method> 路由（含 media-read）+ 工具白名单挂载 + /drama
   preset.js               # 预设伴生入口：provide('dramaMode') + 挂载随包技能
   presets/drama.patch.yml # 「短剧模式」Agent 预设声明
   presets/rules/*.json    # 判据 / 阈值 / 词表 / 资产规则（单一事实源）
   lib/store.js            # 项目仓储：原子写入、快照、结构化文档、检索、条目管理
+  lib/media.js            # 本地图片 / 音频安全只读通道（路径与 MIME 白名单、≤8MB）
   lib/tools.js            # 34 个 drama_* Agent 工具
   lib/checks.js           # 确定性检查（分级 schema：pass/fail/warn/skipped）
   lib/consistency.js      # 一致性检查
@@ -256,18 +274,32 @@ dsh-plugin-ai-drama/
   lib/backends/           # LibTV / NeoWoW CLI 适配层
   lib/exporter.js         # 导出 Markdown / JSON / CSV / VCS
   skills/drama-*/SKILL.md # 10 个随包技能
-  client.js               # 客户端半：侧栏入口 + 15 页签面板（4 组）
-  test/                   # 36 个测试套件，纯 Node 运行，无外部依赖
+  client.js               # 客户端半：侧栏入口 + 14 页签面板（4 组）
+  test/                   # 41 个测试套件，纯 Node 运行，无外部依赖
 ```
 
 宿主半提供 `POST /api/ai-drama/<method>` 精确路由（请求头 `x-ai-drama-request: 1`），
 客户端半只用浏览器模块表提供的 React，不引入额外运行时依赖。
 
+## Harness 兼容性
+
+**原则：插件不因 Harness 升级而失效；只有真实契约变化才允许不兼容，且必须被测试门禁提前发现。**
+
+| 项 | 约定 |
+|---|---|
+| 已验证 Harness | **0.2.0-rc.2**（历史验收基线）、**0.2.1-rc.2**（兼容修复后实测） |
+| preset 模板变量 | 只允许跨版本保守变量 `provider` / `model`；**不得使用 `cwd` 等段落局部变量**（0.2.1 起 persona 模板按该段已注册变量严格解析） |
+| peer 依赖 | 声明**允许升级的范围**（`>=0.2.0-rc.2 <0.3.0`），不锁死单个 rc 版本 |
+| 升级 Harness 后 | 跑 `node test/all.mjs`（含 `preset-vars.mjs` 兼容套件）→ 在短剧模式发一条消息冒烟 → 记录版本与结果 |
+
+> 历史问题（已修）：v0.15.5 及以前，预设 persona suffix 沿用旧模板的 `{{cwd}}`，DSH 0.2.1-rc.2 下每轮报
+> `unknown prompt variable "{{cwd}}"`。v0.15.6 起移除该变量（保留 `{{model}}`），v0.15.7 起加入静态门禁与 peer 范围放宽。
+
 ## 开发与测试
 
 ```sh
 npm run check     # node --check 三个入口
-npm test          # 36 个测试套件
+npm test          # 41 个测试套件
 ```
 
 测试全部是纯 Node 脚本，使用假 CLI / 假 React，**不需要 API Key、不消耗任何生成积分**。
@@ -276,7 +308,7 @@ CI：GitHub Actions 上跑 Node 22 / 24 × Windows / Ubuntu 组合（见 `.githu
 
 ## 兼容性
 
-- DSH `0.2.0-rc.2` 及以上（`0.2.x` 线）；
+- DSH `0.2.0-rc.2` 及以上（`0.2.x` 线；已验证 `0.2.0-rc.2`、`0.2.1-rc.2`）；
 - Node.js `^22.19.0 || ^24.0.0`；
 - 宿主半跨平台；主要开发 / 验证环境为 Windows 11 + Node 24（macOS / Linux 欢迎反馈）。
 
@@ -286,7 +318,8 @@ CI：GitHub Actions 上跑 Node 22 / 24 × Windows / Ubuntu 组合（见 `.githu
 - **不内建生成能力**：不做模型接入与推理资源管理；
 - **不猜测价格**：外部平台只给文字计价规则时如实返回原文；
 - **不自动改外部画布**：对账只报告差异，写画布由用户确认；
-- **判据默认不阻断**：默认 WARN，是否升级为 FAIL 由用户/评测门禁决定。
+- **判据默认不阻断**：默认 WARN，是否升级为 FAIL 由用户 / 评测门禁决定；
+- **媒体只读**：`media-read` 只读项目内文件，不写盘、不缓存、不接受绝对路径。
 
 ## 许可
 

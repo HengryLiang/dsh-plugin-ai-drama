@@ -9,7 +9,7 @@
  *   [4] 8 条判据（task-88 后）：PD-01/02/03/04/05/06/08/09 正反例、全 WARN 不阻断、message 可读；
  *   [5] 灰度（task-88 后）：旧项目/缺字段 skip，不产生新 FAIL/WARN 噪声；
  *   [6] 真实项目 fixture（万界倒爷复制只读）：旧项目 checks 无新 FAIL、源文件 hash 不变；
- *   [7] 契约：工具 34 / METHODS 68 不变、无新依赖、旧数据 32 hash 不回归（由 audit-robust 套件覆盖）。
+ *   [7] 契约：工具 34 / METHODS 69（task-110 media-read +1） 不变、无新依赖、旧数据 32 hash 不回归（由 audit-robust 套件覆盖）。
  *
  * 运行：node test/criteria-checks.mjs
  */
@@ -56,7 +56,7 @@ const hasDisciplineModules = (await fileExists(path.join(pluginRoot, 'lib', 'pro
 const hasCriteriaLoader = await fileExists(path.join(pluginRoot, 'lib', 'criteria-rules.js'))
 console.log(`      版本自适应：severity=${hasSeverity} warned=${hasWarnSummary} rules=${hasRules} discipline模块=${hasDisciplineModules} 规则加载器=${hasCriteriaLoader}`)
 check('工具面 34 不变', toolCount === 34, String(toolCount))
-check('METHODS 68 不变', methodsCount === 68, String(methodsCount))
+check('METHODS 69（task-110 media-read +1） 不变', methodsCount === 69, String(methodsCount))
 
 /* ------------------------------------------------------ 临时工作区与夹具 */
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'criteria-checks-'))
@@ -395,7 +395,7 @@ if (realAvailable) {
 
 /* ------------------------------------------------------ [7] 契约与清理 */
 group('[7] 契约与清理')
-check('7.1 工具 34 / METHODS 68 不变', toolCount === 34 && methodsCount === 68, JSON.stringify({ tools: toolCount, methods: methodsCount }))
+check('7.1 工具 34 / METHODS 69（task-110 media-read +1） 不变', toolCount === 34 && methodsCount === 69, JSON.stringify({ tools: toolCount, methods: methodsCount }))
 check('7.2 无新增依赖（package.json dependencies 不新增测试依赖）', await fs.readFile(path.join(pluginRoot, 'package.json'), 'utf8').then((text) => !/vitest|jest|mocha/.test(text)).catch(() => false))
 await fs.rm(workspace, { recursive: true, force: true })
 check('7.3 临时工作区已清理', !(await fileExists(workspace)))
