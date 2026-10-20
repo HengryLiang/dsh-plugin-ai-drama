@@ -21,6 +21,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const pluginRoot = path.join(here, '..')
+const RSS_START = process.memoryUsage().rss
+const GATE = process.env.DSH_P24_GATE === '1'
 
 function skip(message) {
   console.log(`\n结果：0 passed, 0 failed（SKIP：${message}）`)
@@ -129,6 +131,7 @@ await fs.cp(fixtureWorkspace, tempWorkspace, { recursive: true })
 /* ------------------------------------------------------------------ 插件 harness（源码树） */
 const { apply, METHODS } = await import(pathToFileURL(path.join(pluginRoot, 'index.js')).href)
 const store = await import(pathToFileURL(path.join(pluginRoot, 'lib', 'store.js')).href)
+const toolsMod = await import(pathToFileURL(path.join(pluginRoot, 'lib', 'tools.js')).href)
 const routes = new Map()
 const ctx = {
   provide: () => {},
@@ -162,7 +165,9 @@ const hitPath = (hit) => String(hit.path || hit.relative || hit.file || hit.node
 const folderOf = (hit) => hitPath(hit).split('/')[0]
 
 /* ------------------------------------------------------------------ 采集 10 组查询 */
+const RSS_BEFORE_SEARCH = process.memoryUsage().rss
 const rows = []
+const responses = []
 let top1 = 0
 let top5 = 0
 let degradedObserved = false
@@ -179,6 +184,7 @@ for (const q of entries) {
     first = false
   }
   const hits = (res.body && res.body.hits) || []
+  responses.push((res && res.body) || {})
   if (Number(res.body && res.body.scanned) > 0) scanned = Number(res.body.scanned)
   if (res.body && res.body.degraded === true) degradedObserved = true
   const top1Hit = Boolean(hits[0] && q.expected.includes(folderOf(hits[0])))
@@ -361,9 +367,9 @@ check('采集：MANIFEST counts 与夹具一致（episodes=100/characters=20/wor
 })(), JSON.stringify(manifest.counts))
 check('采集：degraded 状态可观测（布尔记录）', typeof stats.degradedObserved === 'boolean', String(stats.degradedObserved))
 check('采集：可观测扫描文档数（scanned>0）', scanned > 0, String(scanned))
-check('缺口复核：MAX_DOCS=400 上限成立且总文档数 > 400', Boolean(inventory) && inventory.maxDocs === 400 && inventory.totalDocs > 400, JSON.stringify(inventory && { totalDocs: inventory.totalDocs, truncatedDocs: inventory.truncatedDocs }))
-check('缺口复核：自由文本目录（世界观/本剧记忆/构想/台词与音效）未被扫描', Boolean(inventory) && inventory.freeTextScanned === 0 && inventory.freeTextSkipped > 0, JSON.stringify(inventory && { freeTextScanned: inventory.freeTextScanned, freeTextSkipped: inventory.freeTextSkipped, files: inventory.freeTextFiles }))
-check('缺口复核：分集/分镜被截断（未扫描集数>0 或未扫描镜数>0）', Boolean(inventory) && (inventory.scannedEpisodes < inventory.expectedEpisodes || inventory.scannedShots < inventory.expectedShots), JSON.stringify(inventory && { scannedEpisodes: inventory.scannedEpisodes, expectedEpisodes: inventory.expectedEpisodes, scannedShots: inventory.scannedShots, expectedShots: inventory.expectedShots }))
+if (!GATE) check('缺口复核：MAX_DOCS=400 上限成立且总文档数 > 400', Boolean(inventory) && inventory.maxDocs === 400 && inventory.totalDocs > 400, JSON.stringify(inventory && { totalDocs: inventory.totalDocs, truncatedDocs: inventory.truncatedDocs }))
+if (!GATE) check('缺口复核：自由文本目录（世界观/本剧记忆/构想/台词与音效）未被扫描', Boolean(inventory) && inventory.freeTextScanned === 0 && inventory.freeTextSkipped > 0, JSON.stringify(inventory && { freeTextScanned: inventory.freeTextScanned, freeTextSkipped: inventory.freeTextSkipped, files: inventory.freeTextFiles }))
+if (!GATE) check('缺口复核：分集/分镜被截断（未扫描集数>0 或未扫描镜数>0）', Boolean(inventory) && (inventory.scannedEpisodes < inventory.expectedEpisodes || inventory.scannedShots < inventory.expectedShots), JSON.stringify(inventory && { scannedEpisodes: inventory.scannedEpisodes, expectedEpisodes: inventory.expectedEpisodes, scannedShots: inventory.scannedShots, expectedShots: inventory.expectedShots }))
 // 目标对照（仅记录，不判失败——这是基线，不是验收门禁）
 target(`AC-Q1 目标 top-1 ≥9/10（实际 ${top1}/10）`, top1 >= 9, stats.top1Recall)
 target(`AC-Q1 目标 top-5 =10/10（实际 ${top5}/10）`, top5 >= 10, stats.top5Recall)
@@ -418,6 +424,142 @@ if (!baselineText) {
   check('收尾：用户数据 32 文件 hash 不变（临时副本运行）', missing.length === 0 && added.length === 0 && changed.length === 0, JSON.stringify({ missing, added, changed }).slice(0, 300))
 }
 
+/* ------------------------------------------------------------------ v0.6.4 门禁（DSH_P24_GATE=1） */
+let gate = null
+if (GATE) {
+  const rssAfter = process.memoryUsage().rss
+  const rssDeltaMB = Math.max(0, (rssAfter - RSS_BEFORE_SEARCH) / (1024 * 1024))
+  let scanMetaObj = null
+  for (const body of responses) {
+    if (body && body.scanMeta && typeof body.scanMeta === 'object') { scanMetaObj = body.scanMeta; break }
+    if (body && body.scannedByType && typeof body.scannedByType === 'object') { scanMetaObj = { byType: body.scannedByType }; break }
+  }
+  const byType = (scanMetaObj && scanMetaObj.byType) || null
+  const worldMemoryScanned = Boolean(byType && Number(byType.world) > 0 && Number(byType.memory) > 0)
+  const hasScanned = responses.some((b) => b && Number.isFinite(Number(b.scanned)))
+  const hasTruncated = responses.some((b) => b && Number.isFinite(Number(b.truncated)))
+  const hasDegradedFlag = responses.some((b) => b && typeof b.degraded === 'boolean')
+  const allTruncatedZero = responses.every((b) => b && Number(b.truncated) === 0)
+  const allDegradedFalse = responses.every((b) => b && b.degraded === false)
+  const worldMemoryIds = ['Q07', 'Q08', 'Q09', 'Q10']
+  const worldMemoryHit = worldMemoryIds.every((id) => (rows.find((r) => r.id === id) || {}).top5Hit === true)
+  const noErrors = responses.every((b) => b && b.ok !== false)
+  const indexDirPath = path.join(tempWorkspace, projectTitle, '.aidrama', 'index')
+  const indexDirBefore = await fs.stat(indexDirPath).then(() => true).catch(() => false)
+  const indexFile = path.join(indexDirPath, 'retrieval-index.json')
+  const indexExists = await fs.stat(indexFile).then(() => true).catch(() => false)
+  const indexMeta = indexExists ? await fs.readFile(indexFile, 'utf8').then((s) => { try { return JSON.parse(s) } catch { return null } }).catch(() => null) : null
+  const indexSchemaVersion = indexMeta && Number(indexMeta.schemaVersion)
+  const indexDirAfter = await fs.stat(indexDirPath).then(() => true).catch(() => false)
+  const indexRebuilt = indexMeta && indexMeta.index && typeof indexMeta.index.rebuilt === 'boolean' ? indexMeta.index.rebuilt : (indexMeta && typeof indexMeta.rebuilt === 'boolean' ? indexMeta.rebuilt : null)
+  const defs = toolsMod.createToolDefs({ rootOf: () => tempRoot, backendOf: () => null })
+  const pkgGate = JSON.parse(await fs.readFile(path.join(pluginRoot, 'package.json'), 'utf8'))
+  const gateChecks = []
+  const gateCheck = (id, label, ok, detail) => {
+    gateChecks.push({ id, label, ok: Boolean(ok), detail })
+    console.log(`  ${ok ? 'PASS' : 'FAIL'}  [${id}] ${label}${detail ? ' -> ' + detail : ''}`)
+  }
+  gateCheck('AC-S1', `top-1 召回 ${top1}/10 ≥ 9/10`, top1 >= 9, `${top1}/10`)
+  gateCheck('AC-S1', `top-5 召回 ${top5}/10 = 10/10`, top5 >= 10, `${top5}/10`)
+  gateCheck('AC-S2', 'world/memory 必扫：Q07–Q10 全部命中', worldMemoryHit, JSON.stringify(worldMemoryIds.map((id) => ({ id, hit: (rows.find((r) => r.id === id) || {}).top5Hit }))))
+  gateCheck('AC-S2b', 'scanMeta.byType 暴露 world/memory 扫描计数且均 >0', worldMemoryScanned, byType ? JSON.stringify({ world: byType.world, memory: byType.memory, keys: Object.keys(byType) }).slice(0, 260) : '未暴露 scanMeta.byType')
+  gateCheck('AC-S3', `检索 P95 ${p95}ms ≤ 300ms`, p95 <= 300, `${p95}ms`)
+  gateCheck('AC-S3b', '增量索引后置（Q1 裁定；仅记录检索耗时）', true, `incrementalMs=${incrementalMs}`)
+  gateCheck('AC-S4', '截断/降级可观测：顶层 scanned 计数存在', hasScanned, `scanned=${scanned}`)
+  gateCheck('AC-S4b', '正常夹具：顶层 truncated=0 且 degraded=false', hasTruncated && hasDegradedFlag && allTruncatedZero && allDegradedFalse, JSON.stringify({ hasTruncated, hasDegradedFlag, allTruncatedZero, allDegradedFalse }))
+  gateCheck('AC-S4c', 'scanMeta 可观测：quota/quotaExhausted 正常夹具为空、truncated=0', Boolean(scanMetaObj) && Array.isArray(scanMetaObj.quotaExhausted) && scanMetaObj.quotaExhausted.length === 0 && Number(scanMetaObj.truncated) === 0, scanMetaObj ? JSON.stringify({ quota: scanMetaObj.quota, quotaExhausted: scanMetaObj.quotaExhausted, truncated: scanMetaObj.truncated, degraded: scanMetaObj.degraded }) : 'no scanMeta')
+  // AC-S5 口径（Lead 2026-10-18 校准，实测校准原则）：3 次连续复跑 median(RSS 增量) ≤50MB 且 max ≤55MB；
+  // 单次运行时以 max 上限 55MB 作硬门禁（median 由 3 次复跑在证据层汇总计算）。
+  gateCheck('AC-S5', `100 集加载后 RSS 增量 ${rssDeltaMB.toFixed(1)}MB ≤ 55MB（单次 max 上限；3 次 median≤50/max≤55 口径）`, rssDeltaMB <= 55, `${rssDeltaMB.toFixed(2)}MB（before=${(RSS_BEFORE_SEARCH / 1048576).toFixed(1)}MB, after=${(rssAfter / 1048576).toFixed(1)}MB）`)
+  gateCheck('AC-S6', 'METHODS 仍 = 68', METHODS.length === 68, String(METHODS.length))
+  gateCheck('AC-S6', '生产工具面仍 34', defs.length === 34, String(defs.length))
+  gateCheck('AC-S6', '无新增外部依赖', !pkgGate.dependencies || Object.keys(pkgGate.dependencies).length === 0, JSON.stringify(pkgGate.dependencies || {}))
+  gateCheck('AC-S7', '旧项目兼容：无索引时检索不报错（懒构建/回退）', noErrors, JSON.stringify({ indexDirBefore, indexDirAfter }))
+  gateCheck('AC-S7b', '索引懒构建：.aidrama/index/retrieval-index.json 存在且 schemaVersion=1', indexExists && indexSchemaVersion === 1, JSON.stringify({ indexExists, indexSchemaVersion, rebuilt: indexRebuilt }))
+  gateCheck('AC-S7c', '索引不随导出（manifest 无 .aidrama/index/retrieval-index 路径）', await (async () => {
+    try {
+      const exp = await call('export-project', { title: projectTitle, format: 'markdown' })
+      if (exp.status !== 200) return false
+      const exportDir = path.join(tempWorkspace, projectTitle, '导出')
+      const names = await fs.readdir(exportDir).catch(() => [])
+      const manifestName = names.find((n) => /manifest/.test(n))
+      const txt = manifestName ? await fs.readFile(path.join(exportDir, manifestName), 'utf8').catch(() => '') : ''
+      return !/aidrama|retrieval-index/i.test(txt)
+    } catch {
+      return false
+    }
+  })(), 'export-manifest-scan')
+  // AC-S4d：配额耗尽场景（host 测试钩子 DSH_AI_DRAMA_RETRIEVAL_QUOTA；需在**全新无索引项目副本**上首次构建才会生效）
+  const quotaEnvKey = 'DSH_AI_DRAMA_RETRIEVAL_QUOTA'
+  const quotaTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'p24-quota-'))
+  let quotaScenario = null
+  let prevQuota = process.env[quotaEnvKey]
+  try {
+    await fs.cp(fixtureWorkspace, path.join(quotaTempRoot, 'AI短剧'), { recursive: true })
+    process.env[quotaEnvKey] = JSON.stringify({ episodes: 5, shots: 10, freeText: 1 })
+    const retrievalMod = await import(pathToFileURL(path.join(pluginRoot, 'lib', 'retrieval.js')).href)
+    const qb = await retrievalMod.searchContext(quotaTempRoot, projectTitle, entries[0].query, { topK: 5 })
+    quotaScenario = {
+      degraded: qb.degraded,
+      degradeReason: qb.degradeReason,
+      truncated: qb.truncated,
+      quotaExhausted: qb.scanMeta && qb.scanMeta.quotaExhausted,
+      byType: qb.scanMeta && qb.scanMeta.byType,
+      quota: qb.scanMeta && qb.scanMeta.quota,
+      scanned: qb.scanned,
+    }
+  } catch (error) {
+    quotaScenario = { error: error instanceof Error ? error.message : String(error) }
+  } finally {
+    if (prevQuota === undefined) delete process.env[quotaEnvKey]
+    else process.env[quotaEnvKey] = prevQuota
+    await fs.rm(quotaTempRoot, { recursive: true, force: true }).catch(() => {})
+  }
+  gateCheck('AC-S4d', '配额耗尽场景（全新项目副本+钩子配额）：degraded=true + scan-quota-exhausted + truncated>0 + quotaExhausted 非空', Boolean(quotaScenario && quotaScenario.degraded === true && /scan-quota-exhausted/.test(String(quotaScenario.degradeReason)) && Number(quotaScenario.truncated) > 0 && Array.isArray(quotaScenario.quotaExhausted) && quotaScenario.quotaExhausted.length > 0), JSON.stringify(quotaScenario).slice(0, 420))
+  // AC-S7d/e/f：index.rebuilt 三态（first true / unchanged false / stale true）
+  const firstScanIndex = (() => { for (const b of responses) { if (b && b.scanMeta && b.scanMeta.index) return b.scanMeta.index } return null })()
+  const lastScanIndex = (() => { for (let i = responses.length - 1; i >= 0; i -= 1) { const b = responses[i]; if (b && b.scanMeta && b.scanMeta.index) return b.scanMeta.index } return null })()
+  gateCheck('AC-S7d', '首次懒构建 scanMeta.index.rebuilt=true', Boolean(firstScanIndex && firstScanIndex.rebuilt === true), JSON.stringify(firstScanIndex))
+  gateCheck('AC-S7e', '索引未变再检索 scanMeta.index.rebuilt=false', Boolean(lastScanIndex && lastScanIndex.rebuilt === false), JSON.stringify(lastScanIndex))
+  let staleRebuilt = null
+  try {
+    const epDir2 = path.join(tempWorkspace, projectTitle, '分集剧本')
+    const epFiles2 = (await fs.readdir(epDir2)).filter((f) => f.endsWith('.md')).sort()
+    const tgt = path.join(epDir2, epFiles2[0])
+    const txt = await fs.readFile(tgt, 'utf8')
+    await fs.writeFile(tgt, txt + '\n\n（stale 重建测试）\n', 'utf8')
+    const sres = await call('search-context', { title: projectTitle, query: entries[0].query, topK: 5 })
+    staleRebuilt = sres.body && sres.body.scanMeta && sres.body.scanMeta.index ? sres.body.scanMeta.index.rebuilt : null
+  } catch {}
+  gateCheck('AC-S7f', '单集改动后 stale 重建 scanMeta.index.rebuilt=true', staleRebuilt === true, String(staleRebuilt))
+  gate = {
+    rssBeforeSearchBytes: RSS_BEFORE_SEARCH,
+    rssAfterBytes: rssAfter,
+    rssDeltaMB: Number(rssDeltaMB.toFixed(2)),
+    scanMeta: scanMetaObj,
+    byType,
+    worldMemoryScanned,
+    hasScanned,
+    hasTruncated,
+    hasDegradedFlag,
+    allTruncatedZero,
+    allDegradedFalse,
+    worldMemoryHit,
+    indexDirBefore,
+    indexDirAfter,
+    indexExists,
+    indexSchemaVersion: indexMeta ? indexMeta.schemaVersion : null,
+    indexRebuilt,
+    quotaScenario,
+    firstScanIndex,
+    lastScanIndex,
+    staleRebuilt,
+    noErrors,
+    checks: gateChecks,
+    pass: gateChecks.every((c) => c.ok),
+  }
+}
+
 const report = {
   at: new Date().toISOString(),
   environment: { node: process.version, platform: process.platform, retrieval: 'local-lexical (BM25-style)' },
@@ -431,12 +573,17 @@ const report = {
     rootCause: 'retrieval.js collectDocs MAX_DOCS=400 平铺上限：结构化文档（契约/大纲/人物/分集/分镜）先占满 400，世界观/本剧记忆/构想/台词与音效等自由文本目录完全未扫描；100 集下大量分集/分镜也被截断',
   },
   checks: { passed, failed, failures },
+  gate,
 }
 if (process.env.DSH_P24_WRITE_EVIDENCE === '1') {
   const localDate = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10) // Asia/Shanghai 本地日期
-  const out = path.join(pluginRoot, '..', 'AI短剧工作区', '证据', `P2-4-基线-${localDate}.json`)
+  const out = path.join(pluginRoot, '..', 'AI短剧工作区', '证据', GATE ? `P2-4-v0.6.4-复测-${localDate}.json` : `P2-4-基线-${localDate}.json`)
   await fs.writeFile(out, JSON.stringify(report, null, 2) + '\n', 'utf8')
   console.log('证据已写入：' + out)
+}
+if (gate) {
+  console.log(`\nv0.6.4 门禁：${gate.pass ? 'PASS' : 'FAIL'}（${gate.checks.filter((c) => c.ok).length}/${gate.checks.length} 项通过）`)
+  for (const c of gate.checks.filter((x) => !x.ok)) console.log(`  - [${c.id}] ${c.label}${c.detail ? ' -> ' + c.detail : ''}`)
 }
 await fs.rm(tempRoot, { recursive: true, force: true })
 console.log(`\n结果：${passed} passed, ${failed} failed`)
@@ -444,4 +591,4 @@ if (failed) {
   console.log('失败项：')
   for (const f of failures) console.log('  - ' + f)
 }
-process.exit(failed === 0 ? 0 : 1)
+process.exit(failed === 0 && (!gate || gate.pass) ? 0 : 1)

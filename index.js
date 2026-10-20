@@ -29,6 +29,7 @@ import { createBackendRegistry } from './lib/backends/index.js'
 import * as generation from './lib/generation.js'
 import * as orchestrator from './lib/orchestrator.js'
 import * as guard from './lib/guard.js'
+import * as importBridge from './lib/import-bridge.js'
 
 export const name = 'ai-drama'
 
@@ -139,10 +140,22 @@ const WRITE_TARGETS = {
   'outline-save': () => ['总纲/分集大纲.md', '.aidrama/outline.json'],
   'characters-save': () => ['人物/人物设定卡.md', '.aidrama/characters.json'],
   'episode-write': (input) => [`分集剧本/${episodeStem(input.order)}.md`],
-  'storyboard-save': (input) => [`分镜/${episodeStem(input.order)}.分镜.md`, `.aidrama/storyboard/${episodeStem(input.order)}.md.json`],
+  'storyboard-save': (input) => [
+    `分镜/${episodeStem(input.order)}.分镜.md`,
+    `.aidrama/storyboard/${episodeStem(input.order)}.md.json`,
+    // v0.10.0（0-4b）：可选 groups sidecar（add-only；不传=旧行为）
+    ...(input.groups !== undefined ? [`.aidrama/storyboard-groups/${episodeStem(input.order)}.md.json`] : []),
+  ],
   'memory-save': () => ['本剧记忆/本剧记忆.md', '.aidrama/memory.json'],
   'world-save': () => ['世界观/世界观.md', '.aidrama/world.json'],
-  'import-apply': () => ['分集剧本'],
+  'import-apply': (input) =>
+    input.format === 'shot-prompt'
+      ? [
+          `分镜/${episodeStem(input.episode)}.分镜.md`,
+          `.aidrama/storyboard/${episodeStem(input.episode)}.md.json`,
+          `.aidrama/storyboard-groups/${episodeStem(input.episode)}.md.json`,
+        ]
+      : ['分集剧本'],
   'finalize-episode': () => ['定稿/定稿记录.md', '.aidrama/finalized.json'],
   'finalized-restore': (input) => [
     `分集剧本/${episodeStem(input.order)}.md`,
@@ -303,6 +316,13 @@ async function applyDraft(root, title, draft) {
     case 'file':
       if (!draft.path) throw new Error('草稿缺少目标路径')
       return { applied: 'file', result: await store.writeEntryFile(root, title, draft.path, draft.content) }
+    case 'batch-artifact': {
+      // P2-7（v0.7.1）：批量生成产物草稿采纳 —— 才把批次暂存产物拷入 素材/生成 + 记资产。
+      const meta = JSON.parse(draft.content)
+      if (meta.draftKind && meta.draftKind !== 'batch-artifact') throw new Error('批量产物草稿元数据不匹配')
+      const result = await generation.adoptBatchArtifact(root, title, { ...meta.target, batchId: meta.batchId, stagedRelative: meta.stagedRelative, draftId: draft.id })
+      return { applied: 'batch-artifact', result }
+    }
     default:
       throw new Error(`未知草稿类型：${draft.kind}`)
   }
@@ -487,10 +507,16 @@ async function dispatch(method, input, root, scope) {
     }
 
     case 'storyboard-get':
-      return { ok: true, shots: await store.getStoryboard(root, input.title, input.order) }
+      return { ok: true, ...(await store.getStoryboardReadView(root, input.title, input.order)) }
 
-    case 'storyboard-save':
+    case 'storyboard-save': {
+      // v0.10.0（0-4b）：可选 groups（add-only）；不传=旧行为，传 [] = 清空 sidecar。
+      if (input.groups !== undefined) {
+        const saved = await store.saveStoryboardWithGroups(root, input.title, input.order, input.shots, input.groups)
+        return { ok: true, shots: saved.shots, groups: saved.groups, groupsSaved: saved.groups.length > 0 }
+      }
       return { ok: true, shots: await store.saveStoryboard(root, input.title, input.order, input.shots) }
+    }
 
     case 'drafts-list': {
       const dir = store.projectDir(root, input.title)
@@ -580,11 +606,25 @@ async function dispatch(method, input, root, scope) {
       return { ok: true, ledger, file: path.relative(root, ledger.file) }
     }
 
-    case 'import-preview':
+    case 'import-preview': {
+      // v0.10.1（task-81）：分镜提示词 MD→JSON 预览（只读，不写盘）
+      if (input.format === 'shot-prompt') {
+        if (!input.title) return fail(400, 'invalid-args', 'shot-prompt 预览需要 title')
+        const preview = await importBridge.previewImport(root, input.title, { text: input.text, episode: input.episode })
+        return { ok: true, format: 'shot-prompt', ...preview }
+      }
       return { ok: true, ...store.splitScript(input.text, { defaultTitle: input.defaultTitle }) }
+    }
 
-    case 'import-apply':
+    case 'import-apply': {
+      // v0.10.1（task-81）：分镜提示词 MD→JSON 应用（事务+回滚；覆盖已有分镜需 overwrite=true，工具层已审批）
+      if (input.format === 'shot-prompt') {
+        if (!input.title) return fail(400, 'invalid-args', 'shot-prompt 应用需要 title')
+        const result = await importBridge.applyImport(root, input.title, { text: input.text, episode: input.episode, overwrite: input.overwrite })
+        return { ok: true, format: 'shot-prompt', ...result }
+      }
       return { ok: true, ...(await store.importScript(root, input.title, input.text, { overwrite: input.overwrite, defaultTitle: input.defaultTitle })) }
+    }
 
     case 'backends-status': {
       const host = scope ? safeGet(scope, 'aiDramaHost') : undefined
@@ -638,19 +678,39 @@ async function dispatch(method, input, root, scope) {
       return { ok: true, name: r.file, relative: r.relative, bytes: r.bytes, sha256: r.sha256, assetId: r.asset.id, asset: r.asset }
     }
 
-    case 'plan-batch':
-      return { ok: true, plan: await orchestrator.planEpisode(root, input.title, input.plan || input) }
+    case 'plan-batch': {
+      const planInput = input.plan || input
+      // P2-7（v0.7.1）：additive 输入 plan.episodes[]（或 count+from）→ N 集串行批量规划；旧单集输入行为不变。
+      if (Array.isArray(planInput.episodes) || Number(planInput.count || planInput.episodeCount) > 0) {
+        return { ok: true, batch: await orchestrator.planBatchEpisodes(root, input.title, planInput) }
+      }
+      return { ok: true, plan: await orchestrator.planEpisode(root, input.title, planInput) }
+    }
 
     case 'submit-batch': {
       const host = scope ? safeGet(scope, 'aiDramaHost') : undefined
       const resolve = (id) => (host && host.backends ? host.backends.get(id) : null)
-      return { ok: true, ...(await orchestrator.submitBatch(root, input.title, { ...(input.batch || {}), resolveBackend: resolve })) }
+      const batch = { ...(input.batch || {}), resolveBackend: resolve }
+      // P2-7（v0.7.1）：batchId 已存在批次溯源时 → N 集串行提交（续跑幂等）；否则旧单批/续跑行为不变。
+      if (batch.batchId) {
+        const exists = await generation.getBatchTrace(root, input.title, String(batch.batchId)).then(() => true, () => false)
+        if (exists) return { ok: true, ...(await orchestrator.submitBatchEpisodes(root, input.title, batch)) }
+      }
+      // v0.6.7：断点续跑（只补未成功任务；默认无 resume 字段=旧提交行为不变）
+      if (batch.resume === true) return { ok: true, ...(await orchestrator.resumeBatch(root, input.title, batch)) }
+      return { ok: true, ...(await orchestrator.submitBatch(root, input.title, batch)) }
     }
 
     case 'collect-batch': {
       const host = scope ? safeGet(scope, 'aiDramaHost') : undefined
       const resolve = (id) => (host && host.backends ? host.backends.get(id) : null)
-      return { ok: true, ...(await orchestrator.collectBatch(root, input.title, { ...(input.batch || {}), resolveBackend: resolve })) }
+      const batch = { ...(input.batch || {}), resolveBackend: resolve }
+      // P2-7（v0.7.1）：batchId 批次存在 → N 集串行收敛（产物进草稿暂存 + 逐集一致性 + 溯源）；旧行为不变。
+      if (batch.batchId) {
+        const exists = await generation.getBatchTrace(root, input.title, String(batch.batchId)).then(() => true, () => false)
+        if (exists) return { ok: true, ...(await orchestrator.collectBatchEpisodes(root, input.title, batch)) }
+      }
+      return { ok: true, ...(await orchestrator.collectBatch(root, input.title, batch)) }
     }
 
     case 'canvas-status': {
@@ -878,6 +938,8 @@ function createHandler(scope, config, pluginCtx) {
         const next = typeof error.next === 'string' && error.next ? `（下一步：${error.next}）` : ''
         return fail(409, 'conflict', `${message}${next}`)
       }
+      // P2-5（v0.6.6）：参数校验错误明确映射 invalid-args（如 settings.generationLimits 非法值）
+      if (error && error.code === 'invalid-args') return fail(400, 'invalid-args', message)
       return fail(400, 'failed', message)
     }
   }

@@ -1,8 +1,8 @@
 {
   "name": "dsh-plugin-ai-drama",
-  "version": "0.6.3",
+  "version": "0.15.0",
   "type": "module",
-  "description": "DeepSeek Harness 插件：AI 短剧工作区（立项/总纲/人物/剧本/分镜/导出）+「短剧模式」Agent 预设（34 个 drama_* 工具、9 个随包技能）",
+  "description": "DeepSeek Harness 插件：AI 短剧工作区（立项/总纲/人物/剧本/分镜/导出）+「短剧模式」Agent 预设（34 个 drama_* 工具、10 个随包技能、15 页签面板）",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
@@ -15,6 +15,7 @@
     "preset.js",
     "cordis.patch.yml",
     "presets/*.yml",
+    "presets/rules/*.json",
     "lib/**/*.js",
     "skills/**/*",
     "README.md",

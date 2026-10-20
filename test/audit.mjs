@@ -636,7 +636,7 @@ const exportRes = await call('export-project', { title: ALL_SAMPLES[0].title, fo
 check('AC-R7：存在审读 findings 时导出仍成功', Boolean(exportRes) && exportRes.status === 200 && exportRes.body?.ok !== false, JSON.stringify(exportRes && exportRes.body).slice(0, 200))
 
 /* ------------------------------------------------------------------ [8] AC-R8 工程 */
-group('[8] AC-R8：工程门禁（34 工具 / METHODS=68 / slots=2 / 旧数据 hash / 无新增依赖）')
+group('[8] AC-R8：工程门禁（34 工具 / METHODS=68 / slots=4（task-8+task-17 已批准终值）/ 旧数据 hash / 无新增依赖）')
 const defs = toolsMod.createToolDefs({ rootOf: () => workspace, backendOf: () => null })
 check('AC-R8：生产工具面仍 34（方案 B 不新增工具）', defs.length === 34, String(defs.length))
 const deepParam = (() => {
@@ -649,7 +649,7 @@ check('AC-R8：deep:true 时并发不安全（index.js isConcurrencySafe 动态�
 check('AC-R8：默认（无 deep/saveReview）只读检查可并发（与 v0.4.3 一致）', /!\(args && \(args\.deep === true \|\| args\.saveReview\)\)/.test(hostSrc), 'host wiring')
 check('AC-R8：saveReview 路径同样不允许并行', /args\.saveReview/.test(hostSrc), 'host wiring')
 check('AC-R8：METHODS 仍 = 68', METHODS.length === 68, String(METHODS.length))
-check('AC-R8：client slots.register = 2（红线）', (clientSrc.match(/slots\.register\(/g) || []).length === 2)
+check('AC-R8：client slots.register = 4（v0.12.1 已批准终值）', (clientSrc.match(/slots\.register\(/g) || []).length === 4)
 // AC-R8 client 侧：检查页审读区块展示/跳转/裁决/降级/空态/只读路径（client task-27 最终态静态断言）
 const clientReviewMarkers = [
   ['最新审读报告', /最新审读报告/],
@@ -669,7 +669,7 @@ check('AC-R8：client 审读区块展示/跳转/裁决/降级/空态文案齐全
 check('AC-R8：client 读取审读报告仅经 doc-read .aidrama/reviews/latest.json（E6.1）', /reviews\/latest\.json/.test(clientSrc) && !/doc-save[\s\S]{0,80}reviews\/latest\.json/.test(clientSrc), 'read-only')
 check('AC-R8：client 跳转复用 storyboard-get / episode-read（不新增调用点）', /storyboard-get/.test(clientSrc) && /episode-read/.test(clientSrc))
 const clientCalls = new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1]))
-check('AC-R8：client 去重调用点未新增（仍 58）', clientCalls.size === 58, String(clientCalls.size))
+check('AC-R8：client 去重调用点 = 68（M4 批1+批2 +10，已批准登记）', clientCalls.size === 68, String(clientCalls.size))
 const pkg = JSON.parse(await fs.readFile(path.join(pluginRoot, 'package.json'), 'utf8'))
 check('AC-R8：无新增外部依赖（dependencies 仍为空/未增加）', !pkg.dependencies || Object.keys(pkg.dependencies).length === 0, JSON.stringify(pkg.dependencies || {}))
 // 旧数据 32 文件 hash 不变（复用 P2-1 基线）
@@ -714,10 +714,11 @@ if (!baselineText) {
   await walk(REAL_ROOT)
   const baseMap = new Map(baseline.files.map((f) => [f.relative, f]))
   const curMap = new Map(files.map((f) => [f.relative, f]))
+  // 2026-10-20 测试项目清理后恢复严格口径：活动数据根 = 基线 32 文件集合（缺失/新增/改写均 FAIL；无 allowlist）。
   const missing = [...baseMap.keys()].filter((k) => !curMap.has(k))
   const added = [...curMap.keys()].filter((k) => !baseMap.has(k))
   const changed = [...baseMap.keys()].filter((k) => curMap.has(k) && curMap.get(k).sha256 !== baseMap.get(k).sha256)
-  check('AC-R8：旧数据 32 文件 hash 不变', missing.length === 0 && added.length === 0 && changed.length === 0, JSON.stringify({ missing, added, changed }).slice(0, 300))
+  check('AC-R8：旧数据 32 核心文件 hash 不变（严格 32 文件）', missing.length === 0 && added.length === 0 && changed.length === 0, JSON.stringify({ missing, added, changed }).slice(0, 300))
 }
 
 /* ------------------------------------------------------------------ [9] 真实模型抽测（可选，env 开启） */

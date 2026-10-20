@@ -15,7 +15,7 @@
  *   [4] 尾逗号 → 解析成功（去尾逗号）
  *   [5] 完全非 JSON → **重试一次后** degraded:true，且 meta 保留 attempted model/provider/modelSource（非空/非 none）+ degradeReason 可读
  *   [6] P2-6 增强 client 静态：timeoutMs 透传 + 审读标注 modelSource/modelFallback/degradeReason（未交付则 SKIP 该组）
- *   [7] 工程红线：工具 34 / METHODS 68 / slots=2 / client 调用点 58 / 无新依赖 / 旧数据 32 文件 hash 不变
+ *   [7] 工程红线：工具 34 / METHODS 68 / slots=4（已批准终值）/ client 调用点 68（M4 批1+批2 +10，已批准）/ 无新依赖 / 旧数据 32 文件 hash 不变
  *
  * 兼容策略：D-12 修复未落地（源码未出现 attempted/repair/tolerant 标记）时显式 SKIP；落地后自动生效。
  * 运行：node test/audit-robust.mjs
@@ -307,13 +307,13 @@ if (missingEnhancement.length > 0) {
 }
 
 /* ------------------------------------------------------------------ [7] */
-group('[7] 工程红线：工具 34 / METHODS 68 / slots=2 / 调用点 58 / 无新依赖 / 旧数据 hash')
+group('[7] 工程红线：工具 34 / METHODS 68 / slots=4（已批准终值）/ 调用点 68（M4 批1+批2 +10 已批准）/ 无新依赖 / 旧数据 hash')
 const defs = toolsMod.createToolDefs({ rootOf: () => workspace, backendOf: () => null })
 check('工具面仍 34', defs.length === 34, String(defs.length))
 check('METHODS 仍 = 68', METHODS.length === 68, String(METHODS.length))
-check('client slots.register = 2', (clientSrc.match(/slots\.register\(/g) || []).length === 2)
+check('client slots.register = 4（v0.12.1 已批准终值）', (clientSrc.match(/slots\.register\(/g) || []).length === 4)
 const clientCalls = new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1]))
-check('client 去重调用点未新增（仍 58）', clientCalls.size === 58, String(clientCalls.size))
+check('client 去重调用点 = 68（M4 批1+批2 +10，已批准登记）', clientCalls.size === 68, String(clientCalls.size))
 const pkg = JSON.parse(await fs.readFile(path.join(pluginRoot, 'package.json'), 'utf8'))
 check('无新增外部依赖', !pkg.dependencies || Object.keys(pkg.dependencies).length === 0, JSON.stringify(pkg.dependencies || {}))
 const BASELINE_CANDIDATES = [
@@ -357,10 +357,11 @@ if (!baselineText) {
   await walk(REAL_ROOT)
   const baseMap = new Map(baseline.files.map((f) => [f.relative, f]))
   const curMap = new Map(files.map((f) => [f.relative, f]))
+  // 2026-10-20 测试项目清理后恢复严格口径：活动数据根 = 基线 32 文件集合（缺失/新增/改写均 FAIL；无 allowlist）。
   const missing = [...baseMap.keys()].filter((k) => !curMap.has(k))
   const added = [...curMap.keys()].filter((k) => !baseMap.has(k))
   const changed = [...baseMap.keys()].filter((k) => curMap.has(k) && curMap.get(k).sha256 !== baseMap.get(k).sha256)
-  check('旧数据 32 文件 hash 不变', missing.length === 0 && added.length === 0 && changed.length === 0, JSON.stringify({ missing, added, changed }).slice(0, 300))
+  check('旧数据 32 核心文件 hash 不变（严格 32 文件）', missing.length === 0 && added.length === 0 && changed.length === 0, JSON.stringify({ missing, added, changed }).slice(0, 300))
 }
 
 await fs.rm(workspace, { recursive: true, force: true })

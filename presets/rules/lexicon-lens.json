@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-10-18",
+  "description": "PD-09 焦段纪律：焦段与景别相容矩阵；PD-02 可复用景别阶梯（阈值在 thresholds.json）",
+  "focalByShotSize": {
+    "大特写": { "min": 50, "max": 200, "note": "微距/长焦；广角不适合脸部特写" },
+    "特写": { "min": 35, "max": 200, "note": "长焦/微距" },
+    "近景": { "min": 24, "max": 135, "note": "中焦为主" },
+    "中景": { "min": 18, "max": 85, "note": "中焦/标准" },
+    "全景": { "min": 14, "max": 50, "note": "广角/中焦" },
+    "远景": { "min": 10, "max": 35, "note": "广角" }
+  },
+  "rules": [
+    { "shotSize": "大特写", "forbiddenLensMax": 28, "message": "大特写避免广角（≤28mm）脸部透视变形" },
+    { "shotSize": "远景", "forbiddenLensMin": 135, "message": "远景避免长焦（≥135mm）空间压缩失当" }
+  ],
+  "note": "焦段缺失 → PD-09 skip（灰度）；矩阵由 JS 与 QA 同源读取。"
+}

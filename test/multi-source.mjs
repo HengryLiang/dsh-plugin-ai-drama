@@ -6,7 +6,7 @@
  *   [1] A/B 两临时夹具目录各建项目 → `sources-list` 枚举（sourceType / projectCount / 排序 / 去重）
  *   [2] 失效路径过滤（不存在的目录不进 sources）
  *   [3] `status` 带/不带 cwd 兼容（带 cwd 命中该源；不带回退旧行为不报错）
- *   [4] 契约回归：METHODS=68、旧 67 条路由全在、无重复；client 调用数（E5 后）与 slots.register=2 红线
+ *   [4] 契约回归：METHODS=68、旧 67 条路由全在、无重复；client 调用数（E5 后）与 slots.register=4 红线（task-8 +1、task-17 +1，均已批准）
  *
  * 注：E5 契约（`AI短剧工作区/P1-接口契约冻结-v1.md` §6 变更登记）：
  *   `sources-list { cwd?, limit? }` → `{ ok:true, sources:[{ path, sourceType:'workspace'|'session'|'manual',
@@ -205,7 +205,7 @@ if (clientHasSources) {
   console.log('      （SKIP：client B 阶段（task-20）尚未接入 sources-list —— 接入后本断言自动生效；host 侧 sources-list 已实测）')
 }
 const slotsRegisterCount = (clientSrc.match(/slots\.register\(/g) || []).length
-check('client slots.register = 2（红线）', slotsRegisterCount === 2, String(slotsRegisterCount))
+check('client slots.register = 4（v0.12.1 已批准终值）', slotsRegisterCount === 4, String(slotsRegisterCount))
 
 /* ------------------------------------------------------------------ [4b] */
 group('[4b] client B 阶段面板集成（静态契约断言，AC-S1/S2/S3 代码级证据）')
@@ -275,14 +275,15 @@ if (!baseline) {
   const current = await scanRealRoot(REAL_ROOT)
   const baseMap = new Map((baseline.files || []).map((f) => [f.relative, f]))
   const curMap = new Map(current.map((f) => [f.relative, f]))
+  // 2026-10-20 测试项目清理后恢复严格口径：活动数据根 = 基线 32 文件集合（缺失/新增/改写均 FAIL；无 allowlist）。
   const missing = [...baseMap.keys()].filter((k) => !curMap.has(k))
   const added = [...curMap.keys()].filter((k) => !baseMap.has(k))
   const changed = [...baseMap.keys()].filter(
     (k) => curMap.has(k) && (curMap.get(k).sha256 !== baseMap.get(k).sha256 || curMap.get(k).bytes !== baseMap.get(k).bytes),
   )
-  check('旧数据文件无缺失 / 无新增 / 哈希不变', missing.length === 0 && added.length === 0 && changed.length === 0, JSON.stringify({ missing, added, changed }).slice(0, 300))
+  check('旧数据文件无缺失 / 无新增 / 哈希不变（严格 32 文件）', missing.length === 0 && added.length === 0 && changed.length === 0, JSON.stringify({ missing, added, changed }).slice(0, 300))
   if (Array.isArray(baseline.files)) {
-    check('旧数据文件数一致（32）', current.length === baseline.files.length, `${current.length}/${baseline.files.length}`)
+    check('旧数据文件数一致（严格 32 文件；无 allowlist 豁免）', current.length === baseline.files.length, current.length + '/' + baseline.files.length)
   }
 }
 

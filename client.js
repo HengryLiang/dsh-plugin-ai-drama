@@ -156,6 +156,152 @@ window.__ModuleLoader__.load({
     }
     const sceneCache = { text: null, scenes: [] }
 
+    /* --------- v0.10（task-84）：分镜保存合并（保留 host 未返回的未知/add-only 字段） */
+    // host 返回为权威：只把 prev 中存在、host 结果**缺失**的键补回；
+    // - shotNumber 统一转字符串匹配（兼容 Number/字符串混用；重复/缺失回退下标）；
+    // - 不复活 host 已删除的镜头（输出长度恒等于 host 返回长度）；
+    // - 已存在于返回对象的键（含用户修改后的已知字段）一律以 host 返回为准，不回滚。
+    function mergeShotsPreservingExtraFields(prevShots, nextShots) {
+      if (!Array.isArray(nextShots)) return Array.isArray(prevShots) ? prevShots : []
+      const previous = Array.isArray(prevShots) ? prevShots : []
+      const shotKeyOf = (shot) => {
+        if (!shot || typeof shot !== 'object') return ''
+        const raw = shot.shotNumber
+        return raw == null ? '' : String(raw).trim()
+      }
+      const previousByKey = new Map()
+      for (const shot of previous) {
+        const key = shotKeyOf(shot)
+        if (key && !previousByKey.has(key)) previousByKey.set(key, shot)
+      }
+      return nextShots.map((shot, index) => {
+        if (!shot || typeof shot !== 'object') return shot
+        const key = shotKeyOf(shot)
+        const before = (key && previousByKey.get(key)) || (previous[index] && typeof previous[index] === 'object' ? previous[index] : null)
+        if (!before) return shot
+        const merged = { ...shot }
+        for (const field of Object.keys(before)) {
+          if (!Object.prototype.hasOwnProperty.call(merged, field) && before[field] !== undefined) {
+            merged[field] = before[field]
+          }
+        }
+        return merged
+      })
+    }
+
+    /* --------- v0.10.4（task-91）：分镜 add-only 字段只读展示 helper（纯展示、无副作用） */
+    // 10 个 v0.10.0 per-shot 可选字段；空值/缺失/畸形类型一律不产出（缺字段隐藏不报错）。
+    const SHOT_EXTRA_FIELDS = [
+      ['emotion', '情绪'],
+      ['light', '光影'],
+      ['ambientSound', '环境声'],
+      ['constraints', '约束'],
+      ['poses', '姿态'],
+      ['transitionToNext', '转场'],
+      ['naturalLanguagePrompt', '语言段'],
+      ['lens', '镜头'],
+      ['subject', '主体'],
+      ['groupId', '分组 id'],
+    ]
+
+    function shotExtraText(raw) {
+      if (raw == null) return ''
+      if (typeof raw === 'string') return raw.trim()
+      if (typeof raw === 'number' || typeof raw === 'boolean') return String(raw)
+      if (Array.isArray(raw)) {
+        return raw.map((item) => (item == null ? '' : String(item).trim())).filter(Boolean).join('；')
+      }
+      return ''
+    }
+
+    /** 收集单镜的只读高级字段键值（顺序固定；仅含实际有值的字段）。 */
+    function storyboardExtraEntries(shot) {
+      if (!shot || typeof shot !== 'object') return []
+      const entries = []
+      for (const [key, label] of SHOT_EXTRA_FIELDS) {
+        const value = shot[key]
+        let text = ''
+        if (key === 'emotion') {
+          if (value && typeof value === 'object' && !Array.isArray(value)) {
+            const parts = []
+            if (typeof value.label === 'string' && value.label.trim()) parts.push(value.label.trim())
+            const intensity = Number(value.intensity)
+            if (Number.isFinite(intensity)) parts.push(`强度 ${Math.round(intensity)}`)
+            text = parts.join('，')
+          } else {
+            text = shotExtraText(value)
+          }
+        } else if (key === 'poses') {
+          if (value && typeof value === 'object' && !Array.isArray(value)) {
+            const start = shotExtraText(value.startPose)
+            const end = shotExtraText(value.endPose)
+            const parts = []
+            if (start) parts.push(`起：${start}`)
+            if (end) parts.push(`止：${end}`)
+            text = parts.join(' / ')
+          } else {
+            text = shotExtraText(value)
+          }
+        } else {
+          text = shotExtraText(value)
+        }
+        if (text) entries.push([label, text])
+      }
+      return entries
+    }
+
+    function storyboardHasExtraFields(shot) {
+      return storyboardExtraEntries(shot).length > 0
+    }
+
+    /* --------- v0.11.2（task-99）：分镜分组 groups add-only 只读展示 helper（纯展示、无副作用） */
+    const GROUP_EMOTION_CUE_MAX = 200
+    const GROUP_PROMPT_MAX = 2000
+
+    /** emotionCue 防御式转文本：host 派生字符串为主；兼容 {curve[],intensity} / {label,intensity} / 数字（超长截断 200 字）。 */
+    function groupEmotionCueText(raw) {
+      if (raw == null) return ''
+      if (typeof raw === 'string') return raw.trim().slice(0, GROUP_EMOTION_CUE_MAX)
+      if (typeof raw === 'number' || typeof raw === 'boolean') return String(raw)
+      if (typeof raw === 'object' && !Array.isArray(raw)) {
+        const parts = []
+        if (Array.isArray(raw.curve)) {
+          const curve = raw.curve.map((item) => (item == null ? '' : String(item).trim())).filter(Boolean)
+          if (curve.length) parts.push(curve.join('→'))
+        }
+        if (typeof raw.label === 'string' && raw.label.trim()) parts.push(raw.label.trim())
+        const intensity = Number(raw.intensity)
+        if (Number.isFinite(intensity)) parts.push(`强度 ${Math.round(intensity)}`)
+        return parts.join('，').slice(0, GROUP_EMOTION_CUE_MAX)
+      }
+      return ''
+    }
+
+    /** 防御式归一化 storyboard-get 响应 add-only groups：跳过畸形项/未知结构；无有效组返回 null（零新显示）。 */
+    function normalizeStoryboardGroups(raw) {
+      if (!Array.isArray(raw)) return null
+      const groups = []
+      for (const item of raw) {
+        if (!item || typeof item !== 'object') continue
+        const groupId = typeof item.groupId === 'string'
+          ? item.groupId.trim()
+          : item.groupId != null
+            ? String(item.groupId).trim()
+            : item.id != null
+              ? String(item.id).trim()
+              : ''
+        const name = typeof item.name === 'string' ? item.name.trim() : ''
+        const shotNumbers = Array.isArray(item.shotNumbers)
+          ? item.shotNumbers.map((shotNumber) => String(shotNumber).trim()).filter(Boolean)
+          : []
+        const groupPrompt = typeof item.groupPrompt === 'string' ? item.groupPrompt.trim().slice(0, GROUP_PROMPT_MAX) : ''
+        const emotionCue = groupEmotionCueText(item.emotionCue != null ? item.emotionCue : item.emotion)
+        if (!groupId && !name && !shotNumbers.length && !groupPrompt && !emotionCue) continue
+        groups.push({ groupId, name, emotionCue, shotNumbers, groupPrompt })
+      }
+      return groups.length ? groups : null
+    }
+
     /* ------------------------------------------------------ 设置对象归一化（C-2） */
 
     // H-2 冻结口径：设置只增字段；旧宿主响应缺字段时用这里的默认值渲染（降级）。
@@ -193,8 +339,50 @@ window.__ModuleLoader__.load({
     const TASK_MODEL_MIN_TIMEOUT_MS = 1000
     const TASK_MODEL_MAX_TIMEOUT_MS = 60000
 
+    /* ------------------- v0.9.2（P3-E）：成本档位 costTier（可选 enum，只增字段） */
+    // 宿主 task-65 口径（待最终确认）：settings.taskModels.<task>.costTier = fast|standard|strong（可选）。
+    const COST_TIER_KEYS = ['fast', 'standard', 'strong']
+    const COST_TIER_OPTIONS = [
+      ['', '使用宿主默认（不指定）'],
+      ['fast', 'fast · 低成本'],
+      ['standard', 'standard · 标准'],
+      ['strong', 'strong · 强模型'],
+    ]
+    // 宿主 >= 0.9.2 才支持 costTier；旧宿主 SKIP（不发送该字段，避免 400）
+    const COST_TIER_MIN_HOST_VERSION = '0.9.2'
+
+    function normalizeCostTier(value) {
+      const key = String(value == null ? '' : value).trim().toLowerCase()
+      return COST_TIER_KEYS.includes(key) ? key : ''
+    }
+
+    function costTierLabel(value) {
+      const key = normalizeCostTier(value)
+      const hit = COST_TIER_OPTIONS.find(([optionKey]) => optionKey === key)
+      return hit ? hit[1] : COST_TIER_OPTIONS[0][1]
+    }
+
+    /** 从 settings-save 响应 / 审读报告 meta 的只增字段提取成本档位回退提示（字段名以 host task-65 为准，容错读取）。 */
+    function costTierFallbackFrom(payload) {
+      const source = payload && typeof payload === 'object' ? payload : {}
+      const meta = source.meta && typeof source.meta === 'object' ? source.meta : {}
+      const costTier = normalizeCostTier(source.costTier != null ? source.costTier : meta.costTier)
+      const requested = normalizeCostTier(source.costTierRequested != null ? source.costTierRequested : meta.costTierRequested)
+      const fallback = source.costTierFallback === true || meta.costTierFallback === true
+      const reason = typeof source.costTierFallbackReason === 'string'
+        ? source.costTierFallbackReason
+        : typeof meta.costTierFallbackReason === 'string' ? meta.costTierFallbackReason : ''
+      if (!costTier && !requested && !fallback && !reason) return ''
+      let text = costTier ? `成本档位：${costTierLabel(costTier)}` : ''
+      if (fallback) {
+        text += `${text ? ' · ' : ''}请求 ${requested || '—'} 不可用，已回退默认${reason ? '（' + reason + '）' : ''}`
+      }
+      return text
+    }
+
     /** 归一化单个任务模型配置；非法/越界字段丢弃（不写坏 settings，不做强校验报错）。
-     *  P2-6 增强（v0.6.2）：timeoutMs（1000~60000 整数）原样保留/透传，避免面板读→改→保存把它丢掉。 */
+     *  P2-6 增强（v0.6.2）：timeoutMs（1000~60000 整数）原样保留/透传，避免面板读→改→保存把它丢掉。
+     *  v0.9.2（P3-E）：costTier（fast/standard/strong）可选保留，非法值丢弃。 */
     function normalizeTaskModelEntry(entry) {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
       const normalized = {}
@@ -220,6 +408,12 @@ window.__ModuleLoader__.load({
         timeoutMs >= TASK_MODEL_MIN_TIMEOUT_MS && timeoutMs <= TASK_MODEL_MAX_TIMEOUT_MS
       ) {
         normalized.timeoutMs = timeoutMs
+      }
+      const costTier = normalizeCostTier(entry.costTier)
+      if (costTier) normalized.costTier = costTier
+      // v0.9.2（P3-E）：costTierModels 属 host 侧高级映射配置，客户端不渲染但必须原样透传（避免读→改→保存丢字段）
+      if (entry.costTierModels && typeof entry.costTierModels === 'object' && !Array.isArray(entry.costTierModels)) {
+        normalized.costTierModels = entry.costTierModels
       }
       return Object.keys(normalized).length ? normalized : null
     }
@@ -257,6 +451,57 @@ window.__ModuleLoader__.load({
         strictMode: value.strictMode === true,
         taskModels: normalizeTaskModels(value.taskModels),
         promptTemplates,
+      }
+    }
+
+    /* ------------------------------------- v0.13.0（task-31 / M6-0a）：列表页卡片化纯函数 helper */
+    // 首字水印：取首个字符（emoji/代理对安全）；空名回退「剧」
+    function projectInitialOf(title) {
+      const chars = Array.from(String(title == null ? '' : title).trim())
+      return chars.length ? chars[0] : '剧'
+    }
+
+    // 封面 3 变体：按标题字符码稳定哈希（同一项目不抖动）
+    function projectCoverVariant(title) {
+      const text = String(title == null ? '' : title)
+      let hash = 0
+      for (const ch of text) {
+        const code = ch.codePointAt(0) || 0
+        hash = (hash * 31 + code) % 9973
+      }
+      return ['a', 'b', 'c'][hash % 3]
+    }
+
+    // 最近修改：mtimeMs / ISO 字符串 / null → 相对时间（null 显示「未知」，不伪造时间）
+    function formatProjectUpdatedAt(updatedAt) {
+      if (updatedAt == null || updatedAt === '') return '未知'
+      const time = typeof updatedAt === 'number' ? updatedAt : new Date(updatedAt).getTime()
+      if (!Number.isFinite(time)) return '未知'
+      const diff = Date.now() - time
+      if (!Number.isFinite(diff)) return '未知'
+      if (diff < 60 * 1000) return '刚刚'
+      if (diff < 60 * 60 * 1000) return Math.max(1, Math.floor(diff / 60000)) + ' 分钟前'
+      if (diff < 24 * 60 * 60 * 1000) return Math.max(1, Math.floor(diff / 3600000)) + ' 小时前'
+      if (diff < 30 * 24 * 60 * 60 * 1000) return Math.max(1, Math.floor(diff / 86400000)) + ' 天前'
+      return new Date(time).toISOString().slice(0, 10)
+    }
+
+    // 状态徽标：客户端按集数推导（非权威流程状态；tooltip 已注明）
+    function projectStatusOf(project, targetEpisodes) {
+      const count = Number(project && project.episodeCount) || 0
+      const goal = Number(targetEpisodes) || 0
+      if (count === 0) {
+        return { key: 'idle', label: '未开工', hint: '尚未创建分集（客户端按集数推导，非权威流程状态）' }
+      }
+      if (goal > 0 && count >= goal) {
+        return { key: 'ready', label: '待交付', hint: '已完成 ' + count + ' 集 ≥ 默认目标 ' + goal + ' 集（客户端按集数推导，非权威流程状态）' }
+      }
+      return {
+        key: 'making',
+        label: '制作中',
+        hint: goal > 0
+          ? '已完成 ' + count + ' 集 / 默认目标 ' + goal + ' 集（客户端按集数推导，非权威流程状态）'
+          : '已完成 ' + count + ' 集（客户端按集数推导，非权威流程状态）',
       }
     }
 
@@ -324,7 +569,7 @@ window.__ModuleLoader__.load({
     // 空态统一组件：标题 + 说明 +「下一步」引导 + 可操作按钮（不出现空白屏）。
     function emptyState(options) {
       const actions = Array.isArray(options.actions) ? options.actions.filter(Boolean) : []
-      return h('div', { className: 'ad-empty ad-empty-state', key: options.key, role: 'status' },
+      return h('div', { className: 'ad-empty-state', key: options.key, role: 'status' },
         h('div', { className: 'ad-empty-title' }, options.title || '暂无数据'),
         options.description ? h('div', null, options.description) : null,
         options.next ? h('div', { className: 'ad-hint-next' }, `下一步：${options.next}`) : null,
@@ -399,7 +644,7 @@ window.__ModuleLoader__.load({
         subtitle: options.subtitle,
         children: rows.length
           ? h('div', { className: 'ad-hits' }, rows.slice(0, options.limit || 8).map((line, i) => h('div', { className: 'ad-hit', key: i }, line)))
-          : h('div', { className: 'ad-empty' }, options.empty || '（无数据）'),
+          : h('div', { className: 'ad-hint-next' }, options.empty || '（无数据）'),
         note: options.note,
       })
     }
@@ -437,7 +682,7 @@ window.__ModuleLoader__.load({
                     h('div', { className: 'ad-hit-path' }, `${issue.code}${issue.where ? ' · ' + issue.where : ''}`),
                     h('div', null, issue.message)))))
             }))
-          : h('div', { className: 'ad-empty' }, options.empty || '未发现问题。'),
+          : h('div', { className: 'ad-hint-next' }, options.empty || '未发现问题。'),
         note: options.note,
       })
     }
@@ -486,7 +731,7 @@ window.__ModuleLoader__.load({
         h('span', { className: 'ad-sub' },
           `大纲 ${facts.outlineCount || 0} · 人物 ${facts.characterCount || 0} · 剧本 ${facts.episodeCount || 0} · 分镜 ${facts.storyboardCount || 0} · 导出 ${facts.exportCount || 0}` +
           (facts.openMemoryCount ? ` · 未回收伏笔 ${facts.openMemoryCount}` : '')),
-        onRefresh ? h('button', { className: 'ad-btn ad-sm', onClick: onRefresh }, '刷新进度') : null,
+        onRefresh ? h('button', { className: 'ad-btn ad-sm', onClick: onRefresh }, icon('refresh'), '刷新进度') : null,
       )
     }
 
@@ -517,6 +762,60 @@ window.__ModuleLoader__.load({
       episode: 'episode_script',
       storyboard: 'storyboard',
       check: 'exported',
+    }
+    // v0.15.0（task-39 / M6-2）：流程步骤→页签反向映射（与 FLOW_TAB_STEP 严格互逆；测试断言）
+    const FLOW_STEP_TAB = {
+      project: 'contract',
+      outline: 'outline',
+      characters: 'characters',
+      episode_script: 'episode',
+      storyboard: 'storyboard',
+      exported: 'check',
+    }
+    const NEXT_STEP_TAB_LABELS = {
+      contract: '剧集契约',
+      outline: '总纲',
+      characters: '人物',
+      episode: '剧本',
+      storyboard: '分镜',
+      generate: '生成',
+      check: '检查 / 导出',
+    }
+    // ≤560 窄窗短文案（≤8 字；aria-label/title 仍用全名）
+    const NEXT_STEP_SHORT_LABELS = {
+      project: '契约',
+      outline: '大纲',
+      characters: '人物',
+      episode_script: '剧本',
+      storyboard: '分镜',
+      exported: '导出',
+    }
+
+    // v0.12.0（task-7）：唯一主进度（P2-2 流程状态机）内嵌的 facts 计数映射（流程步骤 → progress.facts）
+    const FLOW_FACT_KEYS = {
+      project: null,
+      outline: 'outlineCount',
+      characters: 'characterCount',
+      episode_script: 'episodeCount',
+      storyboard: 'storyboardCount',
+      exported: 'exportCount',
+    }
+
+    // v0.12.0（task-7）：15 页签 4 组（创作 / 资料 / 交付 / 高级）——键不重不漏，草稿计数在渲染时拼
+    const TAB_GROUPS = [
+      { id: 'create', label: '创作', tabs: ['contract', 'outline', 'characters', 'world', 'episode', 'storyboard', 'dialogue'] },
+      { id: 'assets', label: '资料', tabs: ['assets', 'memory', 'drafts', 'ledger'] },
+      { id: 'deliver', label: '交付', tabs: ['generate', 'check'] },
+      { id: 'advanced', label: '高级', tabs: ['tree', 'toolcards'] },
+    ]
+    // v0.14.0（task-38 / M6-1）：页签键→静态标签（交接指令/弹窗范围使用；不依赖渲染期局部 Map）
+    const TAB_LABEL_MAP = {
+      contract: '剧集契约', outline: '总纲', characters: '人物', world: '世界观', episode: '剧本',
+      storyboard: '分镜', dialogue: '台词与音效', assets: '素材库', memory: '本剧记忆', drafts: '草稿',
+      ledger: '账本', generate: '生成', check: '检查 / 导出', tree: '目录', toolcards: '工具卡片',
+    }
+    function tabLabelOfKey(key) {
+      return TAB_LABEL_MAP[key] || String(key == null ? '' : key)
     }
 
     function emptyFlowSteps() {
@@ -581,6 +880,54 @@ window.__ModuleLoader__.load({
     function flowStepAction(key) {
       const hit = FLOW_STEPS.find(([stepKey]) => stepKey === key)
       return hit ? hit[2] : ''
+    }
+
+    /* v0.15.0（task-39 / M6-2）：下一步建议器（纯函数：只读 flowState/已加载内存状态；0 新 api / 无副作用）
+     * 输入：state（flowState 或 null）、options = { loading, available, tab, data:{contract,rows,characters,world,episodeText,shots} }
+     * 输出：{ key, label, shortLabel, hint, tone, chipLabel, tab, disabled, ariaLabel, alt? } */
+    function nextStepTarget(state, options) {
+      const opts = options || {}
+      const loading = opts.loading === true
+      const available = opts.available !== false
+      const data = opts.data || null
+      const mk = (key, label, shortLabel, hint, tone, chipLabel, tab, disabled, ariaLabel, alt) => ({ key, label, shortLabel, hint, tone, chipLabel, tab, disabled, ariaLabel, alt: alt || null })
+      if (loading) {
+        return mk('loading', '下一步：…', '下一步', '正在读取流程状态…', 'neutral', '', null, true, '下一步：正在读取流程状态')
+      }
+      const emptyOrUnavailable = !available || !state || !state.steps
+      if (emptyOrUnavailable) {
+        // 规范 §1.2-B：flowState null/不可用时用已加载内存数据分支（不得总是回落到契约）
+        const d = data || {}
+        if (!d.contract) return mk('fallback-contract', '去完善契约', '完善契约', '先完成剧集契约', 'neutral', '未开始', 'contract', false, '去完善契约（跳转到剧集契约页签）')
+        if (!Array.isArray(d.rows) || d.rows.length === 0) return mk('fallback-outline', '编写总纲', '写总纲', '总纲为空，先写总纲', 'neutral', '未开始', 'outline', false, '编写总纲（跳转到总纲页签）')
+        if (!Array.isArray(d.characters) || d.characters.length === 0) {
+          return mk('fallback-characters', '补人物', '补人物', '人物列表为空，先补人物设定', 'neutral', '未开始', 'characters', false, '补人物（跳转到人物页签）', (!Array.isArray(d.world) || d.world.length === 0) ? { label: '补世界观', tab: 'world', ariaLabel: '补世界观（跳转到世界观页签）' } : null)
+        }
+        if (!d.episodeText) return mk('fallback-episode', '去剧本页', '去剧本', '还没有剧本正文，先去剧本页', 'neutral', '未开始', 'episode', false, '去剧本页（跳转到剧本页签）')
+        if (!Array.isArray(d.shots) || d.shots.length === 0) return mk('fallback-storyboard', '拆分镜', '拆分镜', '还没有分镜表，先拆分镜', 'neutral', '未开始', 'storyboard', false, '拆分镜（跳转到分镜页签）')
+        return mk('fallback-generate', '去生成', '去生成', '已具备生成条件，去生成页', 'neutral', '未开始', 'generate', false, '去生成（跳转到生成页签）')
+      }
+      const current = flowCurrentKey(state)
+      const status = state.steps[current] || 'not_started'
+      const label = flowStepLabel(current)
+      const shortStep = NEXT_STEP_SHORT_LABELS[current] || label
+      const tab = FLOW_STEP_TAB[current] || ''
+      const tabLabel = NEXT_STEP_TAB_LABELS[tab] || tab || ''
+      const action = flowStepAction(current)
+      // 全确认（current=exported confirmed）：按规范 §1.2 → 「导出交付物」/check；当前页签==check 由渲染层同页隐藏
+      if (current === 'exported' && status === 'confirmed') {
+        return mk('all-confirmed', '导出交付物', '去导出', '全部创作步骤已确认', 'success', '全部已确认', 'check', false, '导出交付物（跳转到检查 / 导出页签）')
+      }
+      if (status === 'blocked') {
+        return mk('blocked-' + current, '下一步：' + label, '下一步：' + shortStep, '前序步骤未完成，暂未解锁', 'neutral', '未解锁', null, true, '下一步：' + label + '（未解锁：前序步骤未完成）')
+      }
+      if (status === 'stale') {
+        return mk('stale-' + current, '重做：' + label, '重做：' + shortStep, '上游已变更，建议重做', 'warn', '待重做', tab, false, '重做：' + label + (tabLabel ? '（跳转到' + tabLabel + '页签）' : ''))
+      }
+      if (status === 'in_progress') {
+        return mk('progress-' + current, '继续：' + label, '继续：' + shortStep, action || '', 'neutral', '进行中', tab, false, '继续：' + label + (tabLabel ? '（跳转到' + tabLabel + '页签）' : ''))
+      }
+      return mk('next-' + current, '下一步：' + label, '下一步：' + shortStep, action || '', 'neutral', '未开始', tab, false, '下一步：' + label + (tabLabel ? '（跳转到' + tabLabel + '页签）' : ''))
     }
 
     /** 当前步 = 第一个未确认的步骤；全部确认时停在导出。 */
@@ -681,6 +1028,13 @@ window.__ModuleLoader__.load({
       const modelFallbackReason = typeof meta.modelFallbackReason === 'string'
         ? meta.modelFallbackReason
         : typeof value.modelFallbackReason === 'string' ? value.modelFallbackReason : ''
+      // v0.9.2（P3-E）：成本档位 + 回退标记（host 只增字段，meta 或顶层）
+      const costTier = normalizeCostTier(meta.costTier != null ? meta.costTier : value.costTier)
+      const costTierRequested = normalizeCostTier(meta.costTierRequested != null ? meta.costTierRequested : value.costTierRequested)
+      const costTierFallback = meta.costTierFallback === true || value.costTierFallback === true
+      const costTierFallbackReason = typeof meta.costTierFallbackReason === 'string'
+        ? meta.costTierFallbackReason
+        : typeof value.costTierFallbackReason === 'string' ? value.costTierFallbackReason : ''
       return {
         episode: value.episode == null ? null : Number(value.episode) || value.episode,
         generatedAt: typeof value.generatedAt === 'string' ? value.generatedAt : '',
@@ -693,6 +1047,10 @@ window.__ModuleLoader__.load({
         modelSource,
         modelFallback,
         modelFallbackReason,
+        costTier,
+        costTierRequested,
+        costTierFallback,
+        costTierFallbackReason,
         findings,
         summaryText,
         meta,
@@ -815,116 +1173,499 @@ window.__ModuleLoader__.load({
     /* ---------------------------------------------------------------- 样式 */
 
     const CSS = `
-.ad-shell{display:flex;flex-direction:column;height:100%;min-height:0;color:var(--dsw-alias-label-primary,#1a1a1a);background:var(--dsw-alias-bg-base,#fff)}
-.ad-head{display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid var(--dsw-alias-border-l3,#e6e6e6);flex:none}
-.ad-title{font-size:15px;font-weight:600}
-.ad-sub{font-size:12px;color:var(--dsw-alias-label-secondary,#8a8a8a)}
+body{
+  /* ================= 主题派生层（v0.12.0 · task-6；v0.13.1 task-33 根因修复） =================
+   * v0.13.1（task-33）根因：宿主 alias token（dsw-alias 系列）定义在 body（dsh-client-ui-theme
+   * design_platform_css_default 的 body 规则；深色为 body[data-ds-dark-theme]），而派生层原写在
+   * :root（html，body 的父级）→ 在 :root 解析不到子级 body 的 --dsw-* → 17 个 --ad-* 全部 computed
+   * invalid → 运行期所有颜色/背景/边框/阴影/渐变失效（仅结构 CSS 生效；v0.12.1 g2 浮层透明同根因）。
+   * 修复：派生块改挂 body（对插件全部自渲染子树生效，浅/深主题随 body[data-ds-dark-theme] 自动翻转）。
+   * 合规口径：业务规则一律引用 --ad-*；本 body 块是插件内唯一定义 --ad-* / 唯一出现 dsw 主题变量的位置
+   * （业务 CSS 不直连 --dsw-*；v0.13.1 按 qa/visual 规范以 base（无 color-mix）+ @supports 增强双写）。
+   * 官方白名单 14 项 = 13 个 dsw-alias 变量 + 1 个 dsw-specific-sidebar-fill（浅/深双套）；
+   * 来源：证据/UI评审-框架能力-2026-10-19.md §5（Client Inspect live 实测）。
+   * 语义色/弱底/边框由官方 token + color-mix 派生，自动跟随浅/深主题。 */
+  --ad-bg-base:var(--dsw-alias-bg-base);
+  --ad-label-primary:var(--dsw-alias-label-primary);
+  --ad-label-secondary:var(--dsw-alias-label-secondary);
+  --ad-brand:var(--dsw-alias-brand-primary);
+  /* 主按钮反色：底=brand-primary（浅#0f1115/深#f9fafb），字=bg-base（浅#fff/深#151517）→ 18.90 / 17.45 */
+  --ad-on-brand:var(--dsw-alias-bg-base);
+  /* 主按钮 hover：brand 88% + bg-base 12%（浅≈#2c2e31/深≈#dedfe0）→ 13.62 / 13.67 */
+  --ad-primary-hover-bg:color-mix(in srgb,var(--dsw-alias-brand-primary) 88%,var(--dsw-alias-bg-base));
+  /* 语义文字：纯 state-*-primary 在浅色正文不达标（warn 2.15 / success 2.28 / error 4.50，错误底约 4.3），
+   * 与随主题翻转的 label-primary 混合后，浅/深均 ≥4.5（计算见交付报告） */
+  --ad-error:color-mix(in srgb,var(--dsw-alias-state-error-primary) 75%,var(--dsw-alias-label-primary));
+  --ad-warn:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 55%,var(--dsw-alias-label-primary));
+  --ad-success:color-mix(in srgb,var(--dsw-alias-state-success-primary) 60%,var(--dsw-alias-label-primary));
+  /* 语义弱底/边框：官方语义色低透明度叠加（浅/深自动适配） */
+  --ad-error-bg:color-mix(in srgb,var(--dsw-alias-state-error-primary) 8%,transparent);
+  --ad-warning-bg:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 10%,transparent);
+  --ad-error-border:color-mix(in srgb,var(--dsw-alias-state-error-primary) 35%,transparent);
+  --ad-warning-border:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 35%,transparent);
+  /* 弱底/边框/分隔：由 label-primary 低透明度派生（bg-layer-1/2 在浅色=页面底色 #fff，用其会失去层级） */
+  --ad-subtle-bg:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent);
+  --ad-hover-bg:color-mix(in srgb,var(--dsw-alias-label-primary) 6%,transparent);
+  --ad-border:var(--dsw-alias-border-l2);
+  --ad-divider:var(--dsw-alias-border-l1);
+}
+.ad-shell{display:flex;flex-direction:column;height:100%;min-height:0;color:var(--ad-label-primary);background:var(--ad-bg-base)}
+/* v0.12.4（task-25 / M5-B）：视觉隐藏但可被读屏读取（表格 caption 等；不占布局、0 视觉变化） */
+.ad-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.ad-head{display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid var(--ad-border);flex:none}
+.ad-title{font-size:16px;font-weight:600}
+.ad-sub{font-size:12px;color:var(--ad-label-secondary)}
 .ad-body{flex:1;min-height:0;overflow:auto;padding:16px 18px}
-.ad-btn{border:1px solid var(--dsw-alias-border-l3,#d9d9d9);background:transparent;color:inherit;border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer;white-space:nowrap}
-.ad-btn:hover{background:var(--dsw-alias-bg-hover,rgba(0,0,0,.05))}
+.ad-btn{border:1px solid var(--ad-border);background:transparent;color:inherit;border-radius:8px;padding:6px 12px;font-size:13px;cursor:pointer;white-space:nowrap}
+.ad-btn:not(.ad-primary):hover{background:var(--ad-hover-bg)}
 .ad-btn[disabled]{opacity:.5;cursor:default}
-.ad-primary{border-color:transparent;background:var(--dsw-alias-brand-primary,#1f6feb);color:#fff}
-.ad-sm{padding:2px 8px;font-size:12px}
-.ad-card{border:1px solid var(--dsw-alias-border-l3,#e6e6e6);border-radius:10px;padding:12px 14px;margin-bottom:10px;display:flex;align-items:center;gap:12px}
+.ad-primary{border-color:transparent;background:var(--ad-brand);color:var(--ad-on-brand)}
+.ad-primary:hover{background:var(--ad-primary-hover-bg)}
+.ad-sm{padding:4px 10px;font-size:12px}
+.ad-card{border:1px solid var(--ad-border);border-radius:10px;padding:12px 14px;margin-bottom:10px;display:flex;align-items:center;gap:12px}
 .ad-card-main{flex:1;min-width:0}
 .ad-card-title{font-size:14px;font-weight:600;margin-bottom:2px}
-.ad-card-meta{font-size:12px;color:var(--dsw-alias-label-secondary,#8a8a8a);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ad-empty{color:var(--dsw-alias-label-secondary,#8a8a8a);font-size:13px;line-height:1.9}
-.ad-err{color:var(--dsw-alias-label-error,#d4380d);font-size:13px;line-height:1.8}.ad-warn{margin-top:10px;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.8;background:var(--dsw-alias-bg-warning,#fffbe6);color:var(--dsw-alias-label-warning,#ad6800);border:1px solid var(--dsw-alias-border-warning,#ffe58f)}
+.ad-card-meta{font-size:12px;color:var(--ad-label-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ad-empty{color:var(--ad-label-secondary);font-size:13px;line-height:1.9}
+.ad-err{color:var(--ad-error);font-size:13px;line-height:1.8}.ad-warn{margin-top:10px;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.8;background:var(--ad-warning-bg);color:var(--ad-warn);border:1px solid var(--ad-warning-border)}
 .ad-row{display:flex;align-items:center;gap:8px}
-.ad-input,.ad-select,.ad-area{padding:6px 10px;font-size:13px;border-radius:8px;border:1px solid var(--dsw-alias-border-l3,#d9d9d9);background:transparent;color:inherit;font-family:inherit;box-sizing:border-box}
+.ad-input,.ad-select,.ad-area{padding:6px 10px;font-size:13px;border-radius:8px;border:1px solid var(--ad-border);background:transparent;color:inherit;font-family:inherit;box-sizing:border-box}
 .ad-input{flex:1;min-width:0}
 .ad-area{width:100%;resize:vertical;line-height:1.7}
-.ad-tabs{display:flex;gap:4px;border-bottom:1px solid var(--dsw-alias-border-l3,#e6e6e6);margin-bottom:14px;flex:none;overflow-x:auto;white-space:nowrap}
+.ad-tabs{display:flex;align-items:flex-start;gap:8px;border-bottom:1px solid var(--ad-border);margin-bottom:12px;flex:none}
 .ad-tab{border:0;background:transparent;color:inherit;padding:7px 12px;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;opacity:.7}
-.ad-tab[data-on="1"]{opacity:1;font-weight:600;border-bottom-color:var(--dsw-alias-brand-primary,#1f6feb)}
-.ad-field{display:flex;gap:10px;align-items:flex-start;margin-bottom:10px}
-.ad-field > label{width:110px;flex:none;font-size:13px;padding-top:7px;color:var(--dsw-alias-label-secondary,#8a8a8a)}
+.ad-tab[data-on="1"]{opacity:1;font-weight:600;color:var(--ad-label-primary);border-bottom-color:var(--ad-brand)}
+.ad-field{display:flex;gap:10px;align-items:flex-start;margin-bottom:8px}
+.ad-field > label{width:110px;flex:none;font-size:13px;padding-top:7px;color:var(--ad-label-secondary)}
 .ad-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
-.ad-box{border:1px solid var(--dsw-alias-border-l3,#e6e6e6);border-radius:10px;padding:12px}
-.ad-table{width:100%;border-collapse:collapse;font-size:12.5px}
-.ad-table th,.ad-table td{border:1px solid var(--dsw-alias-border-l3,#e6e6e6);padding:4px 6px;text-align:left;vertical-align:top}
-.ad-table th{background:var(--dsw-alias-bg-subtle,rgba(0,0,0,.03));font-weight:600;white-space:nowrap}
+.ad-box{border:1px solid var(--ad-border);border-radius:10px;padding:12px}
+.ad-table{width:100%;border-collapse:collapse;font-size:12px}
+.ad-table th,.ad-table td{border:1px solid var(--ad-border);padding:4px 6px;text-align:left;vertical-align:top}
+.ad-table th{background:var(--ad-subtle-bg);font-weight:600;white-space:nowrap}
 .ad-table input,.ad-table textarea{width:100%;border:0;background:transparent;color:inherit;font:inherit;padding:2px;box-sizing:border-box;resize:vertical}
-.ad-table input:focus,.ad-table textarea:focus{outline:1px solid var(--dsw-alias-brand-primary,#1f6feb);border-radius:3px}
+.ad-table input:focus,.ad-table textarea:focus{outline:1px solid var(--ad-brand);border-radius:3px}
 .ad-node{display:flex;align-items:center;gap:8px;font-size:13px;padding:3px 0}
-.ad-count{font-size:11px;color:var(--dsw-alias-label-secondary,#8a8a8a)}
-.ad-path{font-size:11px;color:var(--dsw-alias-label-secondary,#8a8a8a);margin-top:14px;word-break:break-all;line-height:1.7}
-.ad-flash{font-size:12px;color:var(--dsw-alias-label-success,#237804)}
-.ad-hits{font-size:12.5px;line-height:1.7}
-.ad-hit{padding:5px 0;border-bottom:1px dotted var(--dsw-alias-border-l3,#e6e6e6)}
-.ad-hit-path{color:var(--dsw-alias-label-secondary,#8a8a8a);font-size:11px}
-.ad-sec{font-size:13px;font-weight:600;margin:16px 0 8px}
-.ad-pre{margin:0;padding:8px 10px;font-size:11.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;border-radius:6px;background:var(--dsw-alias-bg-subtle,rgba(0,0,0,.04));font-family:Consolas,Menlo,monospace}
-.ad-dirty{font-size:12px;color:var(--dsw-alias-label-warning,#ad6800)}
-.ad-ok{font-size:12px;color:var(--dsw-alias-label-success,#237804)}
+.ad-count{font-size:12px;color:var(--ad-label-secondary)}
+.ad-path{font-size:12px;color:var(--ad-label-secondary);margin-top:14px;word-break:break-all;line-height:1.7}
+.ad-flash{font-size:12px;color:var(--ad-success)}
+.ad-hits{font-size:12px;line-height:1.7}
+.ad-hit{padding:5px 0;border-bottom:1px dotted var(--ad-border)}
+.ad-hit-path{color:var(--ad-label-secondary);font-size:12px}
+.ad-sec{font-size:14px;font-weight:600;margin:12px 0 8px}
+.ad-pre{margin:0;padding:8px 10px;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;border-radius:6px;background:var(--ad-subtle-bg);font-family:Consolas,Menlo,monospace}
+.ad-dirty{font-size:12px;color:var(--ad-warn)}
+.ad-ok{font-size:12px;color:var(--ad-success)}
 .ad-scenes{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:10px;margin-top:10px}
-.ad-scene{border:1px solid var(--dsw-alias-border-l3,#e6e6e6);border-radius:10px;padding:10px 12px;background:var(--dsw-alias-bg-subtle,rgba(0,0,0,.02))}
+.ad-scene{border:1px solid var(--ad-border);border-radius:10px;padding:10px 12px;background:var(--ad-subtle-bg)}
 .ad-scene-head{font-size:13px;font-weight:600;margin-bottom:3px;word-break:break-word}
-.ad-scene-meta{font-size:11.5px;color:var(--dsw-alias-label-secondary,#8a8a8a);margin-bottom:6px}
+.ad-scene-meta{font-size:12px;color:var(--ad-label-secondary);margin-bottom:6px}
 .ad-scene-line{font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-word;max-height:140px;overflow:auto}
-.ad-check{width:14px;height:14px;cursor:pointer;accent-color:var(--dsw-alias-brand-primary,#1f6feb);flex:none}
+.ad-check{width:14px;height:14px;cursor:pointer;accent-color:var(--ad-brand);flex:none}
 .ad-node-ops{display:flex;align-items:center;gap:4px;margin-left:auto}
-.ad-pipe{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 18px 6px;flex:none;border-bottom:1px solid var(--dsw-alias-border-l3,#eee)}
+.ad-pipe{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 18px 6px;flex:none;border-bottom:1px solid var(--ad-border)}
 .ad-pipe-inner{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
-.ad-pipe-step{display:flex;align-items:center;gap:4px;font-size:12px;padding:3px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l3,#e6e6e6);color:var(--dsw-alias-label-secondary,#8a8a8a);white-space:nowrap}
-.ad-pipe-step[data-on="1"]{border-color:var(--dsw-alias-brand-primary,#1f6feb);color:var(--dsw-alias-brand-primary,#1f6feb);font-weight:600}
-.ad-pipe-step[data-done="1"]{border-color:var(--dsw-alias-label-success,#237804);color:var(--dsw-alias-label-success,#237804)}
-.ad-pipe-sep{color:var(--dsw-alias-label-secondary,#8a8a8a);font-size:11px;margin-left:4px}
+.ad-pipe-step{display:flex;align-items:center;gap:4px;font-size:12px;padding:3px 8px;border-radius:999px;border:1px solid var(--ad-border);color:var(--ad-label-secondary);white-space:nowrap}
+.ad-pipe-step[data-on="1"]{border-color:var(--ad-brand);color:var(--ad-brand);font-weight:600}
+.ad-pipe-step[data-done="1"]{border-color:var(--ad-success);color:var(--ad-success)}
+.ad-pipe-sep{color:var(--ad-label-secondary);font-size:12px;margin-left:4px}
 .ad-toolcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;margin-top:8px}
 .ad-toolcard{display:flex;flex-direction:column;gap:2px}
-.ad-toolcard[data-tone="warn"]{border-color:var(--dsw-alias-border-warning,#ffe58f)}
-.ad-toolcard[data-tone="error"]{border-color:var(--dsw-alias-border-error,#ffccc7)}
+.ad-toolcard[data-tone="warn"]{border-color:var(--ad-warning-border)}
+.ad-toolcard[data-tone="error"]{border-color:var(--ad-error-border)}
 .ad-toolcard-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
-.ad-kv-row{display:flex;gap:8px;font-size:12.5px;line-height:1.8;word-break:break-word}
-.ad-kv-key{color:var(--dsw-alias-label-secondary,#8a8a8a);min-width:92px;flex:none}
-.ad-tool-title{font-size:12.5px;font-weight:600;margin:14px 0 6px}
-.ad-fold{margin-top:6px;font-size:12px;color:var(--dsw-alias-label-secondary,#8a8a8a)}
+.ad-kv-row{display:flex;gap:8px;font-size:12px;line-height:1.8;word-break:break-word}
+.ad-kv-key{color:var(--ad-label-secondary);min-width:92px;flex:none}
+.ad-tool-title{font-size:12px;font-weight:600;margin:14px 0 6px}
+.ad-fold{margin-top:6px;font-size:12px;color:var(--ad-label-secondary)}
 .ad-fold summary{cursor:pointer}
 .ad-shell-row{flex:1;min-height:0;display:flex;align-items:stretch}
 .ad-main-col{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
-.ad-doc{width:40%;min-width:320px;max-width:620px;border-left:1px solid var(--dsw-alias-border-l3,#e6e6e6);display:flex;flex-direction:column;min-height:0;background:var(--dsw-alias-bg-base,#fff)}
-.ad-doc-head{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-bottom:1px solid var(--dsw-alias-border-l3,#eee);flex:none}
+.ad-doc{width:40%;min-width:320px;max-width:620px;border-left:1px solid var(--ad-border);display:flex;flex-direction:column;min-height:0;background:var(--ad-bg-base)}
+.ad-doc-head{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-bottom:1px solid var(--ad-border);flex:none}
 .ad-doc-title{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600}
-.ad-doc-meta{font-size:11.5px;color:var(--dsw-alias-label-secondary,#8a8a8a);line-height:1.7;word-break:break-all}
-.ad-doc-area{flex:1;min-height:160px;width:100%;box-sizing:border-box;padding:10px 12px;border:0;resize:none;font-family:Consolas,Menlo,monospace;font-size:12.5px;line-height:1.8;color:inherit;background:transparent}
-.ad-doc-area:focus{outline:1px solid var(--dsw-alias-brand-primary,#1f6feb);outline-offset:-1px}
+.ad-doc-meta{font-size:12px;color:var(--ad-label-secondary);line-height:1.7;word-break:break-all}
+.ad-doc-area{flex:1;min-height:160px;width:100%;box-sizing:border-box;padding:10px 12px;border:0;resize:none;font-family:Consolas,Menlo,monospace;font-size:12px;line-height:1.8;color:inherit;background:transparent}
+.ad-doc-area:focus{outline:1px solid var(--ad-brand);outline-offset:-1px}
 .ad-doc-foot{padding:6px 12px 12px;flex:none;display:flex;flex-direction:column;gap:6px}
-.ad-doc-conflict{margin:8px 12px;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.8;background:var(--dsw-alias-bg-warning,#fffbe6);color:var(--dsw-alias-label-warning,#ad6800);border:1px solid var(--dsw-alias-border-warning,#ffe58f)}
-.ad-doc-note{margin:8px 12px;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.8;background:var(--dsw-alias-bg-subtle,rgba(0,0,0,.03));color:var(--dsw-alias-label-secondary,#8a8a8a)}
-.ad-doc-err{margin:8px 12px;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.8;background:var(--dsw-alias-bg-error,#fff1f0);color:var(--dsw-alias-label-error,#d4380d);border:1px solid var(--dsw-alias-border-error,#ffccc7)}
-.ad-flow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:8px 18px 6px;flex:none;border-bottom:1px solid var(--dsw-alias-border-l3,#eee)}
-.ad-flow-step{display:flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;border:1px solid var(--dsw-alias-border-l3,#e6e6e6);background:transparent;color:var(--dsw-alias-label-secondary,#8a8a8a);font-size:12px;cursor:pointer;white-space:nowrap}
-.ad-flow-step[data-state="confirmed"]{border-color:var(--dsw-alias-label-success,#237804);color:var(--dsw-alias-label-success,#237804)}
-.ad-flow-step[data-state="current"]{border-color:var(--dsw-alias-brand-primary,#1f6feb);color:var(--dsw-alias-brand-primary,#1f6feb);font-weight:600}
-.ad-flow-step[data-state="stale"]{border-color:var(--dsw-alias-border-warning,#ffe58f);color:var(--dsw-alias-label-warning,#ad6800);background:var(--dsw-alias-bg-warning,#fffbe6)}
+.ad-doc-conflict{margin:8px 12px;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.8;background:var(--ad-warning-bg);color:var(--ad-warn);border:1px solid var(--ad-warning-border)}
+.ad-doc-note{margin:8px 12px;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.8;background:var(--ad-subtle-bg);color:var(--ad-label-secondary)}
+.ad-doc-err{margin:8px 12px;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.8;background:var(--ad-error-bg);color:var(--ad-error);border:1px solid var(--ad-error-border)}
+.ad-flow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:8px 18px 6px;flex:none;border-bottom:1px solid var(--ad-border)}
+.ad-flow-step{display:flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;border:1px solid var(--ad-border);background:transparent;color:var(--ad-label-secondary);font-size:12px;cursor:pointer;white-space:nowrap}
+.ad-flow-step[data-state="confirmed"]{border-color:var(--ad-success);color:var(--ad-success)}
+.ad-flow-step[data-state="current"]{border-color:var(--ad-brand);color:var(--ad-brand);font-weight:600}
+.ad-flow-step[data-state="stale"]{border-color:var(--ad-warning-border);color:var(--ad-warn);background:var(--ad-warning-bg)}
 .ad-flow-step[data-state="pending"]{opacity:.72}
-.ad-flow-hint{font-size:12px;color:var(--dsw-alias-label-secondary,#8a8a8a)}
-.ad-flow-stale{margin:0 0 10px;padding:7px 10px;border-radius:8px;font-size:12px;line-height:1.8;background:var(--dsw-alias-bg-warning,#fffbe6);color:var(--dsw-alias-label-warning,#ad6800);border:1px solid var(--dsw-alias-border-warning,#ffe58f)}
-.ad-flow-detail{margin:8px 0 10px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l3,#e6e6e6);border-radius:10px;font-size:12.5px;line-height:1.8;display:flex;flex-direction:column;gap:6px}
+.ad-flow-hint{font-size:12px;color:var(--ad-label-secondary)}
+.ad-flow-stale{margin:0 0 10px;padding:7px 10px;border-radius:8px;font-size:12px;line-height:1.8;background:var(--ad-warning-bg);color:var(--ad-warn);border:1px solid var(--ad-warning-border)}
+.ad-flow-detail{margin:8px 0 10px;padding:10px 12px;border:1px solid var(--ad-border);border-radius:10px;font-size:12px;line-height:1.8;display:flex;flex-direction:column;gap:6px}
 .ad-flow-mode{font-size:12px;margin-left:auto}
-.ad-flow-msg{font-size:12px;color:var(--dsw-alias-label-warning,#ad6800)}
-.ad-err-box{margin:0 0 12px;padding:10px 12px;border-radius:10px;border:1px solid var(--dsw-alias-border-error,#ffccc7);background:var(--dsw-alias-bg-error,#fff1f0);display:flex;flex-direction:column;gap:4px}
-.ad-err-head{font-size:12.5px;font-weight:600;color:var(--dsw-alias-label-error,#d4380d)}
-.ad-err-next{font-size:12px;line-height:1.8;color:var(--dsw-alias-label-warning,#ad6800)}
+.ad-flow-msg{font-size:12px;color:var(--ad-warn)}
+.ad-err-box{margin:0 0 12px;padding:10px 12px;border-radius:10px;border:1px solid var(--ad-error-border);background:var(--ad-error-bg);display:flex;flex-direction:column;gap:4px}
+.ad-err-head{font-size:12px;font-weight:600;color:var(--ad-error)}
+.ad-err-next{font-size:12px;line-height:1.8;color:var(--ad-warn)}
 .ad-err-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
-.ad-empty-state{padding:14px 16px;border:1px dashed var(--dsw-alias-border-l3,#d9d9d9);border-radius:10px;line-height:1.9;color:var(--dsw-alias-label-secondary,#8a8a8a)}
-.ad-empty-title{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary,#1a1a1a);margin-bottom:4px}
-.ad-hint-next{font-size:12px;line-height:1.8;color:var(--dsw-alias-label-secondary,#8a8a8a);margin-top:4px}
+.ad-empty-state{padding:14px 16px;border:1px dashed var(--ad-border);border-radius:10px;line-height:1.9;font-size:13px;color:var(--ad-label-secondary)}
+.ad-empty-title{font-size:13px;font-weight:600;color:var(--ad-label-primary);margin-bottom:4px}
+.ad-hint-next{font-size:12px;line-height:1.8;color:var(--ad-label-secondary);margin-top:4px}
 .ad-review-finding{margin-bottom:10px}
 .ad-review-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px}
-.ad-sev{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--dsw-alias-border-l3,#e6e6e6)}
-.ad-sev[data-tone="error"]{background:var(--dsw-alias-bg-error,#fff1f0);color:var(--dsw-alias-label-error,#d4380d);border-color:var(--dsw-alias-border-error,#ffccc7)}
-.ad-sev[data-tone="warn"]{background:var(--dsw-alias-bg-warning,#fffbe6);color:var(--dsw-alias-label-warning,#ad6800);border-color:var(--dsw-alias-border-warning,#ffe58f)}
-.ad-sev[data-tone="info"]{background:var(--dsw-alias-bg-subtle,rgba(0,0,0,.03));color:var(--dsw-alias-label-secondary,#8a8a8a)}
-.ad-review-evidence{margin:4px 0;padding:6px 8px;border-left:2px solid var(--dsw-alias-border-brand,#1f6feb);background:var(--dsw-alias-bg-subtle,rgba(0,0,0,.03));font-size:12px;line-height:1.8;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow:auto}
+.ad-sev{font-size:12px;padding:1px 7px;border-radius:999px;border:1px solid var(--ad-border)}
+.ad-sev[data-tone="error"]{background:var(--ad-error-bg);color:var(--ad-error);border-color:var(--ad-error-border)}
+.ad-sev[data-tone="warn"]{background:var(--ad-warning-bg);color:var(--ad-warn);border-color:var(--ad-warning-border)}
+.ad-sev[data-tone="info"]{background:var(--ad-subtle-bg);color:var(--ad-label-secondary)}
+.ad-review-evidence{margin:4px 0;padding:6px 8px;border-left:2px solid var(--ad-brand);background:var(--ad-subtle-bg);font-size:12px;line-height:1.8;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow:auto}
 .ad-review-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
-.ad-evidence-highlight .ad-evidence-mark,mark.ad-evidence-mark{background:var(--dsw-alias-bg-warning,#fffbe6);color:inherit;padding:0 2px;border-radius:2px;border-bottom:1px solid var(--dsw-alias-border-warning,#ffe58f)}
+.ad-shot-extras{padding:8px 10px;border-radius:8px;background:var(--ad-subtle-bg);font-size:12px;line-height:1.9;color:var(--ad-label-secondary);white-space:pre-wrap;word-break:break-word}
+.ad-shot-extra{max-height:120px;overflow:auto}
+.ad-shot-extra strong{color:var(--ad-label-primary);margin-right:4px}
+.ad-groups{margin-top:10px;padding:8px 10px;border-radius:8px;background:var(--ad-subtle-bg)}
+.ad-group{padding:6px 0;border-top:1px solid var(--ad-divider);font-size:12px;line-height:1.8}
+.ad-group:first-child{border-top:none;padding-top:0}
+.ad-group-prompt{margin-top:4px;padding:6px 8px;border-radius:6px;background:var(--ad-bg-base);white-space:pre-wrap;word-break:break-word;max-height:140px;overflow:auto;font-size:12px;line-height:1.8;color:var(--ad-label-secondary)}
+.ad-evidence-highlight .ad-evidence-mark,mark.ad-evidence-mark{background:var(--ad-warning-bg);color:inherit;padding:0 2px;border-radius:2px;border-bottom:1px solid var(--ad-warning-border)}
 .ad-skeleton{display:flex;flex-direction:column;gap:10px;padding:6px 2px}
-.ad-skeleton-line{height:14px;border-radius:6px;background:var(--dsw-alias-bg-subtle,rgba(0,0,0,.06));animation:ad-skeleton-pulse 1.2s ease-in-out infinite}
+.ad-skeleton-line{height:14px;border-radius:6px;background:var(--ad-subtle-bg);animation:ad-skeleton-pulse 1.2s ease-in-out infinite}
 .ad-skeleton-line.w40{width:40%}.ad-skeleton-line.w60{width:60%}.ad-skeleton-line.w80{width:80%}.ad-skeleton-line.w90{width:90%}
 @keyframes ad-skeleton-pulse{0%,100%{opacity:.55}50%{opacity:1}}
-.ad-review-status{font-size:11.5px;color:var(--dsw-alias-label-success,#237804)}
+.ad-review-status{font-size:12px;color:var(--ad-success)}
+/* v0.11.5（task-4）：未保存离开守卫对话框 + 保存态（仅新增类，不改既有类） */
+.ad-save-state{font-size:12px;white-space:nowrap}
+.ad-tab-dirty{font-size:12px;margin-left:4px}
+.ad-modal-backdrop{position:fixed;inset:0;z-index:9999;isolation:isolate;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.4)}
+.ad-modal{width:100%;max-width:460px;box-sizing:border-box;display:flex;flex-direction:column;gap:10px;padding:16px 18px;border-radius:12px;border:1px solid var(--ad-border);background-color:var(--ad-bg-base);background-clip:padding-box;color:var(--ad-label-primary);box-shadow:0 12px 40px rgba(0,0,0,.28);word-break:break-word}
+.ad-modal-title{font-size:14px;font-weight:600}
+.ad-modal-desc{font-size:12px;line-height:1.8;color:var(--ad-label-secondary)}
+.ad-modal-desc strong{color:var(--ad-label-primary)}
+.ad-modal-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+/* v0.12.0（task-7）：宽屏版式 + IA（内容宽度/控件定宽/页签分组/危险按钮/表格空态/表单分组） */
+.ad-content{width:100%;max-width:1200px;margin:0 auto}
+.ad-list-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.ad-list-toolbar .ad-input{flex:1 1 320px;max-width:520px}
+.ad-cta{padding:7px 18px;font-weight:600}
+.ad-tab-groups{display:flex;align-items:center;flex-wrap:wrap;gap:6px 16px;flex:1;min-width:0}
+.ad-tab-group{display:flex;align-items:center;gap:2px;padding-right:12px;border-right:1px solid var(--ad-divider)}
+.ad-tab-group:last-child{border-right:0;padding-right:0}
+.ad-tab-group-label{font-size:12px;color:var(--ad-label-secondary);padding-right:4px;white-space:nowrap}
+.ad-tabs-more{display:none;position:relative;flex:none}
+.ad-tabs-more-panel{position:absolute;z-index:50;top:calc(100% + 4px);right:0;min-width:240px;max-width:min(560px,90vw);padding:8px;border:1px solid var(--ad-border);border-radius:10px;background:var(--ad-bg-base);box-shadow:0 12px 40px rgba(0,0,0,.22);display:flex;flex-wrap:wrap;gap:6px}
+.ad-tabpanel{min-width:0}
+.ad-btn-danger{border-color:var(--ad-error-border);color:var(--ad-error)}
+.ad-btn-danger:hover{background:var(--ad-error-bg)}
+.ad-table-empty{color:var(--ad-label-secondary);font-size:12px;padding:10px 6px;text-align:center}
+.ad-form-group{margin-bottom:16px;padding-bottom:4px;border-bottom:1px solid var(--ad-divider)}
+.ad-form-group:last-of-type{border-bottom:0;margin-bottom:0;padding-bottom:0}
+.ad-form-group > .ad-sec{margin:0 0 10px}
+.ad-field > .ad-area{max-width:760px}
+.ad-field > .ad-input{max-width:480px}
+.ad-field > .ad-input[type="number"]{max-width:120px}
+.ad-select{max-width:220px}
+.ad-flow-sep{color:var(--ad-label-secondary);font-size:12px;flex:none}
+@media (max-width:900px){
+  .ad-tab-groups{display:none}
+  .ad-tabs-more{display:block}
+  .ad-content{max-width:none}
+  /* v0.12.4（task-25 / M5-B）：窄窗间距/密度细节（仅 --ad-*） */
+  .ad-settings-grid{grid-template-columns:1fr}
+  .ad-field{flex-wrap:wrap}
+  .ad-field > label{width:auto;flex-basis:100%;padding-top:0}
+  .ad-modal-backdrop{padding:12px}
+}
+/* v0.12.1（task-8）：独立设置页 / 项目页设置浮层（复用同一 SettingsSection 组件；仅 --ad-*） */
+.ad-settings-page{display:flex;flex-direction:column;gap:12px;max-width:920px;min-width:0;color:var(--ad-label-primary)}
+.ad-settings-head{display:flex;flex-direction:column;gap:4px}
+.ad-settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px 12px}
+.ad-settings-overlay-panel{max-width:920px;max-height:85vh;overflow:auto;align-items:stretch;background-color:var(--ad-bg-base);isolation:isolate;z-index:1}
+.ad-settings-footer{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}
+.ad-settings-diag{display:flex;flex-direction:column;gap:4px}
+/* v0.12.1（task-17）：会话内 drama_check_consistency 工具卡（只读；仅 --ad-*） */
+.ad-toolview{display:flex;flex-direction:column;gap:6px;margin:4px 0;padding:8px 12px;box-sizing:border-box;max-width:100%;border:1px solid var(--ad-border);border-radius:10px;background:var(--ad-bg-base);color:var(--ad-label-primary);font-size:12px;line-height:1.8}
+.ad-toolview-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ad-toolview-title{font-weight:600}
+.ad-toolview-tool{font-size:12px;color:var(--ad-label-secondary)}
+.ad-toolview-badge{font-size:12px;padding:0 7px;border-radius:999px;border:1px solid var(--ad-border);color:var(--ad-label-secondary)}
+.ad-toolview-badge[data-state="preparing"],.ad-toolview-badge[data-state="running"]{color:var(--ad-warn);border-color:var(--ad-warning-border);background:var(--ad-warning-bg)}
+.ad-toolview-badge[data-state="ok"]{color:var(--ad-success);background:var(--ad-subtle-bg)}
+.ad-toolview-badge[data-state="error"],.ad-toolview-badge[data-state="stopped"]{color:var(--ad-error);border-color:var(--ad-error-border);background:var(--ad-error-bg)}
+.ad-toolview-args{font-size:12px;color:var(--ad-label-secondary)}
+.ad-toolview-hint{font-size:12px;color:var(--ad-label-secondary)}
+.ad-toolview-summary{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.ad-toolview-chip{font-size:12px;padding:0 7px;border-radius:999px;background:var(--ad-subtle-bg);border:1px solid var(--ad-border);color:var(--ad-label-secondary)}
+.ad-toolview-chip[data-tone="error"]{color:var(--ad-error);background:var(--ad-error-bg);border-color:var(--ad-error-border)}
+.ad-toolview-chip[data-tone="warn"]{color:var(--ad-warn);background:var(--ad-warning-bg);border-color:var(--ad-warning-border)}
+.ad-toolview-sev{font-size:12px;padding:0 6px;border-radius:6px;border:1px solid var(--ad-border);color:var(--ad-label-secondary)}
+.ad-toolview-sev[data-tone="error"]{color:var(--ad-error);border-color:var(--ad-error-border)}
+.ad-toolview-sev[data-tone="warn"]{color:var(--ad-warn);border-color:var(--ad-warning-border)}
+.ad-toolview-list{display:flex;flex-direction:column;gap:4px}
+.ad-toolview-issue{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;font-size:12px}
+.ad-toolview-issue-msg{word-break:break-word}
+.ad-toolview-where{font-size:12px;color:var(--ad-label-secondary)}
+.ad-toolview-deep{margin-top:2px;padding-top:6px;border-top:1px dashed var(--ad-divider);display:flex;flex-direction:column;gap:4px}
+.ad-toolview-sub{font-weight:600;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.ad-toolview-conclusion{font-size:12px}
+.ad-toolview-finding{display:flex;flex-direction:column;gap:2px;padding-left:8px;border-left:2px solid var(--ad-border);font-size:12px}
+.ad-toolview-finding-head{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
+.ad-toolview-dim{color:var(--ad-label-secondary)}
+.ad-toolview-evidence,.ad-toolview-suggestion{word-break:break-word;color:var(--ad-label-secondary)}
+.ad-toolview-next{font-size:12px;color:var(--ad-warn)}
+.ad-toolview-ok{color:var(--ad-success);font-size:12px}
+.ad-toolview-error-title{font-weight:600;color:var(--ad-error)}
+.ad-toolview-error-body,.ad-toolview-pre{white-space:pre-wrap;word-break:break-word;background:var(--ad-subtle-bg);border-radius:6px;padding:6px 8px;font-size:12px;line-height:1.8;max-height:160px;overflow:auto;color:var(--ad-label-secondary)}
+.ad-toolview-foot{border-top:1px solid var(--ad-divider);padding-top:6px;font-size:12px;color:var(--ad-label-secondary)}
+/* v0.12.4（task-24 / M5-A）：键盘可见焦点（仅 --ad-*；outline 不占布局，不影响既有像素断言） */
+.ad-shell :focus-visible,.ad-btn:focus-visible,.ad-tab:focus-visible,.ad-input:focus-visible,.ad-select:focus-visible,.ad-area:focus-visible,.ad-check:focus-visible{outline:2px solid var(--ad-brand);outline-offset:2px}
+.ad-tab:focus-visible{outline-offset:-2px}
+/* v0.13.1（task-33）：A 根因（token 块 body）+ B 视觉增强 v2 —— base 纯 token（必生效）+ enhanced 混色增强叠加 */
+/* 卡片：base = subtle 表面 + 官方边框 + ::after 描边环 + ::before 投影层（均不依赖混色） */
+.ad-list-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap;margin:16px 0 10px;border-bottom:1px solid var(--ad-divider)}
+.ad-source-row{padding-bottom:10px;border-bottom:1px solid var(--ad-divider)}
+.ad-list-toolbar{background:var(--ad-subtle-bg);border:1px solid var(--ad-border);border-radius:12px;padding:12px 14px;margin-bottom:12px}
+.ad-create-hero{background:var(--ad-subtle-bg);border:1px solid var(--ad-border);box-shadow:0 2px 8px var(--ad-border);border-radius:12px;padding:12px 14px}
+.ad-project-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(272px,1fr));gap:18px;margin-top:4px}
+.ad-project-card{position:relative;display:flex;flex-direction:column;min-width:0;background:var(--ad-subtle-bg);border:1px solid var(--ad-border);border-radius:12px;color:var(--ad-label-primary);transition:transform 160ms ease,border-color 160ms ease}
+.ad-project-card::before{content:"";position:absolute;inset:0;border-radius:12px;box-shadow:0 8px 20px var(--ad-label-primary);opacity:.1;z-index:-1;pointer-events:none}
+.ad-project-card::after{content:"";position:absolute;inset:0;border:1px solid var(--ad-label-primary);border-radius:12px;opacity:.2;pointer-events:none}
+.ad-project-card:hover{transform:translateY(-2px);border-color:var(--ad-brand)}
+.ad-project-card:active{transform:translateY(0)}
+.ad-project-card:focus-within{border-color:var(--ad-brand)}
+.ad-project-cover{position:relative;display:block;width:100%;height:162px;padding:0;border:0;border-radius:12px 12px 0 0;overflow:hidden;cursor:pointer;text-align:left;color:inherit;font:inherit;-webkit-appearance:none;appearance:none;background:var(--ad-bg-base)}
+@supports (aspect-ratio:16/9){.ad-project-cover{height:auto;aspect-ratio:16/9}}
+.ad-project-cover[data-cover="a"]{background:linear-gradient(135deg,var(--ad-brand) 0%,var(--ad-bg-base) 92%)}
+.ad-project-cover[data-cover="b"]{background:linear-gradient(135deg,var(--ad-warn) 0%,var(--ad-bg-base) 92%)}
+.ad-project-cover[data-cover="c"]{background:linear-gradient(135deg,var(--ad-error) 0%,var(--ad-bg-base) 92%)}
+.ad-project-cover::before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(95% 75% at 18% 0%,var(--ad-bg-base),transparent 62%),linear-gradient(to top,var(--ad-label-primary),transparent 58%);opacity:.4}
+.ad-project-cover::after{content:attr(data-initial);position:absolute;left:16px;bottom:12px;font-size:44px;line-height:1;font-weight:800;color:var(--ad-bg-base);pointer-events:none}
+.ad-project-cover:disabled{opacity:.6;cursor:default}
+.ad-project-badge{position:absolute;top:10px;right:10px;display:inline-flex;align-items:center;height:22px;padding:2px 9px;border-radius:999px;border:1px solid var(--ad-border);background:var(--ad-bg-base);color:var(--ad-label-secondary);font-size:12px;font-weight:600;line-height:1;white-space:nowrap}
+.ad-project-badge::before{content:"";display:inline-block;width:6px;height:6px;border-radius:999px;margin-right:6px;background:var(--ad-label-secondary)}
+.ad-project-badge[data-state="making"]{color:var(--ad-label-primary);border-color:var(--ad-warning-border)}
+.ad-project-badge[data-state="making"]::before{background:var(--ad-warn)}
+.ad-project-badge[data-state="ready"]{color:var(--ad-label-primary);border-color:var(--ad-success)}
+.ad-project-badge[data-state="ready"]::before{background:var(--ad-success)}
+.ad-project-chip{position:absolute;right:10px;bottom:10px;padding:2px 8px;border-radius:999px;border:1px solid var(--ad-border);background:var(--ad-bg-base);color:var(--ad-label-primary);font-size:12px;line-height:1.4;white-space:nowrap}
+.ad-project-body{display:flex;flex-direction:column;gap:8px;padding:14px 16px 16px;min-width:0}
+.ad-project-title{font-size:14px;font-weight:600;line-height:22px;color:var(--ad-label-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ad-project-meta{font-size:12px;line-height:18px;color:var(--ad-label-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ad-project-progress-wrap{display:flex;align-items:center;gap:8px;min-width:0}
+.ad-project-progress{flex:1;height:6px;min-width:40px;border-radius:999px;background:var(--ad-border);overflow:hidden}
+.ad-project-progress-bar{height:100%;border-radius:999px;background:var(--ad-brand);transition:width 160ms ease}
+.ad-project-progress-label{font-size:12px;color:var(--ad-label-secondary);white-space:nowrap}
+.ad-project-actions{display:flex;align-items:center;gap:8px;margin-top:2px}
+.ad-project-more{position:relative;margin-left:auto}
+.ad-project-more>summary{list-style:none;cursor:pointer}
+.ad-project-more>summary::-webkit-details-marker{display:none}
+.ad-project-more-panel{position:absolute;right:0;top:calc(100% + 6px);z-index:50;display:flex;flex-direction:column;gap:2px;min-width:170px;padding:6px;border:1px solid var(--ad-border);border-radius:10px;background:var(--ad-bg-base);box-shadow:0 2px 8px var(--ad-border)}
+.ad-project-more-item{display:block;width:100%;padding:6px 10px;border:0;border-radius:8px;background:transparent;color:inherit;font-size:12px;text-align:left;cursor:pointer}
+.ad-project-more-item:hover{background:var(--ad-hover-bg)}
+.ad-project-more-danger{color:var(--ad-error)}
+.ad-project-more-danger:hover{background:var(--ad-error-bg)}
+.ad-project-more-path{margin-top:2px;padding:4px 10px 2px;border-top:1px solid var(--ad-divider);color:var(--ad-label-secondary);font-size:12px;word-break:break-all}
+.ad-empty-poster{display:flex;align-items:center;gap:14px;padding:16px;border:1px solid var(--ad-border);border-radius:12px;background:var(--ad-subtle-bg)}
+.ad-empty-poster::before{content:"";flex:none;width:64px;height:44px;border-radius:8px;border:1px solid var(--ad-border);background:linear-gradient(135deg,var(--ad-brand),var(--ad-subtle-bg))}
+.ad-empty-poster>*{flex:1;min-width:0}
+.ad-empty-poster .ad-empty-state{border:0;padding:0;background:none;line-height:inherit}
+.ad-shared-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+.ad-shared-card{display:flex;align-items:center;gap:6px;padding:10px 12px;border:1px solid var(--ad-border);border-radius:10px;background:var(--ad-bg-base);color:var(--ad-label-primary);font-size:13px;text-align:left;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.ad-shared-card:hover{background:var(--ad-hover-bg);border-color:var(--ad-brand)}
+.ad-shared-empty{display:flex;align-items:center;gap:12px}
+.ad-shared-empty::before{content:"";flex:none;width:44px;height:34px;border-radius:6px;border:1px solid var(--ad-border);background:linear-gradient(135deg,var(--ad-brand),var(--ad-subtle-bg))}
+.ad-shared-empty>*{flex:1;min-width:0}
+.ad-project-skeleton-card{display:flex;flex-direction:column;gap:8px;padding:0 0 12px;border:1px solid var(--ad-border);border-radius:12px;overflow:hidden}
+.ad-project-skeleton-cover{height:162px;background:var(--ad-subtle-bg);animation:ad-skeleton-pulse 1.2s ease-in-out infinite}
+.ad-project-skeleton-card .ad-skeleton-line{margin:0 14px}
+/* 共享资料区独立表面（区块层次 V4） */
+#ad-shared-surface{background:var(--ad-subtle-bg);border:1px solid var(--ad-border);border-radius:12px;padding:14px 16px;margin-top:14px}
+@media (prefers-reduced-motion: reduce){.ad-project-card,.ad-project-cover,.ad-project-progress-bar{transition:none}.ad-project-card:hover,.ad-project-card:active{transform:none}}
+@media (max-width:560px){.ad-project-grid{grid-template-columns:1fr}}
+/* enhanced：仅当宿主支持混色时叠加（base 已保证降级场景可见） */
+@supports (color: color-mix(in srgb, red 1%, blue)){
+  .ad-project-card{background:color-mix(in srgb,var(--ad-label-primary) 6%,var(--ad-bg-base));border-color:color-mix(in srgb,var(--ad-brand) 22%,var(--ad-border));box-shadow:0 1px 2px color-mix(in srgb,var(--ad-label-primary) 8%,transparent),0 10px 26px color-mix(in srgb,var(--ad-label-primary) 12%,transparent)}
+  .ad-project-card::after{opacity:.16}
+  .ad-project-card:hover{border-color:color-mix(in srgb,var(--ad-brand) 34%,var(--ad-border));box-shadow:0 14px 32px color-mix(in srgb,var(--ad-label-primary) 16%,transparent)}
+  .ad-project-cover[data-cover="a"]{background:linear-gradient(135deg,color-mix(in srgb,var(--ad-brand) 78%,var(--ad-bg-base)) 0%,color-mix(in srgb,var(--ad-brand) 42%,var(--ad-bg-base)) 55%,var(--ad-bg-base) 100%)}
+  .ad-project-cover[data-cover="b"]{background:linear-gradient(135deg,color-mix(in srgb,var(--ad-warn) 72%,var(--ad-bg-base)) 0%,color-mix(in srgb,var(--ad-warn) 30%,var(--ad-bg-base)) 60%,var(--ad-bg-base) 100%)}
+  .ad-project-cover[data-cover="c"]{background:linear-gradient(135deg,color-mix(in srgb,var(--ad-error) 68%,var(--ad-bg-base)) 0%,color-mix(in srgb,var(--ad-error) 26%,var(--ad-bg-base)) 60%,var(--ad-bg-base) 100%)}
+  .ad-project-cover::before{opacity:.34;background:radial-gradient(95% 75% at 18% 0%,color-mix(in srgb,var(--ad-bg-base) 55%,transparent),transparent 62%),linear-gradient(to top,color-mix(in srgb,var(--ad-label-primary) 42%,transparent),transparent 58%)}
+  .ad-project-cover::after{text-shadow:0 2px 8px color-mix(in srgb,var(--ad-label-primary) 45%,transparent)}
+  .ad-project-badge[data-state="making"]{background:color-mix(in srgb,var(--ad-warn) 16%,var(--ad-bg-base))}
+  .ad-project-badge[data-state="ready"]{background:color-mix(in srgb,var(--ad-success) 14%,var(--ad-bg-base))}
+  .ad-project-progress{background:color-mix(in srgb,var(--ad-label-primary) 14%,transparent)}
+  .ad-project-progress-bar{box-shadow:0 0 6px color-mix(in srgb,var(--ad-brand) 35%,transparent)}
+  .ad-create-hero{background:color-mix(in srgb,var(--ad-brand) 6%,var(--ad-bg-base));box-shadow:0 2px 10px color-mix(in srgb,var(--ad-label-primary) 10%,transparent)}
+  #ad-shared-surface{background:color-mix(in srgb,var(--ad-label-primary) 4%,var(--ad-bg-base))}
+  .ad-empty-poster::before{background:linear-gradient(135deg,color-mix(in srgb,var(--ad-brand) 34%,var(--ad-subtle-bg)),var(--ad-subtle-bg))}
+}/* v0.13.2（task-34 / M6-0b）：项目页/设置页视觉层级（base 纯 token + @supports 混色 enhanced；0 hex / 0 新 token / 业务 dsw=0） */
+/* 1) 项目页页头 */
+.ad-head{background:var(--ad-bg-base);border-bottom:1px solid var(--ad-divider);padding:11px 18px;gap:10px}
+.ad-head .ad-title{font-size:16px;font-weight:600}
+.ad-head .ad-sub{font-size:12px;color:var(--ad-label-secondary)}
+/* 2) 唯一主进度：胶片进度条（不新增第二条） */
+.ad-flow{background:var(--ad-subtle-bg);border:1px solid var(--ad-border);border-radius:12px;padding:10px 14px;margin:0 0 12px;flex-wrap:wrap;gap:6px}
+.ad-flow-step{border-radius:8px;padding:5px 12px;border:1px solid var(--ad-border);background:var(--ad-bg-base);font-size:12px;transition:background 160ms ease,border-color 160ms ease,color 160ms ease}
+.ad-flow-step[data-state="current"]{border-color:var(--ad-brand);color:var(--ad-brand);font-weight:600;background:var(--ad-bg-base)}
+.ad-flow-step[data-state="confirmed"]{border-color:var(--ad-success);color:var(--ad-success)}
+.ad-flow-step[data-state="stale"]{border-color:var(--ad-warning-border);background:var(--ad-warning-bg);color:var(--ad-warn)}
+.ad-flow-step[data-state="pending"]{opacity:.72}
+.ad-flow-sep{font-size:12px;color:var(--ad-label-secondary);margin:0 2px}
+.ad-flow-hint{font-size:12px;color:var(--ad-label-secondary);margin-left:4px}
+.ad-flow-detail{border:1px solid var(--ad-border);border-radius:10px;background:var(--ad-bg-base);padding:10px 12px}
+/* 3) 页签组（4 组 15 页签；roving tabindex/aria 不动） */
+.ad-tabs{border-bottom:1px solid var(--ad-divider);gap:8px;margin:2px 0 12px}
+.ad-tab{padding:8px 12px;border-radius:8px 8px 0 0;opacity:.72;transition:background 160ms ease,opacity 160ms ease}
+.ad-tab:hover{background:var(--ad-hover-bg);opacity:1}
+.ad-tab[data-on="1"]{opacity:1;font-weight:600;color:var(--ad-label-primary);border-bottom:2px solid var(--ad-brand)}
+.ad-tab-group{gap:4px}
+.ad-tab-group-label{font-size:12px;color:var(--ad-label-secondary)}
+/* 4) 分区卡（契约/总览/人物/世界观/剧本/分镜/审读等页内区块） */
+.ad-sec{font-size:14px;font-weight:600;margin:14px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--ad-divider)}
+.ad-sec:first-child{margin-top:0}
+.ad-box{background:var(--ad-subtle-bg);border:1px solid var(--ad-border);border-radius:12px;padding:14px 16px;box-shadow:0 1px 2px var(--ad-border)}
+.ad-box .ad-box{background:var(--ad-bg-base)}
+.ad-toolcards{gap:14px}
+.ad-toolcard{background:var(--ad-subtle-bg);border:1px solid var(--ad-border);border-radius:12px;padding:14px 16px;box-shadow:0 1px 2px var(--ad-border)}
+.ad-toolcard[data-tone="warn"]{border-color:var(--ad-warning-border)}
+.ad-toolcard[data-tone="error"]{border-color:var(--ad-error-border)}
+.ad-review-finding{margin-bottom:10px;background:var(--ad-bg-base);border:1px solid var(--ad-border);border-left:2px solid var(--ad-border);border-radius:12px;padding:14px 16px;box-shadow:0 1px 2px var(--ad-border)}
+.ad-review-finding[data-severity="error"]{border-left-color:var(--ad-error)}
+.ad-review-finding[data-severity="warn"]{border-left-color:var(--ad-warn)}
+.ad-review-finding[data-severity="info"]{border-left-color:var(--ad-brand)}
+/* 5) 表格：表头层次 / 行 hover / 分隔线 / 粘性表头（滚动容器内） */
+.ad-table th,.ad-table td{border-color:var(--ad-divider);padding:5px 8px}
+.ad-table th{background:var(--ad-subtle-bg);font-weight:600}
+.ad-table thead th{position:sticky;top:0;z-index:1}
+.ad-table tbody tr:hover{background:var(--ad-hover-bg)}
+.ad-table caption{font-size:12px;color:var(--ad-label-secondary)}
+.ad-table-empty{padding:18px 8px;font-size:12px;color:var(--ad-label-secondary)}
+/* 6) 设置页：分组卡 / 表单对齐 / sticky footer / 诊断折叠 */
+.ad-settings-page{gap:14px;padding-bottom:72px}
+.ad-form-group{background:var(--ad-subtle-bg);border:1px solid var(--ad-border);border-radius:12px;padding:14px 16px;margin-bottom:14px;box-shadow:0 1px 2px var(--ad-border)}
+.ad-form-group:last-of-type{margin-bottom:0}
+.ad-form-group > .ad-sec{margin:0 0 10px;padding-bottom:8px;border-bottom:1px solid var(--ad-divider)}
+.ad-form-group > .ad-sec:first-child{margin-top:0}
+.ad-settings-grid{gap:10px 14px;margin-bottom:8px}
+.ad-field > label{font-size:13px;color:var(--ad-label-secondary)}
+.ad-input,.ad-select,.ad-area{background:var(--ad-bg-base);border:1px solid var(--ad-border);border-radius:8px}
+.ad-input:focus,.ad-select:focus,.ad-area:focus{outline:2px solid var(--ad-brand);outline-offset:1px;border-color:var(--ad-brand)}
+.ad-settings-footer{position:sticky;bottom:0;z-index:20;display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;background:var(--ad-bg-base);border-top:1px solid var(--ad-divider);padding:12px 16px;margin-top:8px}
+.ad-settings-footer > .ad-sub{order:2;flex:1 1 100%;font-size:12px;color:var(--ad-label-secondary);margin:0}
+.ad-form-group.ad-settings-diag{display:block;padding:0;overflow:hidden}
+.ad-form-group.ad-settings-diag > .ad-sec{margin:0;padding:0;border:0}
+.ad-settings-diag-summary{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--ad-label-primary);cursor:pointer;padding:12px 16px;list-style:none;margin:0}
+.ad-settings-diag-summary::-webkit-details-marker{display:none}
+.ad-settings-diag-summary::before{content:"▸";color:var(--ad-label-secondary);font-size:12px;line-height:1}
+.ad-settings-diag[open] .ad-settings-diag-summary::before{content:"▾"}
+.ad-settings-diag[open] .ad-settings-diag-summary{border-bottom:1px solid var(--ad-divider)}
+.ad-settings-diag-body{padding:4px 16px 14px}
+.ad-settings-diag-body > .ad-sec:first-child{margin-top:4px}
+.ad-settings-diag-rows{display:flex;flex-direction:column;gap:4px}
+@media (max-width:900px){
+  .ad-flow{padding:8px 12px}
+  .ad-settings-footer{padding:10px 12px}
+  .ad-settings-page{padding-bottom:84px}
+  .ad-table th,.ad-table td{padding:4px 6px}
+}
+@media (max-width:560px){
+  .ad-flow-step{padding:4px 10px}
+  .ad-settings-footer{justify-content:flex-start}
+  .ad-section-card,.ad-form-group{padding:12px}
+}
+@media (prefers-reduced-motion: reduce){.ad-flow-step,.ad-tab{transition:none}}
+/* enhanced：仅支持混色时叠加（base 已保证降级可见） */
+@supports (color: color-mix(in srgb, red 1%, blue)){
+  .ad-flow-step[data-state="current"]{background:color-mix(in srgb,var(--ad-brand) 10%,var(--ad-bg-base));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ad-brand) 35%,transparent)}
+  .ad-flow-step[data-state="confirmed"]{background:color-mix(in srgb,var(--ad-success) 8%,var(--ad-bg-base))}
+  .ad-tab[data-on="1"]{background:color-mix(in srgb,var(--ad-brand) 6%,transparent)}
+  .ad-box,.ad-toolcard,.ad-review-finding,.ad-form-group{box-shadow:0 1px 2px color-mix(in srgb,var(--ad-label-primary) 8%,transparent),0 4px 12px color-mix(in srgb,var(--ad-label-primary) 5%,transparent)}
+  .ad-input:focus,.ad-select:focus,.ad-area:focus{outline:2px solid color-mix(in srgb,var(--ad-brand) 60%,transparent)}
+  .ad-settings-footer{box-shadow:0 -6px 16px color-mix(in srgb,var(--ad-label-primary) 6%,transparent)}
+}
+/* DEF-DARK-SELECT-01（task-34 追加，P1）：原生控件浅/深可读 —— select/option/date/number/checkbox/radio/textarea；0 hex / 0 新 token / 业务 dsw=0 */
+select.ad-select{color:var(--ad-label-primary);background-color:var(--ad-bg-base)}
+select.ad-select option,select.ad-select optgroup{color:var(--ad-label-primary);background-color:var(--ad-bg-base)}
+select.ad-select option:checked,select.ad-select option:hover{color:var(--ad-label-primary);background-color:var(--ad-hover-bg)}
+.ad-input[type="date"],.ad-input[type="time"],.ad-input[type="number"],.ad-input[type="search"],.ad-input[type="url"],.ad-input[type="email"],.ad-input[type="password"],.ad-input[type="checkbox"],.ad-input[type="radio"],.ad-area{color:var(--ad-label-primary);background-color:var(--ad-bg-base)}
+.ad-input[type="checkbox"],.ad-input[type="radio"],.ad-check{accent-color:var(--ad-brand)}
+.ad-shell,.ad-settings-page,.ad-settings-overlay-panel,.ad-toolview{color-scheme:light}
+body[data-ds-dark-theme] .ad-shell,body[data-ds-dark-theme] .ad-settings-page,body[data-ds-dark-theme] .ad-settings-overlay-panel,body[data-ds-dark-theme] .ad-toolview,body[data-ds-dark-theme] select.ad-select,body[data-ds-dark-theme] .ad-input,body[data-ds-dark-theme] .ad-area{color-scheme:dark}
+body[data-ds-dark-theme] select.ad-select option,body[data-ds-dark-theme] select.ad-select optgroup{color:var(--ad-label-primary);background-color:var(--ad-bg-base)}
+.ad-select{color:var(--ad-label-primary);background-color:var(--ad-bg-base);color-scheme:light}
+.ad-select option,.ad-select optgroup{color:var(--ad-label-primary);background-color:var(--ad-bg-base)}
+.ad-select option:checked,.ad-select option:hover{color:var(--ad-label-primary);background-color:var(--ad-hover-bg)}
+body[data-ds-dark-theme] .ad-select{color-scheme:dark}
+/* DEF-DARK-SELECT-01 覆盖补强：全部 20 处 select 全覆盖（含无 class 的 7 处；作用域按插件容器） */
+.ad-shell select,.ad-settings-page select,.ad-settings-overlay-panel select,.ad-toolview select{color:var(--ad-label-primary);background-color:var(--ad-bg-base);color-scheme:light}
+.ad-shell select option,.ad-shell select optgroup,.ad-settings-page select option,.ad-settings-page select optgroup,.ad-settings-overlay-panel select option,.ad-settings-overlay-panel select optgroup,.ad-toolview select option,.ad-toolview select optgroup{color:var(--ad-label-primary);background-color:var(--ad-bg-base)}
+.ad-shell select option:checked,.ad-settings-page select option:checked,.ad-settings-overlay-panel select option:checked,.ad-toolview select option:checked{background-color:var(--ad-hover-bg)}
+body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-page select,body[data-ds-dark-theme] .ad-settings-overlay-panel select,body[data-ds-dark-theme] .ad-toolview select{color-scheme:dark}
+/* P2（task-34 并入）：人物卡删除文字按钮 → 图标按钮（.ad-icon-btn；0 hex/0 新 token） */
+.ad-icon-btn{min-width:28px;min-height:28px;padding:4px;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;background:transparent;border:0;color:var(--ad-label-secondary);cursor:pointer}
+.ad-icon-btn:hover{color:var(--ad-error);background:var(--ad-error-bg)}
+.ad-icon-btn:focus-visible{outline:2px solid var(--ad-brand);outline-offset:2px}
+.ad-icon-btn:disabled{opacity:.5;cursor:default}/* v0.13.3（task-35 / M6-0c）：统一图标按钮 + DEV-ICON-HOVER-BG 修复 + 空态图形 + 微交互（纯追加；0 hex / 0 新 token / 业务 dsw=0） */
+/* 2) 图标按钮：DEV-ICON-HOVER-BG 修复（danger (0,4,0) 压过 .ad-btn:not(.ad-primary):hover (0,3,0)） */
+.ad-btn.ad-icon-btn:hover{color:var(--ad-label-primary);background:var(--ad-hover-bg)}
+.ad-btn.ad-icon-btn[data-tone="danger"]:hover,.ad-btn.ad-icon-btn[data-tone="danger"]:focus-visible{color:var(--ad-error);background:var(--ad-error-bg)}
+.ad-btn.ad-icon-btn:disabled:hover{color:var(--ad-label-secondary);background:transparent}
+.ad-icon-btn{transition:color 120ms ease,background-color 120ms ease}
+.ad-icon-btn.ad-icon-btn-sm{min-width:24px;min-height:24px;padding:2px}
+.ad-btn.ad-icon-btn:focus-visible,.ad-btn.ad-icon-btn.ad-icon-btn-sm:focus-visible{outline:2px solid var(--ad-brand);outline-offset:2px}
+.ad-icon-btn>svg,.ad-btn>svg{flex:none;vertical-align:middle}
+.ad-project-more>summary{display:inline-flex;align-items:center;justify-content:center}
+.ad-project-more-item{display:flex;align-items:center;gap:6px}
+.ad-project-more-path{display:flex;align-items:center;gap:6px}
+/* 3) 空态图形（CSS-only；emptyState 源码/文案/14 调用点不动；token 绘制，无图片/emoji 依赖） */
+.ad-empty-graphic{flex:none;width:52px;height:52px;position:relative;box-sizing:border-box;border:1px solid var(--ad-border);border-radius:10px;background:var(--ad-subtle-bg);pointer-events:none}
+.ad-empty-graphic::before,.ad-empty-graphic::after{content:"";position:absolute;border-radius:3px;background:var(--ad-label-secondary);opacity:.3}
+.ad-empty-graphic::before{left:8px;right:8px;top:12px;height:2px}
+.ad-empty-graphic::after{left:12px;right:12px;bottom:12px;height:14px;border:1px solid var(--ad-label-secondary);background:transparent}
+.ad-empty-graphic[data-graphic="film"]::after{left:10px;right:10px;height:20px;border-width:2px}
+.ad-empty-graphic[data-graphic="table"]::before{top:12px;height:1px;box-shadow:0 7px 0 var(--ad-label-secondary),0 14px 0 var(--ad-label-secondary)}
+.ad-empty-graphic[data-graphic="table"]::after{display:none}
+.ad-empty-poster::before{width:52px;height:52px;border-radius:10px;border:1px solid var(--ad-border);background:linear-gradient(135deg,var(--ad-brand),var(--ad-subtle-bg));pointer-events:none}
+.ad-shared-empty::before{width:52px;height:52px;border-radius:10px;border:1px solid var(--ad-border);background:linear-gradient(135deg,var(--ad-brand),var(--ad-subtle-bg));pointer-events:none}
+.ad-table-empty::before{content:"";display:block;width:52px;height:52px;margin:2px auto 8px;box-sizing:border-box;border:1px solid var(--ad-border);border-radius:10px;background:var(--ad-subtle-bg);pointer-events:none;vertical-align:middle}
+.ad-table-empty::after{display:none}
+/* 4) 微交互：仅颜色/背景/边框/阴影，无布局位移 */
+.ad-btn{transition:background-color 120ms ease,border-color 120ms ease,color 120ms ease}
+.ad-table tbody tr{transition:background-color 120ms ease}
+.ad-project-more-item,.ad-project-more-path{transition:background-color 120ms ease,color 120ms ease}
+@media (prefers-reduced-motion: reduce){
+  .ad-btn,.ad-icon-btn,.ad-table tbody tr,.ad-project-more-item,.ad-project-more-path{transition:none}
+}
+/* enhanced：仅支持混色时叠加空态图形细节（base 已可见） */
+@supports (color: color-mix(in srgb, red 1%, blue)){
+  .ad-empty-graphic{background:color-mix(in srgb,var(--ad-label-primary) 4%,var(--ad-bg-base))}
+  .ad-empty-poster::before,.ad-shared-empty::before,.ad-table-empty::before{background:linear-gradient(135deg,color-mix(in srgb,var(--ad-brand) 22%,var(--ad-subtle-bg)),var(--ad-subtle-bg))}
+  .ad-empty-graphic::before{background:color-mix(in srgb,var(--ad-label-secondary) 55%,transparent)}
+}
+/* V16 空态图形形状语言细化（visual 预检建议；纯追加/0 hex/0 新 token/不改 DOM/emptyState；CSS-only） */
+.ad-table-empty::before{background-image:repeating-linear-gradient(to bottom,color-mix(in srgb,var(--ad-label-secondary) 45%,transparent) 0 1px,transparent 1px 7px);background-size:24px 21px;background-position:14px 16px;background-repeat:no-repeat}
+.ad-empty-poster::before{background-image:repeating-linear-gradient(to right,var(--ad-bg-base) 0 3px,transparent 3px 9px),linear-gradient(135deg,var(--ad-brand),var(--ad-subtle-bg));background-size:auto 44px,auto;background-position:4px 4px,0 0;background-repeat:no-repeat;box-shadow:inset 0 0 0 1px var(--ad-border)}
+.ad-shared-empty::before{background-image:linear-gradient(to right,var(--ad-label-secondary) 0 40%,transparent 40%),linear-gradient(135deg,var(--ad-brand),var(--ad-subtle-bg));background-size:18px 6px,auto;background-position:6px 5px,0 0;background-repeat:no-repeat}/* v0.14.0（task-38 / M6-1 C 路径）：交给 Agent 入口 + 交接弹窗指令预览（纯追加；0 hex / 0 新 token / 业务 dsw=0） */
+.ad-tabs-agent{display:flex;align-items:center;margin-left:auto;flex:none;padding-left:8px}
+.ad-tabs-agent .ad-btn{display:inline-flex;align-items:center;gap:6px}
+.ad-agent-label{white-space:nowrap}
+.ad-agent-entry{display:inline-flex;align-items:center;gap:6px}
+.ad-agent-instr{display:flex;flex-direction:column;gap:4px}
+.ad-agent-instr .ad-area{width:100%;min-height:96px;max-height:200px;font-family:Consolas,Menlo,monospace;font-size:12px;line-height:1.7;overflow:auto;resize:vertical;box-sizing:border-box}
+@media (max-width:560px){
+  .ad-tabs-agent .ad-agent-label{display:none}
+  .ad-agent-instr .ad-area{max-height:160px}
+}/* v0.15.0（task-39 / M6-2）：页头「下一步」CTA（纯追加；0 hex / 0 新 token / 业务 dsw=0） */
+.ad-next-step{display:inline-flex;align-items:center;gap:10px;flex:none;min-width:0}
+.ad-next-cta{display:inline-flex;align-items:center;gap:6px}
+.ad-next-cta>span{white-space:nowrap}
+.ad-next-label{max-width:160px;overflow:hidden;text-overflow:ellipsis}
+.ad-next-label-short{display:none}
+.ad-next-cta[aria-disabled="true"]{opacity:.5;cursor:default}
+.ad-next-alt{display:inline-flex;align-items:center;padding:0;border:0;background:transparent;color:var(--ad-label-secondary);font-size:12px;cursor:pointer;white-space:nowrap}
+.ad-next-alt:hover{color:var(--ad-label-primary);text-decoration:underline}
+.ad-next-hint{font-size:12px;color:var(--ad-label-secondary);max-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ad-next-chip{font-size:12px;line-height:1.4;padding:2px 8px;border-radius:999px;background:var(--ad-subtle-bg);color:var(--ad-label-secondary);border:1px solid var(--ad-border);white-space:nowrap}
+.ad-next-chip[data-tone="warn"]{background:var(--ad-warning-bg);color:var(--ad-warn);border-color:var(--ad-warning-border)}
+.ad-next-chip[data-tone="success"]{background:var(--ad-subtle-bg);color:var(--ad-success);border-color:var(--ad-border)}
+@media (max-width:900px){.ad-next-hint{display:none}}
+@media (max-width:560px){.ad-next-label{display:none}.ad-next-label-short{display:inline}.ad-next-chip{display:none}.ad-next-alt{display:none}.ad-next-cta>span{max-width:none}}
 `
 
     function Styles() {
@@ -956,7 +1697,151 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /* ---------------------------------------------- v0.13.3（task-35 / M6-0c）：统一图标 */
+    const ICON_PATHS = {
+      trash: 'M2.5 4.2h11M6 4.2V2.9c0-.5.4-.9.9-.9h2.2c.5 0 .9.4.9.9v1.3M4.2 4.2l.5 8.6c0 .6.5 1 1.1 1h4.4c.6 0 1.1-.4 1.1-1l.5-8.6M6.6 6.8v4.4M9.4 6.8v4.4',
+      ellipsis: 'M3.5 8h.01M8 8h.01M12.5 8h.01',
+      pencil: 'M11.3 2.8l1.9 1.9-7.6 7.6H3.7v-1.9l7.6-7.6zM10.2 3.9l1.9 1.9',
+      refresh: 'M13.4 8a5.4 5.4 0 1 1-1.7-3.9M13.4 2.6v3h-3',
+      folder: 'M2.5 4.6h3.8l1.2 1.4h5.9v5.9a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5.6a1 1 0 0 1 1-1z',
+      plus: 'M8 3.2v9.6M3.2 8h9.6',
+      chevron: 'M6 4l4 4-4 4',
+      send: 'M13.5 2.5L2.5 7.17l4.83 1.83L9.5 14.5l5-12zM6.5 8.8L13 3',
+    }
+    function icon(name) {
+      return h('svg', {
+        width: 16,
+        height: 16,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        stroke: 'currentColor',
+        'stroke-width': 1.5,
+        'stroke-linecap': 'round',
+        'stroke-linejoin': 'round',
+        'aria-hidden': 'true',
+        focusable: 'false',
+      }, h('path', { d: ICON_PATHS[name] || ICON_PATHS.ellipsis }))
+    }
+
     /* ------------------------------------------------------------ 通用控件 */
+
+    /* ------------------------------------ v0.14.0（task-38 / M6-1 C 路径）：交接指令生成 */
+    const HANDOFF_CHAR_LIMIT = 2000
+    const HANDOFF_BYTE_LIMIT = 4096
+    const HANDOFF_TRUNCATED_SUFFIX = '（已截断：其余上下文未包含）'
+    function handoffBasename(pathValue) {
+      const text = String(pathValue == null ? '' : pathValue).trim()
+      const parts = text.split(/[\\/]+/).filter(Boolean)
+      return parts.length ? parts[parts.length - 1] : '（未知目录）'
+    }
+    function handoffClipLine(value, max) {
+      const text = String(value == null ? '' : value).replace(/\s+/g, ' ').trim()
+      const limit = max || 120
+      return text.length > limit ? text.slice(0, limit) + '…' : text
+    }
+    function handoffSummaryLinesOf(tabKey, data) {
+      const d = data || {}
+      const lines = []
+      const push = (label, value) => {
+        const text = handoffClipLine(value, 120)
+        if (text) lines.push(label + '：' + text)
+      }
+      if (tabKey === 'contract') {
+        const c = d.contract || {}
+        push('平台 / 受众', [c.platform, c.audience].filter(Boolean).join(' / '))
+        if (c.targetEpisodes) push('目标集数', c.targetEpisodes)
+        if (Array.isArray(c.episodeDurationSec) && c.episodeDurationSec.length) push('单集时长', c.episodeDurationSec.join('–') + ' 秒')
+        if (c.orientation) push('画幅', c.orientation === 'portrait' ? '竖屏' : c.orientation === 'landscape' ? '横屏' : c.orientation)
+      } else if (tabKey === 'outline') {
+        if (Array.isArray(d.rows) && d.rows.length) {
+          push('总纲行数', d.rows.length)
+          const titles = d.rows.slice(0, 3).map((row) => String((row && row.title) || '').trim()).filter(Boolean)
+          if (titles.length) push('前几行标题', titles.join(' / '))
+        } else push('总纲', '尚无行（可在交接后让 Agent 协助起草）')
+      } else if (tabKey === 'characters') {
+        const list = Array.isArray(d.characters) ? d.characters : []
+        push('角色数', list.length)
+        const names = list.slice(0, 8).map((card) => String((card && card.name) || '').trim()).filter(Boolean)
+        if (names.length) push('角色名', names.join('、'))
+      } else if (tabKey === 'world') {
+        const list = Array.isArray(d.world) ? d.world : []
+        push('世界观条目数', list.length)
+        const names = list.slice(0, 8).map((entry) => String((entry && (entry.name || entry.title || entry.key)) || '').trim()).filter(Boolean)
+        if (names.length) push('条目', names.join('、'))
+      } else if (tabKey === 'episode') {
+        const list = Array.isArray(d.episodes) ? d.episodes : []
+        push('已建集数', list.length)
+        if (d.episodeOrder != null) push('当前集', '第' + String(d.episodeOrder) + '集')
+        push('当前集正文摘要', handoffClipLine(String(d.episodeText || '').slice(0, 200), 200) || '（未载入正文）')
+      } else if (tabKey === 'storyboard') {
+        push('分镜镜头数', Array.isArray(d.shots) ? d.shots.length : 0)
+      } else if (tabKey === 'dialogue') {
+        push('台词条目数', Array.isArray(d.dialogue) ? d.dialogue.length : (d.dialogue && typeof d.dialogue === 'object' ? Object.keys(d.dialogue).length : 0))
+      } else if (tabKey === 'assets') {
+        push('素材数', Array.isArray(d.assets) ? d.assets.length : 0)
+      } else if (tabKey === 'memory') {
+        push('记忆条目数', Array.isArray(d.memory) ? d.memory.length : 0)
+      } else if (tabKey === 'drafts') {
+        push('草稿数', Array.isArray(d.draftList) ? d.draftList.length : 0)
+      } else if (tabKey === 'ledger') {
+        const ledger = d.ledger
+        push('账本', ledger && typeof ledger === 'object' ? (Array.isArray(ledger) ? ledger.length + ' 条' : '已加载（明细见项目文件）') : '未加载')
+      } else if (tabKey === 'generate') {
+        push('生成任务数', Array.isArray(d.genTasks) ? d.genTasks.length : 0)
+      } else if (tabKey === 'check') {
+        const report = d.report || d.reviewReport
+        if (report && Array.isArray(report.findings)) push('审读发现', report.findings.length + ' 条')
+        else push('审读报告', '尚未生成')
+        push('定稿记录', Array.isArray(d.exported) ? d.exported.length + ' 条' : (Array.isArray(d.finalized) ? d.finalized.length + ' 条' : '未加载'))
+      } else if (tabKey === 'tree') {
+        push('目录树', d.tree ? '已加载（文件内容由 Agent 在项目中读取）' : '未加载')
+      } else {
+        push('页签', String(tabKey || ''))
+      }
+      return lines.slice(0, 8)
+    }
+    function handoffWithinLimits(text) {
+      const value = String(text == null ? '' : text)
+      if (value.length > HANDOFF_CHAR_LIMIT) return false
+      try {
+        if (typeof TextEncoder === 'function' && new TextEncoder().encode(value).length > HANDOFF_BYTE_LIMIT) return false
+      } catch { /* 无 TextEncoder 时按字符上限 */ }
+      return true
+    }
+    function truncateHandoff(text) {
+      const full = String(text == null ? '' : text)
+      if (handoffWithinLimits(full)) return full
+      const suffix = HANDOFF_TRUNCATED_SUFFIX
+      let body = full.slice(0, Math.max(0, HANDOFF_CHAR_LIMIT - suffix.length))
+      try {
+        if (typeof TextEncoder === 'function') {
+          const encoder = new TextEncoder()
+          while (body.length > 0 && encoder.encode(body + suffix).length > HANDOFF_BYTE_LIMIT) {
+            body = body.slice(0, Math.max(0, body.length - Math.max(1, Math.ceil(body.length / 50))))
+          }
+        }
+      } catch { /* 无 TextEncoder 时仅字符上限 */ }
+      return body + suffix
+    }
+    function buildHandoffInstruction(args) {
+      const a = args || {}
+      const title = handoffClipLine(a.title, 120) || '（未命名项目）'
+      const dir = handoffBasename(a.sourcePath)
+      const tabLabel = handoffClipLine(a.tabLabel, 40) || handoffClipLine(a.tab, 40) || '当前页签'
+      const lines = Array.isArray(a.summaryLines) ? a.summaryLines : []
+      const parts = [
+        '你是短剧模式 Agent。请接手以下短剧项目的下一步工作：',
+        '项目：《' + title + '》',
+        '目录：' + dir,
+        '当前页签：' + tabLabel,
+        '任务：请先阅读该项目的相关文件，围绕「' + tabLabel + '」给出可执行的下一步建议与修改计划（先不要直接改文件）。',
+        '必要上下文摘要：',
+      ]
+      if (lines.length) lines.forEach((line) => parts.push('- ' + handoffClipLine(line, 160)))
+      else parts.push('- （当前页签暂无可摘要数据，请直接查阅项目文件）')
+      parts.push('约束：遵守项目契约与合规要求；如涉及生成/提交等操作，先说明计划并等待确认。')
+      return truncateHandoff(parts.join('\n'))
+    }
 
     function Field(props) {
       return h(
@@ -985,6 +1870,897 @@ window.__ModuleLoader__.load({
           onChange: (e) => props.onChange(e.target.value),
         }),
       )
+    }
+
+    /* ============================================= v0.12.1（task-8）：独立设置页 */
+    // 宿主 settings.section（侧栏「设置 → AI 短剧」）与项目页面板内设置浮层共用同一组件：
+    // - 每次挂载都 settings-get 重读（宿主 tree 与主面板 tree 之间经 API 共享状态）
+    // - 保存继续走既有 settings-save（不新增路由/调用点；旧宿主 costTier SKIP 逻辑原样保留）
+    // - 任务模型/成本档位等文案与 aria 原样保留（既有客户端静态断言依赖这些 marker）
+    function SettingsSection(props) {
+      const options = props || {}
+      const closeHandler = typeof options.onClose === 'function'
+        ? options.onClose
+        : typeof options.close === 'function' ? options.close : null
+      const [settings, setSettings] = React.useState(null)
+      const [status, setStatus] = React.useState(null)
+      const [loading, setLoading] = React.useState(true)
+      const [error, setError] = React.useState('')
+      const [busy, setBusy] = React.useState(false)
+      const [flash, setFlash] = React.useState('')
+      const [taskModelError, setTaskModelError] = React.useState('')
+      const [taskModelRecent, setTaskModelRecent] = React.useState(() => loadRecentTaskModels())
+      const [costTierNotice, setCostTierNotice] = React.useState('')
+      const [flowModeBusy, setFlowModeBusy] = React.useState(false)
+      // v0.12.3（task-21 / M4 批2）：诊断区 4 条既有路由（只读；仅按钮显式点击时调用，挂载不自动跑）
+      const [diagBackends, setDiagBackends] = React.useState(null)
+      const [diagBackendsBusy, setDiagBackendsBusy] = React.useState(false)
+      const [diagCatalog, setDiagCatalog] = React.useState(null)
+      const [diagCatalogBusy, setDiagCatalogBusy] = React.useState(false)
+      const [diagCatalogBackend, setDiagCatalogBackend] = React.useState('neowow')
+      const [diagCatalogKind, setDiagCatalogKind] = React.useState('image')
+      const [diagAgents, setDiagAgents] = React.useState(null)
+      const [diagAgentsBusy, setDiagAgentsBusy] = React.useState(false)
+      const [diagPing, setDiagPing] = React.useState(null)
+      const [diagPingBusy, setDiagPingBusy] = React.useState(false)
+
+      const say = (message) => {
+        setFlash(message)
+        window.setTimeout(() => setFlash(''), 2200)
+      }
+      // v0.9.2（P3-E）：成本档位 —— 旧宿主（<0.9.2）SKIP 不发送（与主面板原逻辑一致）
+      const hostSupportsCostTier = () => versionAtLeast((status && status.version) || '', COST_TIER_MIN_HOST_VERSION)
+
+      const load = React.useCallback(async () => {
+        setLoading(true)
+        setError('')
+        try {
+          const [st, stg] = await Promise.all([api('status'), api('settings-get')])
+          setStatus(st)
+          setSettings(normalizeSettings(stg.settings))
+        } catch (err) {
+          setError(err.message)
+        } finally {
+          setLoading(false)
+        }
+      }, [])
+      React.useEffect(() => {
+        load()
+      }, [load])
+
+      /* ------------------------------- P2-6 任务模型（settings.taskModels，Q1–Q5） */
+
+      const taskModelsOf = () => normalizeTaskModels((settings && settings.taskModels) || {})
+      const setAuditTaskModelDefault = (useDefault) => {
+        setTaskModelError('')
+        setSettings((prev) => {
+          const base = normalizeSettings(prev)
+          const models = { ...(base.taskModels || {}) }
+          if (useDefault) delete models.audit
+          else models.audit = { model: '' }
+          return { ...base, taskModels: models }
+        })
+      }
+      // 逐字段编辑 + Q4 即时校验（temperature 0–2、maxTokens ≤60000、model 必填）
+      const setAuditTaskModelField = (key, value) => {
+        setSettings((prev) => {
+          const base = normalizeSettings(prev)
+          const models = { ...(base.taskModels || {}) }
+          const entry = { ...(models.audit || {}) }
+          if (value === '' || value == null) delete entry[key]
+          else if (key === 'temperature' || key === 'maxTokens' || key === 'timeoutMs') entry[key] = Number(value)
+          else entry[key] = String(value)
+          models.audit = entry
+          return { ...base, taskModels: models }
+        })
+        if (key === 'temperature') {
+          const num = Number(value)
+          setTaskModelError(value !== '' && (!Number.isFinite(num) || num < 0 || num > TASK_MODEL_MAX_TEMPERATURE)
+            ? 'Temperature 需在 0~2 之间'
+            : '')
+        } else if (key === 'maxTokens') {
+          const num = Number(value)
+          setTaskModelError(value !== '' && (!Number.isFinite(num) || num < 1 || num > TASK_MODEL_MAX_TOKENS)
+            ? `MaxTokens 需在 1~${TASK_MODEL_MAX_TOKENS}（全局上限 60k）之间`
+            : '')
+        } else if (key === 'timeoutMs') {
+          const num = Number(value)
+          setTaskModelError(value !== '' && (!Number.isFinite(num) || !Number.isInteger(num) || num < TASK_MODEL_MIN_TIMEOUT_MS || num > TASK_MODEL_MAX_TIMEOUT_MS)
+            ? `超时需在 ${TASK_MODEL_MIN_TIMEOUT_MS}~${TASK_MODEL_MAX_TIMEOUT_MS} 毫秒之间（整数）`
+            : '')
+        } else if (key === 'model') {
+          setTaskModelError(value !== '' && !String(value).trim() ? '模型名不能为空' : '')
+        } else {
+          setTaskModelError('')
+        }
+      }
+      // v0.6.3：最近使用模型（localStorage 本地记录，去重 + 最多 8 条）
+      const rememberRecentTaskModel = (entry) => {
+        const model = entry && typeof entry.model === 'string' ? entry.model.trim() : ''
+        if (!model) return
+        setTaskModelRecent((prev) => {
+          const next = mergeRecentTaskModel(prev, { provider: entry.provider || '', model })
+          saveRecentTaskModels(next)
+          return next
+        })
+      }
+      const applyRecentTaskModel = (item) => {
+        if (!item || !item.model) return
+        setAuditTaskModelField('model', item.model)
+        if (item.provider) setAuditTaskModelField('provider', item.provider)
+        say('已填入最近使用的模型：' + item.model)
+      }
+      const setAuditTaskModelCostTier = (value) => {
+        const key = normalizeCostTier(value)
+        if (value && !key) {
+          setTaskModelError('成本档位需为 fast / standard / strong')
+          return
+        }
+        setTaskModelError('')
+        setCostTierNotice('')
+        setSettings((prev) => {
+          const base = normalizeSettings(prev)
+          const models = { ...(base.taskModels || {}) }
+          const entry = { ...(models.audit || {}) }
+          if (key) entry.costTier = key
+          else delete entry.costTier
+          models.audit = entry
+          return { ...base, taskModels: models }
+        })
+      }
+      const validateTaskModelsForSave = (normalized) => {
+        const audit = normalized && normalized.taskModels ? normalized.taskModels.audit : null
+        if (!audit) return ''
+        if (!audit.model || !String(audit.model).trim()) {
+          // v0.9.2：仅配置成本档位（costTier）时允许不填 model（host 侧按档位映射解析）
+          if (!audit.costTier) return '审读（audit）任务模型名不能为空（或配置成本档位）；不需要任务级覆盖请勾选「使用宿主默认」'
+        }
+        if (audit.temperature != null && (!Number.isFinite(Number(audit.temperature)) || Number(audit.temperature) < 0 || Number(audit.temperature) > 2)) {
+          return 'Temperature 需在 0~2 之间'
+        }
+        if (audit.maxTokens != null && (Math.round(Number(audit.maxTokens)) < 1 || Math.round(Number(audit.maxTokens)) > TASK_MODEL_MAX_TOKENS)) {
+          return `MaxTokens 需在 1~${TASK_MODEL_MAX_TOKENS}（全局上限 60k）之间`
+        }
+        if (audit.timeoutMs != null && (!Number.isInteger(Number(audit.timeoutMs)) || Number(audit.timeoutMs) < TASK_MODEL_MIN_TIMEOUT_MS || Number(audit.timeoutMs) > TASK_MODEL_MAX_TIMEOUT_MS)) {
+          return `超时需在 ${TASK_MODEL_MIN_TIMEOUT_MS}~${TASK_MODEL_MAX_TIMEOUT_MS} 毫秒之间（整数）`
+        }
+        if (audit.costTier != null && audit.costTier !== '' && !normalizeCostTier(audit.costTier)) {
+          return '成本档位需为 fast / standard / strong'
+        }
+        return ''
+      }
+
+      const saveSettings = async () => {
+        if (!settings || busy) return
+        setTaskModelError('')
+        setError('')
+        setBusy(true)
+        try {
+          // 先按「用户意图」校验原始 taskModels（勾掉默认但没填 model 时要提示，而不是静默丢弃）
+          const rawTaskModels = (settings && settings.taskModels) || {}
+          const rawAudit = rawTaskModels.audit
+          const rawCostTier = rawAudit ? normalizeCostTier(rawAudit.costTier) : ''
+          if (rawAudit && !String(rawAudit.model || '').trim() && !rawCostTier) {
+            setTaskModelError('审读（audit）任务模型名不能为空（或配置成本档位）；不需要任务级覆盖请勾选「使用宿主默认」')
+            return
+          }
+          if (rawAudit) {
+            // 原始值越界时明确报错（归一化会丢弃非法值，不能让它静默保存成「未配置」）
+            if (rawAudit.temperature != null && rawAudit.temperature !== '') {
+              const temperature = Number(rawAudit.temperature)
+              if (!Number.isFinite(temperature) || temperature < 0 || temperature > TASK_MODEL_MAX_TEMPERATURE) {
+                setTaskModelError('Temperature 需在 0~2 之间')
+                return
+              }
+            }
+            if (rawAudit.maxTokens != null && rawAudit.maxTokens !== '') {
+              const maxTokens = Number(rawAudit.maxTokens)
+              if (!Number.isFinite(maxTokens) || Math.round(maxTokens) < 1 || Math.round(maxTokens) > TASK_MODEL_MAX_TOKENS) {
+                setTaskModelError(`MaxTokens 需在 1~${TASK_MODEL_MAX_TOKENS}（全局上限 60k）之间`)
+                return
+              }
+            }
+            if (rawAudit.timeoutMs != null && rawAudit.timeoutMs !== '') {
+              const timeoutMs = Number(rawAudit.timeoutMs)
+              if (!Number.isFinite(timeoutMs) || !Number.isInteger(timeoutMs) || timeoutMs < TASK_MODEL_MIN_TIMEOUT_MS || timeoutMs > TASK_MODEL_MAX_TIMEOUT_MS) {
+                setTaskModelError(`超时需在 ${TASK_MODEL_MIN_TIMEOUT_MS}~${TASK_MODEL_MAX_TIMEOUT_MS} 毫秒之间（整数）`)
+                return
+              }
+            }
+            if (rawAudit.costTier != null && rawAudit.costTier !== '' && !normalizeCostTier(rawAudit.costTier)) {
+              setTaskModelError('成本档位需为 fast / standard / strong')
+              return
+            }
+          }
+          const normalized = normalizeSettings(settings)
+          const invalid = validateTaskModelsForSave(normalized)
+          if (invalid) {
+            setTaskModelError(invalid)
+            return
+          }
+          setTaskModelError('')
+          // v0.9.2（P3-E）：旧宿主（<0.9.2）SKIP —— 不发送 costTier 字段（零副作用，避免 400）
+          let payload = normalized
+          if (!hostSupportsCostTier() && payload.taskModels) {
+            const stripped = {}
+            for (const [task, entry] of Object.entries(payload.taskModels)) {
+              const copy = { ...entry }
+              delete copy.costTier
+              delete copy.costTierModels
+              if (Object.keys(copy).length) stripped[task] = copy
+            }
+            payload = { ...payload, taskModels: stripped }
+          }
+          const result = await api('settings-save', { settings: payload })
+          const nextSettings = normalizeSettings(result.settings)
+          setSettings(nextSettings)
+          say('设置已保存')
+          // v0.6.3：保存成功后记录「最近使用」模型（去重 + 上限 8 条，仅本地 localStorage）
+          const savedAudit = nextSettings && nextSettings.taskModels ? nextSettings.taskModels.audit : null
+          if (savedAudit && savedAudit.model) rememberRecentTaskModel({ provider: savedAudit.provider || '', model: savedAudit.model })
+          // v0.9.2（P3-E）：成本档位 SKIP / 回退提示（消费 host 只增字段）
+          const skippedCostTier = !hostSupportsCostTier() && Boolean(rawAudit && rawAudit.costTier)
+          setCostTierNotice(
+            skippedCostTier
+              ? '当前宿主版本不支持成本档位：已跳过（SKIP，不发送该字段）'
+              : costTierFallbackFrom(result),
+          )
+          // Q3 运行时探测：宿主若返回 modelFallback 标记（只增字段）则明确提示降级；旧宿主无该字段忽略
+          const fallback = result.modelFallback === true ||
+            (result.settings && result.settings.modelFallback === true) ||
+            nextSettings.modelFallback === true
+          if (fallback) {
+            setTaskModelError('模型运行时探测不可用：宿主将回退到默认模型并标记 modelFallback（不阻断审读）。')
+          }
+          if (typeof options.onSaved === 'function') options.onSaved(nextSettings)
+        } catch (err) {
+          setError(err.message)
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      // 流程模式：设置页直接写宿主 settings.strictMode（项目页 flow 状态机仍由主面板负责，保持 flow-state 读写不变）
+      const applyFlowStrict = async (wantStrict) => {
+        if (!settings || busy || flowModeBusy) return
+        setFlowModeBusy(true)
+        setError('')
+        try {
+          const result = await api('settings-save', { settings: { ...normalizeSettings(settings), strictMode: wantStrict } })
+          const nextSettings = normalizeSettings(result.settings)
+          setSettings(nextSettings)
+          say(wantStrict ? '已开启强制模式：未确认上一阶段时，内容写入与步骤确认会被宿主阻止（HTTP 409）。' : '已切回宽松模式：只提示不强制。')
+          if (typeof options.onSaved === 'function') options.onSaved(nextSettings)
+        } catch (err) {
+          setError(err.message)
+        } finally {
+          setFlowModeBusy(false)
+        }
+      }
+
+      const refreshStatus = async () => {
+        try {
+          setStatus(await api('status'))
+        } catch (err) {
+          setError(err.message)
+        }
+      }
+
+      // v0.12.3（task-21 / M4 批2）：诊断区 4 条既有路由 —— 只有用户点按钮时才调用（挂载/打开设置页不自动跑）
+      const probeDiagnosticBackends = async () => {
+        if (diagBackendsBusy) return
+        setDiagBackendsBusy(true)
+        setDiagBackends(null)
+        try {
+          const result = await api('backends-status', {})
+          setDiagBackends(result && typeof result === 'object' ? result : { backends: [], degraded: true, note: '后端探测返回为空' })
+        } catch (err) {
+          setDiagBackends({ backends: [], degraded: true, note: '后端探测失败：' + err.message + '（不阻塞）' })
+        } finally {
+          setDiagBackendsBusy(false)
+        }
+      }
+
+      const loadDiagnosticCatalog = async () => {
+        if (diagCatalogBusy) return
+        setDiagCatalogBusy(true)
+        setDiagCatalog(null)
+        try {
+          const result = await api('catalog', { backend: diagCatalogBackend, kind: diagCatalogKind, refresh: true })
+          setDiagCatalog(result && typeof result === 'object' ? result : { ok: false, count: 0, models: [], detail: '模型目录返回为空' })
+        } catch (err) {
+          setDiagCatalog({ ok: false, count: 0, models: [], detail: err.message })
+        } finally {
+          setDiagCatalogBusy(false)
+        }
+      }
+
+      const loadDiagnosticAgents = async () => {
+        if (diagAgentsBusy) return
+        setDiagAgentsBusy(true)
+        setDiagAgents(null)
+        try {
+          const result = await api('agents-status', {})
+          setDiagAgents(result && typeof result === 'object' ? result : { ok: false, detail: 'Agent 诊断返回为空' })
+        } catch (err) {
+          setDiagAgents({ ok: false, detail: err.message })
+        } finally {
+          setDiagAgentsBusy(false)
+        }
+      }
+
+      const pingDiagnostic = async () => {
+        if (diagPingBusy) return
+        setDiagPingBusy(true)
+        setDiagPing(null)
+        const startedAt = Date.now()
+        try {
+          const result = await api('ping', {})
+          setDiagPing({ ...(result && typeof result === 'object' ? result : {}), latencyMs: Date.now() - startedAt })
+        } catch (err) {
+          setDiagPing({ ok: false, error: err.message, latencyMs: Date.now() - startedAt })
+        } finally {
+          setDiagPingBusy(false)
+        }
+      }
+
+      const body = []
+      if (loading) {
+        body.push(h('div', { className: 'ad-skeleton', key: 'st-loading', role: 'status', 'aria-label': '设置载入中骨架' },
+          h('div', { className: 'ad-skeleton-line w60' }),
+          h('div', { className: 'ad-skeleton-line w90' }),
+          h('div', { className: 'ad-skeleton-line w80' })))
+      } else if (!settings) {
+        body.push(emptyState({
+          key: 'st-error',
+          title: '设置载入失败',
+          description: error || '无法读取宿主设置（settings-get）。',
+          next: '检查宿主连接后重试；列表页/项目数据不受影响',
+          actions: [{ label: '重试', onClick: load }],
+        }))
+      } else {
+        const rawModels = settings.taskModels && typeof settings.taskModels === 'object' ? settings.taskModels : {}
+        const rawAudit = rawModels.audit && typeof rawModels.audit === 'object' && !Array.isArray(rawModels.audit) ? rawModels.audit : null
+        const useDefault = !rawAudit
+        const audit = rawAudit || {}
+        body.push(
+          h('div', { className: 'ad-form-group', key: 'st-contract' },
+            h('div', { className: 'ad-sec' }, '默认契约'),
+            h('div', { className: 'ad-settings-grid' },
+              h(Field, { label: '默认平台', value: settings.defaultPlatform, placeholder: '抖音 / 快手 / 红果', onChange: (v) => setSettings({ ...settings, defaultPlatform: v }) }),
+              h(Field, { label: '默认目标集数', value: settings.defaultTargetEpisodes, onChange: (v) => setSettings({ ...settings, defaultTargetEpisodes: Number(v) || 0 }) }),
+              h('div', { className: 'ad-field' },
+                h('label', null, '默认单集时长'),
+                h('input', { className: 'ad-input', type: 'number', value: settings.defaultEpisodeDurationSec[0], onChange: (e) => setSettings({ ...settings, defaultEpisodeDurationSec: [Number(e.target.value), settings.defaultEpisodeDurationSec[1]] }) }),
+                h('span', null, '~'),
+                h('input', { className: 'ad-input', type: 'number', value: settings.defaultEpisodeDurationSec[1], onChange: (e) => setSettings({ ...settings, defaultEpisodeDurationSec: [settings.defaultEpisodeDurationSec[0], Number(e.target.value)] }) })),
+              h('div', { className: 'ad-field' },
+                h('label', null, '默认画幅'),
+                h('select', { className: 'ad-select', value: settings.defaultOrientation, onChange: (e) => setSettings({ ...settings, defaultOrientation: e.target.value }) },
+                  h('option', { value: 'portrait' }, '竖屏'), h('option', { value: 'landscape' }, '横屏'))))),
+          h('div', { className: 'ad-form-group', key: 'st-model' },
+            h('div', { className: 'ad-sec' }, '默认模型与检索'),
+            h('div', { className: 'ad-settings-grid' },
+              h(Field, { label: '默认模型', value: settings.defaultModel, placeholder: '留空 = 跟随会话当前模型', onChange: (v) => setSettings({ ...settings, defaultModel: v }) }),
+              h(Field, { label: '检索条数', value: settings.retrievalTopK, onChange: (v) => setSettings({ ...settings, retrievalTopK: Number(v) || 5 }) }),
+              h('div', { className: 'ad-field' },
+                h('label', null, '检索增强'),
+                h('select', { className: 'ad-select', value: settings.retrievalEnabled ? 'on' : 'off', onChange: (e) => setSettings({ ...settings, retrievalEnabled: e.target.value === 'on' }) },
+                  h('option', { value: 'on' }, '开启（生成前召回设定 / 伏笔）'), h('option', { value: 'off' }, '关闭')))),
+            h(Field, { label: '存储位置', value: settings.storageLocation, placeholder: '留空 = 默认位置（P1 仅持久化预留，切换存储根在 P2 生效）', onChange: (v) => setSettings({ ...settings, storageLocation: v }) })),
+          h('div', { className: 'ad-form-group', key: 'st-task-model' },
+            h('div', { className: 'ad-sec' }, '任务模型'),
+            h('div', { className: 'ad-box' },
+              h('div', { className: 'ad-row', style: { marginBottom: 6, flexWrap: 'wrap' } },
+                h('span', { className: 'ad-count' }, '按任务覆盖模型参数；未配置 = 跟随宿主默认'),
+                h('div', { style: { flex: 1 } }),
+                h('label', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 } },
+                  h('input', {
+                    className: 'ad-check',
+                    type: 'checkbox',
+                    checked: useDefault,
+                    'aria-label': '审读任务使用宿主默认模型',
+                    onChange: (e) => setAuditTaskModelDefault(e.target.checked),
+                  }),
+                  '审读：使用宿主默认')),
+              useDefault
+                ? h('div', { className: 'ad-hint-next' }, '跟随宿主默认（回退链：settings.defaultModel → 宿主 agentDefaultModel）。取消勾选可配置任务级模型。')
+                : h('div', { className: 'ad-settings-grid', style: { marginBottom: 8 } },
+                    h(Field, { label: 'Provider', value: audit.provider || '', placeholder: '留空 = 宿主默认 provider', onChange: (v) => setAuditTaskModelField('provider', v) }),
+                    h(Field, { label: '审读模型', value: audit.model || '', placeholder: hostSupportsCostTier() ? '必填；或仅配置成本档位（留空）' : '必填，例如 deepseek-reasoner', onChange: (v) => setAuditTaskModelField('model', v) }),
+                    h(Field, { label: 'Temperature', value: audit.temperature == null ? '' : audit.temperature, placeholder: '0~2，留空 = 宿主默认', onChange: (v) => setAuditTaskModelField('temperature', v) }),
+                    h(Field, { label: 'MaxTokens', value: audit.maxTokens == null ? '' : audit.maxTokens, placeholder: '≤60000，留空 = 宿主默认 60k', onChange: (v) => setAuditTaskModelField('maxTokens', v) }),
+                    h(Field, { label: '超时(ms)', value: audit.timeoutMs == null ? '' : audit.timeoutMs, placeholder: '1000~60000，留空 = 宿主默认 45s', onChange: (v) => setAuditTaskModelField('timeoutMs', v) })),
+              h('div', { className: 'ad-field', key: 'tm-cost-tier' },
+                h('label', null, '成本档位'),
+                h('select', {
+                  className: 'ad-select',
+                  'aria-label': '审读成本档位',
+                  value: normalizeCostTier(audit.costTier),
+                  onChange: (e) => setAuditTaskModelCostTier(e.target.value),
+                  disabled: useDefault || !hostSupportsCostTier(),
+                  title: hostSupportsCostTier()
+                    ? '成本档位（fast/standard/strong；不可用时宿主回退并标记）'
+                    : `当前宿主 v${(status && status.version) || '?'} 不支持成本档位：SKIP（不发送该字段）`,
+                },
+                  COST_TIER_OPTIONS.map(([value, label]) => h('option', { key: value || 'default', value }, label))),
+                useDefault
+                  ? h('span', { className: 'ad-sub' }, '未配置任务级模型时不保存档位')
+                  : !hostSupportsCostTier()
+                    ? h('span', { className: 'ad-sub' }, '旧宿主降级：SKIP（不发送 costTier）')
+                    : h('span', { className: 'ad-sub' }, '不可用档位由宿主回退并标记')),
+              costTierNotice ? h('div', { className: 'ad-doc-note', key: 'tm-cost-notice', role: 'status', style: { marginBottom: 6 } }, costTierNotice) : null,
+              !useDefault
+                ? h('div', { className: 'ad-row', key: 'tm-recent', style: { marginBottom: 8, flexWrap: 'wrap' } },
+                    h('span', { className: 'ad-sub' }, '最近使用：'),
+                    taskModelRecent.length
+                      ? taskModelRecent.map((item, index) => h('button', {
+                          className: 'ad-btn ad-sm',
+                          key: `${item.provider}/${item.model}/${index}`,
+                          title: '填入该模型配置',
+                          onClick: () => applyRecentTaskModel(item),
+                        }, `${item.provider ? item.provider + ' / ' : ''}${item.model}`))
+                      : h('span', { className: 'ad-hint-next' }, '暂无记录（保存一次任务模型后自动记录，最多 8 条）'))
+                : null,
+              taskModelError ? h('div', { className: 'ad-err', style: { marginBottom: 6 }, role: 'alert' }, taskModelError) : null,
+              h('div', { className: 'ad-path' }, '回退链：任务模型 → 默认模型 → 宿主默认（agentDefaultModel）。模型运行时不可用时宿主降级并标记，不阻断审读。其他任务键（review/outline/characters/episode/storyboard）已预留，v0.6.1 暂不渲染。Ctrl/⌘+S 保存当前页签或文档栏；Enter 执行搜索。'))),
+          h('div', { className: 'ad-form-group', key: 'st-flow-mode' },
+            h('div', { className: 'ad-sec' }, '流程模式'),
+            h('div', { className: 'ad-field' },
+              h('label', null, '流程模式'),
+              h('select', {
+                className: 'ad-select',
+                value: settings.strictMode ? 'on' : 'off',
+                onChange: (e) => applyFlowStrict(e.target.value === 'on'),
+                disabled: busy || flowModeBusy,
+                'aria-label': '流程模式（宽松 / 强制门禁）',
+              },
+                h('option', { value: 'off' }, '宽松（默认，只提示不强制）'),
+                h('option', { value: 'on' }, '强制（未确认上一阶段时禁止越步写入/确认）')),
+              h('span', { className: 'ad-sub' }, '由宿主 settings.strictMode 生效')),
+            h('div', { className: 'ad-path' }, '流程状态存于 <项目>/.aidrama/flow-state.json（不随导出；回退只标「待重做」，不删除文件）')),
+          h('div', { className: 'ad-form-group', key: 'st-templates' },
+            h('div', { className: 'ad-sec' }, `提示词模板（${PROMPT_TEMPLATE_KEYS.length} 个环节，留空 = 内置默认）`),
+            h('div', { className: 'ad-settings-grid' },
+              PROMPT_TEMPLATE_KEYS.map(([key, label]) =>
+                h(TextField, {
+                  key,
+                  label,
+                  rows: 2,
+                  placeholder: `${label}环节的自定义提示词前缀（可选）`,
+                  value: settings.promptTemplates[key] || '',
+                  onChange: (v) => setSettings({ ...settings, promptTemplates: { ...settings.promptTemplates, [key]: v } }),
+                })))),
+        )
+      }
+
+      return h('div', { className: 'ad-settings-page', role: 'region', 'aria-label': 'AI 短剧设置' },
+        h(Styles),
+        options.embedded
+          ? null
+          : h('div', { className: 'ad-settings-head' },
+              h('div', { className: 'ad-sec', style: { margin: 0 } }, 'AI 短剧设置'),
+              h('div', { className: 'ad-sub' }, '默认契约 / 默认模型 / 任务模型 / 提示词模板 / 流程模式 / 存储位置；设置保存在宿主 settings，列表页不再重复展示。')),
+        flash ? h('div', { className: 'ad-flash', role: 'status', 'aria-live': 'polite' }, flash) : null,
+        error ? h('div', { className: 'ad-err', role: 'alert' }, error) : null,
+        body,
+        h('details', { className: 'ad-form-group ad-settings-diag', key: 'st-diag' },
+          h('summary', { className: 'ad-settings-diag-summary' }, '环境信息 / 诊断（只读）'),
+          h('div', { className: 'ad-settings-diag-body' },
+          h('div', { className: 'ad-hint-next', key: 'hint-diag' }, '技术自检，排障用；日常可忽略（只读）'),
+            h('div', { className: 'ad-settings-diag-rows' },
+            h('div', { className: 'ad-path' }, `数据源：${shortSourcePath(currentSourceCwd) || '（宿主默认源）'}`),
+            h('div', { className: 'ad-path' }, `工作区：${(status && status.workspace) || '（未解析）'}（来源：${(status && status.workspaceSource) || '-'}）`),
+            h('div', { className: 'ad-path' }, `数据目录：${(status && status.root) || '-'}${status && status.exists ? '' : '（尚未创建）'}`),
+            h('div', { className: 'ad-path' }, `宿主版本：v${(status && status.version) || '?'}`)),
+          h('div', { className: 'ad-row', style: { marginTop: 6, flexWrap: 'wrap' } },
+            h('button', { className: 'ad-btn ad-sm', onClick: refreshStatus, disabled: loading }, icon('refresh'), '刷新诊断'),
+            h('span', { className: 'ad-sub' }, '数据源切换仍在主面板列表页「数据源」选择器；新建短剧会按此处默认值预填契约。')),
+          h('div', { className: 'ad-sec', style: { marginTop: 10 } }, '连通性 / 后端 / 模型目录 / Agent（手动刷新，只读）'),
+          h('div', { className: 'ad-row', style: { flexWrap: 'wrap', gap: 8, marginTop: 4 } },
+            h('button', { className: 'ad-btn ad-sm', onClick: pingDiagnostic, disabled: diagPingBusy || loading }, diagPingBusy ? '测试中…' : '连通性探测'),
+            h('button', { className: 'ad-btn ad-sm', onClick: probeDiagnosticBackends, disabled: diagBackendsBusy || loading }, diagBackendsBusy ? '探测中…' : '探测后端'),
+            h('button', { className: 'ad-btn ad-sm', onClick: loadDiagnosticAgents, disabled: diagAgentsBusy || loading }, diagAgentsBusy ? '读取中…' : 'Agent 挂载状态'),
+            h('select', { className: 'ad-select', 'aria-label': '模型目录后端', value: diagCatalogBackend, onChange: (e) => setDiagCatalogBackend(e.target.value), disabled: diagCatalogBusy },
+              h('option', { value: 'libtv' }, 'libtv'), h('option', { value: 'neowow' }, 'neowow')),
+            h('select', { className: 'ad-select', 'aria-label': '模型目录类型', value: diagCatalogKind, onChange: (e) => setDiagCatalogKind(e.target.value), disabled: diagCatalogBusy },
+              h('option', { value: 'image' }, '分镜图'), h('option', { value: 'video' }, '分镜视频'), h('option', { value: 'audio' }, '配音')),
+            h('button', { className: 'ad-btn ad-sm', onClick: loadDiagnosticCatalog, disabled: diagCatalogBusy || loading }, diagCatalogBusy ? '读取中…' : '读取模型目录')),
+          diagPing
+            ? h('div', { className: 'ad-hits', key: 'diag-ping', role: 'status' },
+                h('div', { className: 'ad-hit' },
+                  h('div', { className: 'ad-hit-path' }, diagPing.ok ? '连通性：正常' : '连通性：失败'),
+                  h('div', null, diagPing.ok
+                    ? '宿主 ' + String(diagPing.name || '—') + ' v' + String(diagPing.version || '?') + ' · 客户端耗时 ' + String(diagPing.latencyMs) + 'ms（只读，无项目写入）'
+                    : '失败：' + String(diagPing.error || '未知错误') + '（不阻塞其它诊断）')))
+            : null,
+          diagBackends
+            ? h('div', { key: 'diag-backends' },
+                h('div', { className: 'ad-hint-next' }, String(diagBackends.note || (diagBackends.degraded ? '后端降级' : ''))),
+                (diagBackends.backends || []).length
+                  ? h('div', { className: 'ad-hits' }, diagBackends.backends.map((item, i) => h('div', { className: 'ad-hit', key: i },
+                      h('div', { className: 'ad-hit-path' }, String(item.label || item.id || '后端') + ' · 优先级 ' + String(item.priority == null ? '-' : item.priority) + ' · ' + (item.ok ? '可用' : '不可用')),
+                      h('div', null, item.ok ? 'active=' + String(diagBackends.activeBackend === item.id) : String(item.detail || item.reason || '不可用')))))
+                  : h('div', { className: 'ad-hint-next' }, '未获取到后端列表（后端注册表未就绪时不阻塞）'))
+            : null,
+          diagCatalog
+            ? h('div', { key: 'diag-catalog' },
+                h('div', { className: 'ad-hint-next' }, diagCatalog.ok === false
+                  ? '模型目录不可用：' + String(diagCatalog.detail || diagCatalog.reason || '后端未提供目录') + '（不阻塞）'
+                  : '模型目录：' + String(diagCatalog.backend || diagCatalogBackend) + ' / ' + String(diagCatalog.kind || diagCatalogKind) + ' · 共 ' + String(diagCatalog.count == null ? (diagCatalog.models || []).length : diagCatalog.count) + ' 个'),
+                (diagCatalog.models || []).length
+                  ? h('div', { className: 'ad-hits', style: { maxHeight: 140, overflow: 'auto' } }, (diagCatalog.models || []).slice(0, 8).map((model, i) => h('div', { className: 'ad-hit', key: i },
+                      h('div', { className: 'ad-hit-path' }, String(model.modelName || model.model_name || model.modelKey || model.model || model.name || '模型 ' + (i + 1))),
+                      h('div', null, String(model.pricingRule || model.points_cost_per_image || model.note || model.modelKey || '—').slice(0, 160)))))
+                  : null)
+            : null,
+          diagAgents
+            ? h('div', { key: 'diag-agents' },
+                h('div', { className: 'ad-hint-next' }, diagAgents.ok === false
+                  ? 'Agent 诊断不可用：' + String(diagAgents.detail || '未知错误') + '（不阻塞）'
+                  : 'Agent 挂载：工具 ' + String((diagAgents.attach && diagAgents.attach.toolCount) || 0) + ' / 已挂载 ' + String(((diagAgents.attach && diagAgents.attach.attachedAgents) || []).length) + ' / 已见 ' + String(((diagAgents.attach && diagAgents.attach.seenAgents) || []).length) + (diagAgents.attach && diagAgents.attach.available === false ? '（宿主诊断不可用，降级只读）' : '')),
+                diagAgents.preset ? h('div', { className: 'ad-path' }, '预设：' + String(diagAgents.preset.name || diagAgents.preset.id || '—') + ' · 工具白名单 ' + String((diagAgents.tools || []).length) + ' 个') : null)
+            : null,
+          )),
+        options.embedded
+          ? null
+          : h('div', { className: 'ad-path' }, '也可从侧栏底部「设置」→「AI 短剧」打开此页；两处使用同一组件与同一 settings 数据。'),        settings
+          ? h('div', { className: 'ad-settings-footer' },
+              h('button', { className: 'ad-btn ad-primary', onClick: saveSettings, disabled: busy, 'aria-keyshortcuts': 'Control+S Meta+S' }, busy ? '保存中…' : '保存设置'),
+              h('span', { className: 'ad-sub' }, '保存后主面板会在窗口重新获得焦点时自动刷新；快捷键：Ctrl/⌘+S 保存当前页签（契约/总纲/人物/世界观/剧本/分镜/本剧记忆）或文档栏，Enter 执行搜索。'),
+              h('div', { style: { flex: 1 } }),
+              closeHandler ? h('button', { className: 'ad-btn ad-sm', onClick: closeHandler }, '关闭') : null)
+          : null,
+
+      )
+    }
+    /* ================================================= v0.12.1（task-17）：会话内工具卡 */
+    // tool.call.toolview K=1：只注册 drama_check_consistency 一个 wire 名（官方 inject+register 写法）。
+    // props 契约（安装态 app.asar 内 ui-tool/renderer 源码实测）：
+    //   owner = { callId, toolName, phase, block, cwd, home, openFile, inspect, useDisclosure, ... }
+    //   slot 注入 hook toolCallArgumentsPartial → props.useToolCallArgumentsPartial（仅 preparing 有流式参数前缀）
+    //   block：preparing { phase, callId, name } / start { phase, callId, name, argsRaw }
+    //          / result { kind, callId, call:{name,argsRaw}|null, content:[{type:'text',text}], isError?, error?{name,code} }
+    // 卡片纯只读展示（无写按钮、无 api() 调用）；全部解析 try/catch 防御，渲染不抛错（宿主 SlotErrorBoundary 仅兜底）。
+
+    const TOOLVIEW_MAX_ISSUES = 8
+    const TOOLVIEW_MAX_FINDINGS = 6
+    const TOOLVIEW_TEXT_MAX = 200
+
+    function toolviewCut(value, max = TOOLVIEW_TEXT_MAX) {
+      const text = String(value == null ? '' : value).replace(/\s+/g, ' ').trim()
+      return text.length > max ? text.slice(0, max) + '…' : text
+    }
+
+    function toolviewJson(raw) {
+      if (typeof raw !== 'string' || !raw) return null
+      try {
+        const value = JSON.parse(raw)
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : null
+      } catch {
+        return null
+      }
+    }
+
+    // preparing 阶段参数是流式前缀（可能不是合法 JSON）：只做安全字段抽取，不做结构猜测
+    function toolviewPartialArgs(raw) {
+      const text = typeof raw === 'string' ? raw : ''
+      if (!text) return null
+      const parsed = toolviewJson(text)
+      if (parsed) return parsed
+      const out = {}
+      const title = /"title"\s*:\s*"([^"]*)/.exec(text)
+      if (title) out.title = title[1]
+      const deep = /"deep"\s*:\s*(true|false)/.exec(text)
+      if (deep) out.deep = deep[1] === 'true'
+      const episode = /"episode"\s*:\s*(\d+)/.exec(text)
+      if (episode) out.episode = Number(episode[1])
+      const maxTokens = /"maxTokens"\s*:\s*(\d+)/.exec(text)
+      if (maxTokens) out.maxTokens = Number(maxTokens[1])
+      return Object.keys(out).length ? out : null
+    }
+
+    function toolviewResultText(block) {
+      try {
+        const parts = []
+        const content = block && Array.isArray(block.content) ? block.content : []
+        for (const part of content) {
+          if (part && part.type === 'text' && typeof part.text === 'string') parts.push(part.text)
+          else if (part && typeof part === 'object') {
+            try {
+              parts.push(JSON.stringify(part))
+            } catch {
+              /* 跳过不可序列化内容块 */
+            }
+          }
+        }
+        if (!parts.length && block && block.error) {
+          parts.push([block.error.name, block.error.code].filter(Boolean).join(': '))
+        }
+        return parts.join('\n')
+      } catch {
+        return ''
+      }
+    }
+
+    // 解析我们工具 render 出的文本（lib/tools.js · drama_check_consistency）：
+    //  一致性检查：error N / warn N / info N（共 N 项）
+    //  · [severity] 说明（定位）                       → 确定性问题
+    //  AI 审读：{mode} / {state}（原因：...） / 结论：... → AI 审读段
+    //  · [severity] dimension @定位：证据 → 建议        → 审读 finding
+    //  已保存审读报告：第 N 集（路径） / 报告已落盘：路径 / 下一步：...
+    function toolviewParseCheck(text) {
+      const model = { summary: null, issues: [], findings: [], noIssues: false, deep: null, conclusion: [], saved: null, savedPath: '', next: '', others: [] }
+      try {
+        const lines = String(text || '').split('\n')
+        for (const rawLine of lines) {
+          const line = String(rawLine || '').trim()
+          if (!line) continue
+          const summary = /^一致性检查：error (\d+) \/ warn (\d+) \/ info (\d+)（共 (\d+) 项）$/.exec(line)
+          if (summary) {
+            model.summary = { error: Number(summary[1]), warn: Number(summary[2]), info: Number(summary[3]), total: Number(summary[4]) }
+            continue
+          }
+          if (line === '未发现问题 ✓' || line === '未发现问题') {
+            model.noIssues = true
+            continue
+          }
+          const deepMode = /^AI 审读：(.*?) \/ (.*?)(?:（原因：(.*?)）)?$/.exec(line)
+          if (deepMode) {
+            model.deep = { mode: deepMode[1], state: deepMode[2], reason: deepMode[3] || '' }
+            continue
+          }
+          const saved = /^已保存审读报告：第 (\d+) 集（(.*?)）$/.exec(line)
+          if (saved) {
+            model.saved = { episode: Number(saved[1]), path: saved[2] || '' }
+            continue
+          }
+          const savedPath = /^报告已落盘：(.*)$/.exec(line)
+          if (savedPath) {
+            model.savedPath = savedPath[1] || ''
+            continue
+          }
+          const nextLine = /^下一步：(.*)$/.exec(line)
+          if (nextLine) {
+            model.next = nextLine[1] || ''
+            continue
+          }
+          const conclusion = /^结论：(.*)$/.exec(line)
+          if (conclusion) {
+            model.conclusion.push(conclusion[1] || '')
+            continue
+          }
+          const finding = /^· \[([a-z]+)\] (.+?) @(.+?)：(.+?) → (.+)$/.exec(line)
+          if (finding) {
+            model.findings.push({
+              severity: finding[1],
+              dimension: finding[2],
+              location: finding[3],
+              evidence: finding[4],
+              suggestion: finding[5],
+            })
+            continue
+          }
+          const issue = /^· \[([a-z]+)\] ([\s\S]*)$/.exec(line)
+          if (issue) {
+            let rest = issue[2] || ''
+            let where = ''
+            if (rest.endsWith('）')) {
+              const at = rest.lastIndexOf('（')
+              if (at > 0) {
+                where = rest.slice(at + 1, -1)
+                rest = rest.slice(0, at)
+              }
+            }
+            model.issues.push({ severity: issue[1], message: rest, where })
+            continue
+          }
+          model.others.push(line)
+        }
+      } catch {
+        /* 解析失败 → 上层回退原文摘要 */
+      }
+      return model
+    }
+
+    function toolviewSeverityChip(severity) {
+      const key = severity === 'error' || severity === 'warn' ? severity : 'info'
+      return h('span', { className: 'ad-toolview-sev', 'data-tone': key, key: 'sev-' + key }, key)
+    }
+
+    function toolviewArgsLine(args) {
+      if (!args) return null
+      const parts = []
+      if (args.title) parts.push(`项目：${toolviewCut(args.title, 60)}`)
+      if (args.deep === true) parts.push('AI 审读：开')
+      if (args.episode != null) parts.push(`第 ${args.episode} 集`)
+      if (args.maxTokens != null) parts.push(`预算 ${args.maxTokens} tokens`)
+      if (args.timeoutMs != null) parts.push(`超时 ${args.timeoutMs}ms`)
+      return parts.length ? h('div', { className: 'ad-toolview-args', key: 'args' }, parts.join(' · ')) : null
+    }
+
+    function renderDramaCheckCard(owner, partialRaw) {
+      const block = owner.block && typeof owner.block === 'object' ? owner.block : {}
+      const resultPhase = Object.prototype.hasOwnProperty.call(block, 'kind')
+      const phase = resultPhase ? 'result' : (block.phase === 'preparing' || owner.phase === 'preparing' ? 'preparing' : 'start')
+      const argsRaw = phase === 'result'
+        ? (block.call && typeof block.call.argsRaw === 'string' ? block.call.argsRaw : '')
+        : (typeof block.argsRaw === 'string' ? block.argsRaw : '')
+      const args = phase === 'preparing' ? toolviewPartialArgs(partialRaw || argsRaw) : toolviewJson(argsRaw)
+      const isError = phase === 'result' && Boolean(block.isError)
+      const interrupted = phase === 'result' && Boolean(block.error && block.error.code === 'interrupted')
+      const state = phase === 'preparing' ? 'preparing' : phase === 'start' ? 'running' : isError ? (interrupted ? 'stopped' : 'error') : 'ok'
+      const stateLabel = state === 'preparing' ? '准备参数' : state === 'running' ? '检查中…' : state === 'stopped' ? '已停止' : state === 'error' ? '失败' : '已完成'
+      const children = [
+        h('div', { className: 'ad-toolview-head', key: 'head' },
+          h('span', { className: 'ad-toolview-title' }, '一致性检查'),
+          h('span', { className: 'ad-toolview-badge', 'data-state': state }, stateLabel),
+          h('span', { className: 'ad-toolview-tool', title: 'wire tool' }, 'drama_check_consistency')),
+        toolviewArgsLine(args),
+      ]
+      if (phase === 'preparing') {
+        children.push(h('div', { className: 'ad-toolview-hint', key: 'prep' }, args ? '等待参数发送…' : '准备参数…'))
+      } else if (phase === 'start') {
+        children.push(h('div', { className: 'ad-toolview-hint', key: 'run' }, '检查中…（确定性检查 + 可选 AI 审读，完成后显示结果）'))
+      } else if (isError) {
+        const errorText = toolviewResultText(block) || [block.error && block.error.name, block.error && block.error.code].filter(Boolean).join(': ')
+        children.push(h('div', { className: 'ad-toolview-error', key: 'err' },
+          h('div', { className: 'ad-toolview-error-title' }, interrupted ? '检查已中断' : '检查失败'),
+          h('div', { className: 'ad-toolview-error-body' }, toolviewCut(errorText || '（无错误详情）', 400))))
+      } else {
+        let text = ''
+        try {
+          text = toolviewResultText(block)
+        } catch {
+          text = ''
+        }
+        let model = null
+        try {
+          model = toolviewParseCheck(text)
+        } catch {
+          model = null
+        }
+        const parsed = Boolean(model && (model.summary || model.issues.length || model.findings.length || model.noIssues || model.deep || model.saved))
+        if (!parsed || !text) {
+          children.push(h('div', { className: 'ad-toolview-fallback', key: 'raw' },
+            h('div', { className: 'ad-toolview-hint' }, '结果解析回退（原文摘要）'),
+            h('div', { className: 'ad-toolview-pre' }, toolviewCut(text || '（无结果文本）', 400))))
+        } else {
+          if (model.summary) {
+            children.push(h('div', { className: 'ad-toolview-summary', key: 'sum' },
+              h('span', { className: 'ad-toolview-chip', 'data-tone': 'error', key: 'e' }, `error ${model.summary.error}`),
+              h('span', { className: 'ad-toolview-chip', 'data-tone': 'warn', key: 'w' }, `warn ${model.summary.warn}`),
+              h('span', { className: 'ad-toolview-chip', 'data-tone': 'info', key: 'i' }, `info ${model.summary.info}`),
+              h('span', { className: 'ad-toolview-chip', 'data-tone': 'total', key: 't' }, `共 ${model.summary.total} 项`)))
+          }
+          if (model.noIssues) children.push(h('div', { className: 'ad-toolview-ok', key: 'ok' }, '未发现问题 ✓'))
+          if (model.issues.length) {
+            children.push(h('div', { className: 'ad-toolview-list', key: 'issues' },
+              model.issues.slice(0, TOOLVIEW_MAX_ISSUES).map((issue, index) => h('div', { className: 'ad-toolview-issue', key: 'issue-' + index },
+                toolviewSeverityChip(issue.severity),
+                h('span', { className: 'ad-toolview-issue-msg', key: 'msg' }, toolviewCut(issue.message, TOOLVIEW_TEXT_MAX)),
+                issue.where ? h('span', { className: 'ad-toolview-where', key: 'where' }, `定位：${toolviewCut(issue.where, 80)}`) : null)),
+              model.issues.length > TOOLVIEW_MAX_ISSUES
+                ? h('div', { className: 'ad-toolview-hint', key: 'more-issues' }, `…共 ${model.issues.length} 项；完整清单见面板「检查」页`)
+                : null))
+          }
+          if (model.deep || model.conclusion.length || model.findings.length) {
+            children.push(h('div', { className: 'ad-toolview-deep', key: 'deep' },
+              h('div', { className: 'ad-toolview-sub', key: 'sub' }, 'AI 审读',
+                model.deep
+                  ? h('span', { className: 'ad-toolview-badge', 'data-state': model.deep.state.indexOf('降级') >= 0 ? 'error' : 'ok', style: { marginLeft: 6 }, key: 'deep-badge' }, `${model.deep.mode} / ${model.deep.state}`)
+                  : null),
+              model.deep && model.deep.reason
+                ? h('div', { className: 'ad-toolview-hint', key: 'reason' }, `降级原因：${toolviewCut(model.deep.reason, 120)}（不阻断定稿 / 导出）`)
+                : null,
+              model.conclusion.length
+                ? h('div', { className: 'ad-toolview-conclusion', key: 'conclusion' }, `结论：${toolviewCut(model.conclusion[model.conclusion.length - 1], TOOLVIEW_TEXT_MAX)}`)
+                : null,
+              model.findings.slice(0, TOOLVIEW_MAX_FINDINGS).map((finding, index) => h('div', { className: 'ad-toolview-finding', key: 'finding-' + index },
+                h('div', { className: 'ad-toolview-finding-head', key: 'head' },
+                  toolviewSeverityChip(finding.severity),
+                  h('span', { className: 'ad-toolview-dim', key: 'dim' }, `${toolviewCut(finding.dimension, 40)} @${toolviewCut(finding.location, 40)}`)),
+                h('div', { className: 'ad-toolview-evidence', key: 'ev' }, `证据：${toolviewCut(finding.evidence, TOOLVIEW_TEXT_MAX)}`),
+                h('div', { className: 'ad-toolview-suggestion', key: 'sg' }, `建议：${toolviewCut(finding.suggestion, TOOLVIEW_TEXT_MAX)}`))),
+              model.findings.length > TOOLVIEW_MAX_FINDINGS
+                ? h('div', { className: 'ad-toolview-hint', key: 'more-findings' }, `…共 ${model.findings.length} 条；完整清单见面板「检查」页 / .aidrama/reviews/latest.json`)
+                : null))
+          }
+          if (model.saved) children.push(h('div', { className: 'ad-toolview-hint', key: 'saved' }, `已保存审读报告：第 ${model.saved.episode} 集${model.saved.path ? `（${toolviewCut(model.saved.path, 120)}）` : ''}`))
+          if (model.savedPath) children.push(h('div', { className: 'ad-toolview-hint', key: 'path' }, `报告已落盘：${toolviewCut(model.savedPath, 160)}`))
+          if (model.next) children.push(h('div', { className: 'ad-toolview-next', key: 'next' }, `下一步：${toolviewCut(model.next, 200)}`))
+        }
+        children.push(h('div', { className: 'ad-toolview-foot', key: 'foot' }, '只读卡片：裁决（采纳 / 忽略 / 标误报）请在面板「检查」页操作；完整报告见 .aidrama/reviews/latest.json。'))
+      }
+      return h('div', { className: 'ad-toolview', 'data-toolview': 'drama_check_consistency', 'data-state': state }, children)
+    }
+
+    function DramaCheckToolCard(props) {
+      const owner = props && typeof props === 'object' ? props : {}
+      // 框架 slot 注入 hook：仅 preparing 阶段有 assistant 源（dispatched 调用返回 ""）
+      let partialRaw = ''
+      if (typeof owner.useToolCallArgumentsPartial === 'function') {
+        try {
+          partialRaw = owner.useToolCallArgumentsPartial()
+        } catch {
+          partialRaw = ''
+        }
+      }
+      if (partialRaw != null && typeof partialRaw !== 'string') partialRaw = ''
+      try {
+        return renderDramaCheckCard(owner, partialRaw)
+      } catch (error) {
+        // 双保险：宿主 SlotErrorBoundary 之前也不抛错，降级为纯文本
+        return h('div', { className: 'ad-toolview', 'data-toolview': 'drama_check_consistency', 'data-state': 'error' },
+          h('div', { className: 'ad-toolview-error-title' }, '一致性检查结果渲染失败（已降级为纯文本）'),
+          h('div', { className: 'ad-toolview-error-body' }, toolviewCut(error && error.message ? error.message : String(error), 300)))
+      }
+    }
+
+    /* v0.12.4（task-24 / M5-A）：对话框焦点陷阱（防御式；无 DOM / 容器缺失时 no-op；cleanup 恢复原焦点） */
+    function installDialogFocusTrap(containerId) {
+      const noop = () => {}
+      if (typeof document === 'undefined' || !document || typeof window === 'undefined' || !window) return noop
+      let container = null
+      try {
+        container = typeof document.getElementById === 'function' ? document.getElementById(containerId) : null
+      } catch {
+        container = null
+      }
+      if (!container || typeof container.querySelectorAll !== 'function') return noop
+      const previous = document.activeElement && typeof document.activeElement.focus === 'function' ? document.activeElement : null
+      const focusables = () => {
+        try {
+          return Array.prototype.slice
+            .call(container.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+            .filter((el) => el && !el.disabled && (typeof el.tabIndex !== 'number' || el.tabIndex >= 0))
+        } catch {
+          return []
+        }
+      }
+      const initial = focusables()
+      if (initial.length && typeof initial[0].focus === 'function') {
+        try {
+          initial[0].focus()
+        } catch {
+          /* 初始焦点失败不影响对话框可用性 */
+        }
+      } else if (typeof container.focus === 'function') {
+        try {
+          container.focus()
+        } catch {
+          /* 同上 */
+        }
+      }
+      const onKeyDown = (event) => {
+        if (!event || event.key !== 'Tab') return
+        const list = focusables()
+        if (!list.length) return
+        const first = list[0]
+        const last = list[list.length - 1]
+        const active = document.activeElement
+        const inside = typeof container.contains === 'function' ? container.contains(active) : Boolean(active)
+        if (event.shiftKey) {
+          if (active === first || !inside) {
+            if (typeof event.preventDefault === 'function') event.preventDefault()
+            if (last && typeof last.focus === 'function') last.focus()
+          }
+        } else if (active === last || !inside) {
+          if (typeof event.preventDefault === 'function') event.preventDefault()
+          if (first && typeof first.focus === 'function') first.focus()
+        }
+      }
+      window.addEventListener('keydown', onKeyDown)
+      return () => {
+        window.removeEventListener('keydown', onKeyDown)
+        if (previous && typeof previous.focus === 'function') {
+          try {
+            previous.focus()
+          } catch {
+            /* 原焦点元素已不在 DOM 时安全跳过 */
+          }
+        }
+      }
     }
 
     /* -------------------------------------------------------------- 主面板 */
@@ -1024,7 +2800,6 @@ window.__ModuleLoader__.load({
       const [progress, setProgress] = React.useState(null)
       const [collapsed, setCollapsed] = React.useState({})
       const [settings, setSettings] = React.useState(null)
-      const [showSettings, setShowSettings] = React.useState(false)
       const [shared, setShared] = React.useState(null)
       const [sharedText, setSharedText] = React.useState('')
       const [sharedPath, setSharedPath] = React.useState('')
@@ -1042,13 +2817,43 @@ window.__ModuleLoader__.load({
       const [genKind, setGenKind] = React.useState('image')
       const [genModel, setGenModel] = React.useState('')
       const [genLimit, setGenLimit] = React.useState('')
+      // v0.12.2（task-20 / M4 批1）：5 条既有路由面板接线状态（均用户显式点击才调用，不自动加载）
+      const [genEstimate, setGenEstimate] = React.useState(null)
+      const [genEstimateBusy, setGenEstimateBusy] = React.useState(false)
+      const [genSearchQuery, setGenSearchQuery] = React.useState('')
+      const [genSearchTopK, setGenSearchTopK] = React.useState('5')
+      const [genSearchResult, setGenSearchResult] = React.useState(null)
+      const [genSearchBusy, setGenSearchBusy] = React.useState(false)
+      const [reconcileResult, setReconcileResult] = React.useState(null)
+      const [reconcileBusy, setReconcileBusy] = React.useState(false)
+      const [taskRecordBusy, setTaskRecordBusy] = React.useState(false)
+      const [taskRecordPrompt, setTaskRecordPrompt] = React.useState('')
+      const [taskRecordBackend, setTaskRecordBackend] = React.useState('libtv')
+      const [taskStatusDraft, setTaskStatusDraft] = React.useState({})
+      const [taskNotice, setTaskNotice] = React.useState('')
+      // v0.12.3（task-21 / M4 批2）：产物入库（intake-artifact；仅点击时写 素材/生成 + 素材清单 + assets.json）
+      const [artifactSource, setArtifactSource] = React.useState('')
+      const [artifactKind, setArtifactKind] = React.useState('image')
+      const [artifactName, setArtifactName] = React.useState('')
+      const [artifactBusy, setArtifactBusy] = React.useState(false)
+      const [artifactResult, setArtifactResult] = React.useState(null)
       const [importText, setImportText] = React.useState('')
       const [importPreview, setImportPreview] = React.useState(null)
       const [showImport, setShowImport] = React.useState(false)
+      // v0.12.0（task-7）：窄窗页签「更多 ▾」菜单展开态
+      const [tabsMoreOpen, setTabsMoreOpen] = React.useState(false)
+      // v0.12.1（task-8）：项目页「设置」入口的面板内设置浮层开关
+      const [settingsOverlay, setSettingsOverlay] = React.useState(false)
+      // v0.14.0（task-38 / M6-1）：交给 Agent（C 路径：生成交接指令 + 复制）状态
+      const [handoffOpen, setHandoffOpen] = React.useState(false)
+      const [handoffBusy, setHandoffBusy] = React.useState(false)
+      const [handoffInstr, setHandoffInstr] = React.useState('')
+      const [handoffCopied, setHandoffCopied] = React.useState(false)
+      const [handoffCopyError, setHandoffCopyError] = React.useState('')
       // P1：宿主能力门控（status.version >= 0.4.0 才启用 H-1/H-2/H-3 新交互）
       const [hostFlags, setHostFlags] = React.useState({ p1: false })
-      // P1：未保存标记（剧本 / 分镜），保存成功后清除
-      const [dirty, setDirty] = React.useState({ episode: false, storyboard: false })
+      // P1：未保存标记（v0.11.5/task-4：扩展至 7 个可保存页签 —— 契约/总纲/人物/世界观/剧本/分镜/本剧记忆）
+      const [dirty, setDirty] = React.useState({ contract: false, outline: false, characters: false, world: false, memory: false, episode: false, storyboard: false })
       // P1（C-1）：草稿多选与「含已处理」视图
       const [draftSelection, setDraftSelection] = React.useState({})
       const [draftIncludeResolved, setDraftIncludeResolved] = React.useState(false)
@@ -1095,12 +2900,27 @@ window.__ModuleLoader__.load({
       const [reviewEpisode, setReviewEpisode] = React.useState(0)
       const [reviewFeedback, setReviewFeedback] = React.useState({})
       const [reviewJump, setReviewJump] = React.useState(null)
-      // P2-6：任务模型区块的即时校验 / 保存降级提示
-      const [taskModelError, setTaskModelError] = React.useState('')
       // v0.6.3：审读展示细化（维度筛选 / 排序）+ 任务模型最近使用列表
       const [reviewDimensionFilter, setReviewDimensionFilter] = React.useState('')
       const [reviewSort, setReviewSort] = React.useState('severity')
-      const [taskModelRecent, setTaskModelRecent] = React.useState(() => loadRecentTaskModels())
+      // v0.10.4（task-91）：分镜「详情」展开行（仅 UI 态，不写盘/不发请求）
+      const [shotExtraOpen, setShotExtraOpen] = React.useState(null)
+      // v0.11.2（task-99）：分镜分组 groups add-only 只读展示（仅 UI 态；无 groups → 零新显示）
+      const [shotGroups, setShotGroups] = React.useState(null)
+      const [shotGroupsTruncated, setShotGroupsTruncated] = React.useState(false)
+      // v0.11.5（task-4 · P0 数据安全三连）：载入态 / 空覆盖守卫 / 未保存离开守卫
+      // loadedEpisodeOrder / loadedShotsOrder = 当前 episodeText / shots 对应的集数（0 = 未载入）；
+      // 保存前与 episodeOrder 比对，不一致一律拦截（防止把 A 集内容写进 B 集）。
+      const [loadedEpisodeOrder, setLoadedEpisodeOrder] = React.useState(0)
+      const [loadedShotsOrder, setLoadedShotsOrder] = React.useState(0)
+      const [episodeDiskHadContent, setEpisodeDiskHadContent] = React.useState(false)
+      const [episodeLoadError, setEpisodeLoadError] = React.useState('')
+      const [shotsLoadError, setShotsLoadError] = React.useState('')
+      // 空覆盖守卫的持久提示：{ scope: 'episode' | 'storyboard', text }（say() 2.2s 太短，GUI 走查需要看得到）
+      const [saveBlock, setSaveBlock] = React.useState(null)
+      // 未保存离开守卫：leavePrompt = { action }（action = 用户确认后要执行的离开动作）
+      const [leavePrompt, setLeavePrompt] = React.useState(null)
+      const [leaveSaving, setLeaveSaving] = React.useState(false)
 
       const say = (message) => {
         setFlash(message)
@@ -1114,12 +2934,14 @@ window.__ModuleLoader__.load({
         guard(pending.run)
       }
 
+      // v0.11.5（task-4）：guard 返回布尔（true=提交成功；false=被校验拦截或失败），供「保存并离开」判断是否真正保存成功
       const guard = async (fn) => {
         setBusy(true)
         setError('')
         setErrorInfo(null)
         try {
-          await fn()
+          const result = await fn()
+          return result !== false
         } catch (err) {
           // P2-2：强制模式下越步写入被宿主以 409 conflict 拒绝 → 用流程提示引导先确认上一步
           if (err && err.code === 'conflict' && /强制模式|需先确认/.test(String(err.message || ''))) {
@@ -1130,6 +2952,7 @@ window.__ModuleLoader__.load({
             setErrorInfo(friendlyErrorInfo(err))
             setRetryAction({ run: fn })
           }
+          return false
         } finally {
           setBusy(false)
         }
@@ -1138,6 +2961,149 @@ window.__ModuleLoader__.load({
       const markDirty = (key) => setDirty((prev) => (prev[key] ? prev : { ...prev, [key]: true }))
       const clearDirty = (key) => setDirty((prev) => (prev[key] ? { ...prev, [key]: false } : prev))
       const dirtyMark = (key) => (dirty[key] ? h('span', { className: 'ad-dirty' }, '● 有未保存修改') : null)
+
+      /* ------------------------- v0.11.5（task-4）：P0 数据安全三连公共状态/守卫 ------------------------- */
+
+      const DIRTY_KEYS = ['contract', 'outline', 'characters', 'world', 'memory', 'episode', 'storyboard']
+      const DIRTY_LABELS = {
+        contract: '剧集契约',
+        outline: '总纲',
+        characters: '人物',
+        world: '世界观',
+        memory: '本剧记忆',
+        episode: '剧本',
+        storyboard: '分镜',
+        doc: '文档',
+      }
+      const hasUnsavedChanges = () => DIRTY_KEYS.some((key) => Boolean(dirty[key])) || docDirty
+      const resetAllDirty = () => {
+        setDirty({ contract: false, outline: false, characters: false, world: false, memory: false, episode: false, storyboard: false })
+        setDocDirty(false)
+        setSaveBlock(null)
+      }
+      const unsavedScopeLabels = () => {
+        const labels = DIRTY_KEYS.filter((key) => Boolean(dirty[key])).map((key) => DIRTY_LABELS[key])
+        if (docDirty) labels.push(DIRTY_LABELS.doc)
+        return labels
+      }
+      // P0-1：统一离开守卫入口（只判断「有没有未保存修改」；保存/放弃动作由对话框按钮执行）
+      const requestLeave = (action) => {
+        if (typeof action !== 'function') return
+        if (!hasUnsavedChanges()) {
+          action()
+          return
+        }
+        setLeavePrompt({ action })
+      }
+
+      // P0-2：项目级状态清理（openProject 起始统一调用；resetProjectView 切源/返回列表复用同一份口径）。
+      // 清理范围：文档编辑器 / 生成（画布·预算·任务·已规划计划）/ 账本 / 台词 / 素材 / 导入 / 剧本分镜载入态 / 未保存标记。
+      // 保留：数据源选择、全局设置、页签折叠偏好等全局状态。
+      const resetProjectScopedState = () => {
+        // 文档编辑器（T7/E1）：A 项目残留的 docPath/docText 不得沿用到 B 项目
+        setDocOpen(false)
+        setDocPath('')
+        setDocText('')
+        setDocHash('')
+        setDocUpdatedAt('')
+        setDocDirty(false)
+        setDocBusy(false)
+        setDocNotice('')
+        setDocError('')
+        setDocUnavailable(false)
+        setDocConflict(null)
+        setDocNotifyState('idle')
+        setDocSelection('')
+        // 生成页：A 项目的画布/预算/任务/已规划计划不得沿用到 B 项目（防止 A 计划花 B 预算）
+        setGenBackends(null)
+        setGenCanvas(null)
+        setGenBudget(null)
+        setGenTasks([])
+        setGenPlan(null)
+        // 账本 / 台词 / 素材 / 导入预览：跨项目不串扰
+        setLedger(null)
+        setDialogue(null)
+        setAssets([])
+        setAssetSource('')
+        setAssetShots('')
+        setImportText('')
+        setImportPreview(null)
+        setShowImport(false)
+        // 剧本/分镜载入态 + 守卫提示（正文/分镜内容本身也清空，避免跨项目残留）
+        setEpisodeText('')
+        setShots([])
+        setShotGroups(null)
+        setShotGroupsTruncated(false)
+        setShotExtraOpen(null)
+        setLoadedEpisodeOrder(0)
+        setLoadedShotsOrder(0)
+        setEpisodeDiskHadContent(false)
+        setEpisodeLoadError('')
+        setShotsLoadError('')
+        setSaveBlock(null)
+        setLeavePrompt(null)
+        setLeaveSaving(false)
+        // 未保存标记（7 个可保存页签 + 文档）
+        setDirty({ contract: false, outline: false, characters: false, world: false, memory: false, episode: false, storyboard: false })
+      }
+
+      // P0-3：载入结果统一应用（手动载入 / 自动载入共用，保证载入态与磁盘内容标记一致）
+      const applyEpisodeLoaded = (order, text) => {
+        const target = Number(order) || 1
+        setEpisodeOrder(target)
+        setEpisodeText(typeof text === 'string' ? text : '')
+        setLoadedEpisodeOrder(target)
+        setEpisodeDiskHadContent(Boolean(String(text || '').trim()))
+        setEpisodeLoadError('')
+        clearDirty('episode')
+      }
+      const applyShotsLoaded = (order, response) => {
+        const target = Number(order) || 1
+        const result = response || {}
+        setEpisodeOrder(target)
+        setShots(result.shots || [])
+        setShotExtraOpen(null)
+        const groups = normalizeStoryboardGroups(result.groups)
+        setShotGroups(groups)
+        setShotGroupsTruncated(Boolean(groups) && (result.groupsTruncated === true || result.truncated === true))
+        setLoadedShotsOrder(target)
+        setShotsLoadError('')
+        clearDirty('storyboard')
+      }
+      // P0-3：openProject 后自动载入当前集正文 / 分镜（只读、不阻断进入项目；not-found/空视为空项目静默，其他错误给可读提示）
+      const autoLoadEpisode = async (title, order) => {
+        const target = Number(order) || 1
+        try {
+          const result = await api('episode-read', { title, order: target })
+          applyEpisodeLoaded(target, result.text || '')
+        } catch (error) {
+          if (error && (error.code === 'not-found' || error.code === 'invalid-args')) {
+            setLoadedEpisodeOrder(target)
+            setEpisodeDiskHadContent(false)
+            setEpisodeLoadError('')
+          } else {
+            setEpisodeLoadError(`第 ${target} 集正文自动载入失败：${error.message}（可点「载入」重试）`)
+          }
+        }
+      }
+      const autoLoadShots = async (title, order) => {
+        const target = Number(order) || 1
+        try {
+          const result = await api('storyboard-get', { title, order: target })
+          applyShotsLoaded(target, result)
+        } catch (error) {
+          if (error && (error.code === 'not-found' || error.code === 'invalid-args')) {
+            setEpisodeOrder(target)
+            setShots([])
+            setShotGroups(null)
+            setShotGroupsTruncated(false)
+            setLoadedShotsOrder(target)
+            setShotsLoadError('')
+          } else {
+            setShotsLoadError(`第 ${target} 集分镜自动载入失败：${error.message}（可点「载入」重试）`)
+          }
+        }
+      }
 
       const loadList = React.useCallback(async () => {
         setPhase('loading')
@@ -1179,6 +3145,8 @@ window.__ModuleLoader__.load({
 
       const openProject = (title) =>
         guard(async () => {
+          // P0-2（task-4）：打开项目前统一清理上一项目残留的项目级状态（doc/gen/ledger/dialogue/assets/import + dirty）
+          resetProjectScopedState()
           const [t, c, o, ch, eps, dr, mem, wrld, prg, fin] = await Promise.all([
             api('tree', { title }),
             api('contract-get', { title }),
@@ -1206,7 +3174,8 @@ window.__ModuleLoader__.load({
           setExported([])
           setTab('contract')
           const first = (eps.episodes || [])[0]
-          setEpisodeOrder(first ? first.order : 1)
+          const firstOrder = first ? Number(first.order) || 1 : 1
+          setEpisodeOrder(firstOrder)
           setEpisodeText('')
           setShots([])
           // 折叠状态按项目持久化（FR-A04）
@@ -1217,6 +3186,9 @@ window.__ModuleLoader__.load({
             setCollapsed({})
           }
           setPhase('project')
+          // P0-3（task-4）：自动载入当前集正文 / 分镜（首屏即见磁盘内容；失败不阻断进入项目，仅给可读提示）
+          autoLoadEpisode(title, firstOrder).catch(() => {})
+          autoLoadShots(title, firstOrder).catch(() => {})
           // P2-2：加载流程状态（宿主未就绪时按内容推断只读展示）
           loadFlow(title, prg.progress).catch(() => {})
           // P2-3：审读报告按需读取（进入检查页触发）；切项目先清空本地裁决
@@ -1255,36 +3227,60 @@ window.__ModuleLoader__.load({
 
       /* ------------------------------------------------------ 契约 / 总纲 / 人物 */
 
+      // P0-1（task-4）：契约编辑统一入口 —— 任何字段变更都标「未保存」（dirty 覆盖 7 个可保存页签）
+      const updateContract = (next) => {
+        markDirty('contract')
+        setContract(next)
+      }
+
       const saveContract = () =>
         guard(async () => {
           const result = await api('contract-save', { title: openTitle, contract })
           setContract(result.contract)
+          clearDirty('contract')
           say('契约已保存')
           refreshFlow().catch(() => {})
         })
 
-      const setRow = (index, key, value) =>
+      const setRow = (index, key, value) => {
+        markDirty('outline')
         setRows((prev) => prev.map((row, i) => (i === index ? { ...row, [key]: value } : row)))
-      const addRow = () =>
+      }
+      const addRow = () => {
+        markDirty('outline')
         setRows((prev) => [
           ...prev,
           { order: prev.length + 1, title: '', logline: '', hook: '', twist: '', cliffhanger: '', estDurationSec: 0 },
         ])
-      const removeRow = (index) => setRows((prev) => prev.filter((_, i) => i !== index))
+      }
+      const removeRow = (index) => {
+        markDirty('outline')
+        setRows((prev) => prev.filter((_, i) => i !== index))
+      }
       const saveOutline = () => guard(async () => {
         const result = await api('outline-save', { title: openTitle, rows })
         setRows(result.rows)
+        clearDirty('outline')
         say('总纲已保存')
         refreshFlow().catch(() => {})
       })
 
-      const setCard = (index, key, value) =>
+      const setCard = (index, key, value) => {
+        markDirty('characters')
         setCharacters((prev) => prev.map((card, i) => (i === index ? { ...card, [key]: value } : card)))
-      const addCard = () => setCharacters((prev) => [...prev, { name: '', role: '配角', personality: [], bio: '', appearancePrompt: '', voiceHint: '' }])
-      const removeCard = (index) => setCharacters((prev) => prev.filter((_, i) => i !== index))
+      }
+      const addCard = () => {
+        markDirty('characters')
+        setCharacters((prev) => [...prev, { name: '', role: '配角', personality: [], bio: '', appearancePrompt: '', voiceHint: '' }])
+      }
+      const removeCard = (index) => {
+        markDirty('characters')
+        setCharacters((prev) => prev.filter((_, i) => i !== index))
+      }
       const saveCharacters = () => guard(async () => {
         const result = await api('characters-save', { title: openTitle, characters })
         setCharacters(result.characters)
+        clearDirty('characters')
         say('人物卡已保存')
         refreshFlow().catch(() => {})
       })
@@ -1293,24 +3289,48 @@ window.__ModuleLoader__.load({
 
       const loadEpisode = (order) =>
         guard(async () => {
-          const result = await api('episode-read', { title: openTitle, order })
-          setEpisodeOrder(order)
-          setEpisodeText(result.text || '')
-          clearDirty('episode')
+          const target = Number(order) || 1
+          const result = await api('episode-read', { title: openTitle, order: target })
+          applyEpisodeLoaded(target, result.text || '')
         })
+
+      // P0-3（task-4）：空/串集覆盖守卫 —— 未载入或载入集数不匹配时不得写盘（新建集合法路径除外）
+      const episodeSaveBlocked = () => {
+        const target = Number(episodeOrder) || 1
+        const diskExists = episodes.some((item) => Number(item.order) === target)
+        const trimmed = String(episodeText || '').trim()
+        if (loadedEpisodeOrder !== target) {
+          if (diskExists) {
+            setSaveBlock({ scope: 'episode', text: `第 ${target} 集磁盘已有内容，但编辑器未载入该集：请先点「载入」查看磁盘内容，确认后再保存（防止空内容/串集覆盖）。` })
+            return true
+          }
+          // 磁盘上还没有该集文件：新建集是合法路径，允许保存
+          return false
+        }
+        if (!trimmed && episodeDiskHadContent) {
+          setSaveBlock({ scope: 'episode', text: `第 ${target} 集磁盘已有内容，空内容保存会清空它：请先点「载入」确认后再保存。` })
+          return true
+        }
+        return false
+      }
 
       const saveEpisode = () =>
         guard(async () => {
-          const result = await api('episode-write', { title: openTitle, order: episodeOrder, text: episodeText })
+          if (episodeSaveBlocked()) return false
+          setSaveBlock(null)
+          const target = Number(episodeOrder) || 1
+          const result = await api('episode-write', { title: openTitle, order: target, text: episodeText })
           const [eps, prg] = await Promise.all([
             api('episodes-list', { title: openTitle }),
             api('progress-get', { title: openTitle }),
           ])
           setEpisodes(eps.episodes || [])
           setProgress(prg.progress)
+          setLoadedEpisodeOrder(target)
+          setEpisodeDiskHadContent(Boolean(String(episodeText || '').trim()))
           clearDirty('episode')
           const bytes = result.saved && result.saved.bytes
-          say(`第${episodeOrder}集已保存${bytes ? `（${bytes} 字节）` : ''}`)
+          say(`第${target}集已保存${bytes ? `（${bytes} 字节）` : ''}`)
           // P2-8 一致性：编辑器打开的是同一剧本文件时，同步磁盘最新内容（有未保存修改则先提示）
           if (docOpen && docPath && docPath === docFallbackPath()) {
             if (docDirty) setDocNotice('文档编辑器有未保存修改：可直接保存覆盖，或点「重新载入最新」同步刚保存的剧本。')
@@ -1321,11 +3341,20 @@ window.__ModuleLoader__.load({
 
       const loadShots = (order) =>
         guard(async () => {
-          const result = await api('storyboard-get', { title: openTitle, order })
-          setEpisodeOrder(order)
-          setShots(result.shots || [])
-          clearDirty('storyboard')
+          const target = Number(order) || 1
+          const result = await api('storyboard-get', { title: openTitle, order: target })
+          applyShotsLoaded(target, result)
         })
+
+      // P0-3（task-4）：分镜未载入（或载入集数不匹配）时禁止写盘，避免整体覆盖磁盘分镜
+      const shotsSaveBlocked = () => {
+        const target = Number(episodeOrder) || 1
+        if (loadedShotsOrder !== target) {
+          setSaveBlock({ scope: 'storyboard', text: `第 ${target} 集分镜尚未载入：请先点「载入」确认磁盘内容后再保存（防止覆盖磁盘分镜）。` })
+          return true
+        }
+        return false
+      }
 
       const setShot = (index, key, value) => {
         markDirty('storyboard')
@@ -1360,8 +3389,14 @@ window.__ModuleLoader__.load({
         say('镜号已按当前顺序重编')
       }
       const saveShots = () => guard(async () => {
+        if (shotsSaveBlocked()) return false
+        setSaveBlock(null)
+        const target = Number(episodeOrder) || 1
         const result = await api('storyboard-save', { title: openTitle, order: episodeOrder, shots })
-        setShots(result.shots)
+        // v0.10（task-84）：host 返回为权威；合并回 host 未返回的未知/add-only per-shot 字段，
+        // 避免保存后本地 state 被规范化返回值覆盖导致字段在会话内丢失（已知字段以 host 返回为准）。
+        setShots((prev) => mergeShotsPreservingExtraFields(prev, result.shots))
+        setLoadedShotsOrder(target)
         clearDirty('storyboard')
         say(`分镜已保存${result.shots ? `（${result.shots.length} 个镜头）` : ''}`)
         refreshFlow().catch(() => {})
@@ -1397,7 +3432,15 @@ window.__ModuleLoader__.load({
         setEpisodes(eps.episodes || [])
         setProgress(prg.progress)
         setShots(sb.shots || [])
+        setLoadedShotsOrder(Number(episodeOrder) || 1)
+        // 草稿采纳可能改写剧本正文：本地 episodeText 可能已过期 → 失效载入态，保存前必须先「载入」（防空覆盖）
+        setLoadedEpisodeOrder(0)
         setTree(tr.tree)
+        // 草稿处理后状态由宿主权威内容整体替换 → 对应页签的未保存标记同步清零（避免守卫误报）
+        clearDirty('contract')
+        clearDirty('outline')
+        clearDirty('characters')
+        clearDirty('storyboard')
         refreshFlow().catch(() => {})
       }
 
@@ -1473,15 +3516,23 @@ window.__ModuleLoader__.load({
 
       /* ------------------------------------------------------------ 本剧记忆 */
 
-      const setMem = (index, key, value) =>
+      const setMem = (index, key, value) => {
+        markDirty('memory')
         setMemory((prev) => prev.map((m, i) => (i === index ? { ...m, [key]: value } : m)))
-      const addMem = () =>
+      }
+      const addMem = () => {
+        markDirty('memory')
         setMemory((prev) => [...prev, { id: '', kind: '伏笔', content: '', episode: null, status: 'open' }])
-      const removeMem = (index) => setMemory((prev) => prev.filter((_, i) => i !== index))
+      }
+      const removeMem = (index) => {
+        markDirty('memory')
+        setMemory((prev) => prev.filter((_, i) => i !== index))
+      }
       const saveMemory = () =>
         guard(async () => {
           const result = await api('memory-save', { title: openTitle, memory })
           setMemory(result.memory)
+          clearDirty('memory')
           say('本剧记忆已保存')
         })
 
@@ -1633,6 +3684,9 @@ window.__ModuleLoader__.load({
           say('文档已保存')
           if (docPath === docFallbackPath()) {
             setEpisodeText(docText)
+            setLoadedEpisodeOrder(Number(episodeOrder) || 1)
+            setEpisodeDiskHadContent(Boolean(String(docText || '').trim()))
+            setEpisodeLoadError('')
             clearDirty('episode')
           }
           await notifyDocSaved(docPath, result.hash || '')
@@ -1731,8 +3785,10 @@ window.__ModuleLoader__.load({
         }
       }
 
-      // 切源后重置全部视图状态（页签/项目/文档/搜索均回到列表页），避免跨源串扰
+      // 切源后重置全部视图状态（页签/项目/文档/搜索均回到列表页），避免跨源串扰。
+      // v0.11.5（task-4）：项目级状态清理统一走 resetProjectScopedState（与 openProject 共用一份口径）。
       const resetProjectView = () => {
+        resetProjectScopedState()
         setPhase('ready')
         setTree(null)
         setOpenTitle('')
@@ -1742,8 +3798,6 @@ window.__ModuleLoader__.load({
         setCharacters([])
         setEpisodes([])
         setEpisodeOrder(1)
-        setEpisodeText('')
-        setShots([])
         setDraftList([])
         setReport(null)
         setExported([])
@@ -1751,26 +3805,10 @@ window.__ModuleLoader__.load({
         setWorld([])
         setProgress(null)
         setFinalized([])
-        setLedger(null)
-        setDialogue(null)
-        setAssets([])
         setShared(null)
         setSharedPath('')
         setSharedText('')
         setHits(null)
-        setDocOpen(false)
-        setDocPath('')
-        setDocText('')
-        setDocHash('')
-        setDocUpdatedAt('')
-        setDocDirty(false)
-        setDocConflict(null)
-        setDocUnavailable(false)
-        setDocNotifyState('idle')
-        setDocError('')
-        setDocNotice('')
-        clearDirty('episode')
-        clearDirty('storyboard')
         // P2-2：切源/返回列表时清空流程状态（跨项目不复用）
         setFlowState(null)
         setFlowAvailable(false)
@@ -1792,22 +3830,25 @@ window.__ModuleLoader__.load({
       const selectSource = (path) => {
         const next = typeof path === 'string' ? path : ''
         if (!next || next === sourcePath) return
-        setSourcePath(next)
-        currentSourceCwd = next
-        saveSourceSelection(next)
-        guard(async () => {
-          resetProjectView()
-          await loadList()
-          // E5 语义：cwd 是排序提示（默认源之后优先当前源），刷新列表但不强制过滤
-          try {
-            const result = await api('sources-list', { cwd: next, limit: 50 })
-            if (result && Array.isArray(result.sources)) {
-              applySourceList(result.sources, 'host', result.degraded, next)
+        // P0-1（task-4）：切数据源是「离开当前项目」路径，有未保存修改时先走三选一守卫
+        requestLeave(() => {
+          setSourcePath(next)
+          currentSourceCwd = next
+          saveSourceSelection(next)
+          guard(async () => {
+            resetProjectView()
+            await loadList()
+            // E5 语义：cwd 是排序提示（默认源之后优先当前源），刷新列表但不强制过滤
+            try {
+              const result = await api('sources-list', { cwd: next, limit: 50 })
+              if (result && Array.isArray(result.sources)) {
+                applySourceList(result.sources, 'host', result.degraded, next)
+              }
+            } catch {
+              /* 旧宿主：保持 A 模式列表 */
             }
-          } catch {
-            /* 旧宿主：保持 A 模式列表 */
-          }
-          say('已切换数据源：' + shortSourcePath(next))
+            say('已切换数据源：' + shortSourcePath(next))
+          })
         })
       }
 
@@ -1817,6 +3858,15 @@ window.__ModuleLoader__.load({
         const count = item.projectCount == null ? '' : ` · ${item.projectCount} 个项目`
         const mark = index === 0 && sourcesMode === 'host' ? '★ ' : ''
         return `${mark}${name}（${type}${count}）`
+      }
+
+      // P0-1/P0-2（task-4）：「← 返回」列表 = 离开项目路径：先守卫 → 再清理项目级状态 → 刷新列表
+      const goBackToList = () => {
+        setError('')
+        setErrorInfo(null)
+        setRetryAction(null)
+        resetProjectView()
+        loadList()
       }
 
       React.useEffect(() => {
@@ -2031,10 +4081,13 @@ window.__ModuleLoader__.load({
           setFlowMsg(blocked)
           return
         }
-        setFlowMsg('')
-        setTab(tabKey)
-        // P2-3：进入「检查」页时若无报告则尝试读取最新审读报告（未就绪时静默降级为空态+指引）
-        if (tabKey === 'check' && openTitle && !reviewReport && !reviewBusy) loadReview().catch(() => {})
+        // P0-1（task-4）：切页签是「离开当前编辑页」路径，有未保存修改时先走三选一守卫
+        requestLeave(() => {
+          setFlowMsg('')
+          setTab(tabKey)
+          // P2-3：进入「检查」页时若无报告则尝试读取最新审读报告（未就绪时静默降级为空态+指引）
+          if (tabKey === 'check' && openTitle && !reviewReport && !reviewBusy) loadReview().catch(() => {})
+        })
       }
 
       /* --------------------------------- P2-3 审读报告（只读展示 / 跳转 / 裁决） */
@@ -2074,19 +4127,22 @@ window.__ModuleLoader__.load({
       const jumpToFinding = (finding) => {
         const loc = (finding && finding.location) || {}
         const episode = Number(loc.episode) || Number(reviewEpisode) || Number(episodeOrder) || 1
-        setReviewJump({
-          episode,
-          scene: loc.scene == null ? '' : loc.scene,
-          shot: loc.shot == null ? '' : loc.shot,
+        // P0-1（task-4）：审读「跳转定位」会切换页签并重新载入内容，有未保存修改时先走三选一守卫
+        requestLeave(() => {
+          setReviewJump({
+            episode,
+            scene: loc.scene == null ? '' : loc.scene,
+            shot: loc.shot == null ? '' : loc.shot,
+          })
+          if (loc.shot != null && String(loc.shot) !== '') {
+            setTab('storyboard')
+            loadShots(episode).catch(() => {})
+          } else {
+            setTab('episode')
+            loadEpisode(episode).catch(() => {})
+          }
+          say(`已定位：${reviewLocationText({ episode, scene: loc.scene, shot: loc.shot })}`)
         })
-        if (loc.shot != null && String(loc.shot) !== '') {
-          setTab('storyboard')
-          loadShots(episode).catch(() => {})
-        } else {
-          setTab('episode')
-          loadEpisode(episode).catch(() => {})
-        }
-        say(`已定位：${reviewLocationText({ episode, scene: loc.scene, shot: loc.shot })}`)
       }
 
       // 裁决（Q6）：v0.6.0 记录在 client localStorage（宿主不写回、不做自动学习；Q6 不做自动学习）
@@ -2148,14 +4204,23 @@ window.__ModuleLoader__.load({
 
       /* ------------------------------------------------------------ 世界观 */
 
-      const setWorldEntry = (index, key, value) =>
+      const setWorldEntry = (index, key, value) => {
+        markDirty('world')
         setWorld((prev) => prev.map((e, i) => (i === index ? { ...e, [key]: value } : e)))
-      const addWorldEntry = () => setWorld((prev) => [...prev, { id: '', kind: '地点', name: '', detail: '' }])
-      const removeWorldEntry = (index) => setWorld((prev) => prev.filter((_, i) => i !== index))
+      }
+      const addWorldEntry = () => {
+        markDirty('world')
+        setWorld((prev) => [...prev, { id: '', kind: '地点', name: '', detail: '' }])
+      }
+      const removeWorldEntry = (index) => {
+        markDirty('world')
+        setWorld((prev) => prev.filter((_, i) => i !== index))
+      }
       const saveWorld = () =>
         guard(async () => {
           const result = await api('world-save', { title: openTitle, world })
           setWorld(result.world)
+          clearDirty('world')
           say('世界观已保存')
         })
 
@@ -2176,147 +4241,6 @@ window.__ModuleLoader__.load({
           const list = await api('shared-list', {})
           setShared(list)
           say('共享资料已保存')
-        })
-
-      /* ------------------------------- P2-6 任务模型（settings.taskModels，Q1–Q5） */
-
-      const taskModelsOf = () => normalizeTaskModels((settings && settings.taskModels) || {})
-      const auditTaskModel = () => taskModelsOf().audit || null
-
-      // 「使用宿主默认」开关：勾选 = 删除该任务键（走回退链 defaultModel → agentDefaultModel）
-      const setAuditTaskModelDefault = (useDefault) => {
-        setTaskModelError('')
-        setSettings((prev) => {
-          const base = normalizeSettings(prev)
-          const models = { ...(base.taskModels || {}) }
-          if (useDefault) delete models.audit
-          else models.audit = { model: '' }
-          return { ...base, taskModels: models }
-        })
-      }
-
-      // 逐字段编辑 + Q4 即时校验（temperature 0–2、maxTokens ≤60000、model 必填）
-      const setAuditTaskModelField = (key, value) => {
-        setSettings((prev) => {
-          const base = normalizeSettings(prev)
-          const models = { ...(base.taskModels || {}) }
-          const entry = { ...(models.audit || {}) }
-          if (value === '' || value == null) delete entry[key]
-          else if (key === 'temperature' || key === 'maxTokens' || key === 'timeoutMs') entry[key] = Number(value)
-          else entry[key] = String(value)
-          models.audit = entry
-          return { ...base, taskModels: models }
-        })
-        if (key === 'temperature') {
-          const num = Number(value)
-          setTaskModelError(value !== '' && (!Number.isFinite(num) || num < 0 || num > TASK_MODEL_MAX_TEMPERATURE)
-            ? 'Temperature 需在 0~2 之间'
-            : '')
-        } else if (key === 'maxTokens') {
-          const num = Number(value)
-          setTaskModelError(value !== '' && (!Number.isFinite(num) || num < 1 || num > TASK_MODEL_MAX_TOKENS)
-            ? `MaxTokens 需在 1~${TASK_MODEL_MAX_TOKENS}（全局上限 60k）之间`
-            : '')
-        } else if (key === 'timeoutMs') {
-          const num = Number(value)
-          setTaskModelError(value !== '' && (!Number.isFinite(num) || !Number.isInteger(num) || num < TASK_MODEL_MIN_TIMEOUT_MS || num > TASK_MODEL_MAX_TIMEOUT_MS)
-            ? `超时需在 ${TASK_MODEL_MIN_TIMEOUT_MS}~${TASK_MODEL_MAX_TIMEOUT_MS} 毫秒之间（整数）`
-            : '')
-        } else if (key === 'model') {
-          setTaskModelError(value !== '' && !String(value).trim() ? '模型名不能为空' : '')
-        } else {
-          setTaskModelError('')
-        }
-      }
-
-      // v0.6.3：最近使用模型（localStorage 本地记录，去重 + 最多 8 条）
-      const rememberRecentTaskModel = (entry) => {
-        const model = entry && typeof entry.model === 'string' ? entry.model.trim() : ''
-        if (!model) return
-        setTaskModelRecent((prev) => {
-          const next = mergeRecentTaskModel(prev, { provider: entry.provider || '', model })
-          saveRecentTaskModels(next)
-          return next
-        })
-      }
-
-      const applyRecentTaskModel = (item) => {
-        if (!item || !item.model) return
-        setAuditTaskModelField('model', item.model)
-        if (item.provider) setAuditTaskModelField('provider', item.provider)
-        say('已填入最近使用的模型：' + item.model)
-      }
-
-      const validateTaskModelsForSave = (normalized) => {
-        const audit = normalized && normalized.taskModels ? normalized.taskModels.audit : null
-        if (!audit) return ''
-        if (!audit.model || !String(audit.model).trim()) return '审读（audit）任务模型名不能为空；不需要任务级覆盖请勾选「使用宿主默认」'
-        if (audit.temperature != null && (!Number.isFinite(Number(audit.temperature)) || Number(audit.temperature) < 0 || Number(audit.temperature) > 2)) {
-          return 'Temperature 需在 0~2 之间'
-        }
-        if (audit.maxTokens != null && (Math.round(Number(audit.maxTokens)) < 1 || Math.round(Number(audit.maxTokens)) > TASK_MODEL_MAX_TOKENS)) {
-          return `MaxTokens 需在 1~${TASK_MODEL_MAX_TOKENS}（全局上限 60k）之间`
-        }
-        if (audit.timeoutMs != null && (!Number.isInteger(Number(audit.timeoutMs)) || Number(audit.timeoutMs) < TASK_MODEL_MIN_TIMEOUT_MS || Number(audit.timeoutMs) > TASK_MODEL_MAX_TIMEOUT_MS)) {
-          return `超时需在 ${TASK_MODEL_MIN_TIMEOUT_MS}~${TASK_MODEL_MAX_TIMEOUT_MS} 毫秒之间（整数）`
-        }
-        return ''
-      }
-
-      const saveSettings = () =>
-        guard(async () => {
-          // 先按「用户意图」校验原始 taskModels（勾掉默认但没填 model 时要提示，而不是静默丢弃）
-          const rawTaskModels = (settings && settings.taskModels) || {}
-          const rawAudit = rawTaskModels.audit
-          if (rawAudit && !String(rawAudit.model || '').trim()) {
-            setTaskModelError('审读（audit）任务模型名不能为空；不需要任务级覆盖请勾选「使用宿主默认」')
-            return
-          }
-          if (rawAudit) {
-            // 原始值越界时明确报错（归一化会丢弃非法值，不能让它静默保存成「未配置」）
-            if (rawAudit.temperature != null && rawAudit.temperature !== '') {
-              const temperature = Number(rawAudit.temperature)
-              if (!Number.isFinite(temperature) || temperature < 0 || temperature > TASK_MODEL_MAX_TEMPERATURE) {
-                setTaskModelError('Temperature 需在 0~2 之间')
-                return
-              }
-            }
-            if (rawAudit.maxTokens != null && rawAudit.maxTokens !== '') {
-              const maxTokens = Number(rawAudit.maxTokens)
-              if (!Number.isFinite(maxTokens) || Math.round(maxTokens) < 1 || Math.round(maxTokens) > TASK_MODEL_MAX_TOKENS) {
-                setTaskModelError(`MaxTokens 需在 1~${TASK_MODEL_MAX_TOKENS}（全局上限 60k）之间`)
-                return
-              }
-            }
-            if (rawAudit.timeoutMs != null && rawAudit.timeoutMs !== '') {
-              const timeoutMs = Number(rawAudit.timeoutMs)
-              if (!Number.isFinite(timeoutMs) || !Number.isInteger(timeoutMs) || timeoutMs < TASK_MODEL_MIN_TIMEOUT_MS || timeoutMs > TASK_MODEL_MAX_TIMEOUT_MS) {
-                setTaskModelError(`超时需在 ${TASK_MODEL_MIN_TIMEOUT_MS}~${TASK_MODEL_MAX_TIMEOUT_MS} 毫秒之间（整数）`)
-                return
-              }
-            }
-          }
-          const normalized = normalizeSettings(settings)
-          const invalid = validateTaskModelsForSave(normalized)
-          if (invalid) {
-            setTaskModelError(invalid)
-            return
-          }
-          setTaskModelError('')
-          const result = await api('settings-save', { settings: normalized })
-          const nextSettings = normalizeSettings(result.settings)
-          setSettings(nextSettings)
-          say('设置已保存')
-          // v0.6.3：保存成功后记录「最近使用」模型（去重 + 上限 8 条，仅本地 localStorage）
-          const savedAudit = nextSettings && nextSettings.taskModels ? nextSettings.taskModels.audit : null
-          if (savedAudit && savedAudit.model) rememberRecentTaskModel({ provider: savedAudit.provider || '', model: savedAudit.model })
-          // Q3 运行时探测：宿主若返回 modelFallback 标记（只增字段）则明确提示降级；旧宿主无该字段忽略
-          const fallback = result.modelFallback === true ||
-            (result.settings && result.settings.modelFallback === true) ||
-            nextSettings.modelFallback === true
-          if (fallback) {
-            setTaskModelError('模型运行时探测不可用：宿主将回退到默认模型并标记 modelFallback（不阻断审读）。')
-          }
         })
 
       /* ------------------------------------------------------- 台词 / 素材 */
@@ -2383,11 +4307,10 @@ window.__ModuleLoader__.load({
             api('episode-read', { title: openTitle, order }),
             api('storyboard-get', { title: openTitle, order }),
           ])
-          setEpisodeOrder(order)
-          setEpisodeText(ep.text || '')
-          setShots(sb.shots || [])
-          clearDirty('episode')
-          clearDirty('storyboard')
+          // 回滚后本地内容 = 磁盘该版本内容：同步载入态（否则空覆盖守卫会拦截后续保存）
+          applyEpisodeLoaded(Number(order) || 1, ep.text || '')
+          applyShotsLoaded(Number(order) || 1, sb)
+          setSaveBlock(null)
           say(`已回滚第 ${order} 集到 v${version}：${result.restored.restored.join('、')}`)
         })
 
@@ -2497,13 +4420,595 @@ window.__ModuleLoader__.load({
           say(`收敛完成：产出 ${result.collected}，在途 ${result.pending}，失败 ${result.failed}${drift ? '' : ''}`)
         })
 
+      /* ---------------- v0.12.2（task-20 / M4 批1）：5 条既有路由面板接线 ---------------- */
+      // 全部为用户显式点击才调用（打开项目/切页签/刷新状态/loadList/loadGenerate 均不触发）：
+      //   estimate-generation：后端目录/价目查询（不生成、不消耗）
+      //   search-context：本地检索（无模型）
+      //   canvas-reconcile：CLI 只读快照（不改画布）
+      //   task-create / task-update：仅写 .aidrama/tasks.json 台账（不提交生成）
+      const estimateGeneration = async () => {
+        if (genEstimateBusy) return
+        setGenEstimateBusy(true)
+        setGenEstimate(null)
+        try {
+          const unitCount = Math.max(1, Array.isArray(shots) && shots.length ? shots.length : (genPlan && Number(genPlan.count)) || 1)
+          const result = await api('estimate-generation', {
+            title: openTitle,
+            kind: genKind,
+            model: genModel.trim() || undefined,
+            count: unitCount,
+            episode: episodeOrder,
+          })
+          setGenEstimate({ ...(result && typeof result === 'object' ? result : {}), unitCount })
+        } catch (error) {
+          setGenEstimate({ ok: false, estimates: [], error: error.message, unitCount: 0 })
+        } finally {
+          setGenEstimateBusy(false)
+        }
+      }
+
+      const searchProjectContext = async () => {
+        if (genSearchBusy) return
+        const query = genSearchQuery.trim()
+        if (!query) {
+          setGenSearchResult({ emptyQuery: true, hits: [] })
+          return
+        }
+        setGenSearchBusy(true)
+        setGenSearchResult(null)
+        try {
+          const topK = Math.min(20, Math.max(1, Number(genSearchTopK) || 5))
+          const result = await api('search-context', { title: openTitle, query, topK })
+          setGenSearchResult(result && typeof result === 'object' ? result : { hits: [] })
+        } catch (error) {
+          setGenSearchResult({ hits: [], error: error.message })
+        } finally {
+          setGenSearchBusy(false)
+        }
+      }
+
+      const reconcileCanvas = async () => {
+        if (reconcileBusy) return
+        setReconcileBusy(true)
+        setReconcileResult(null)
+        try {
+          const result = await api('canvas-reconcile', { title: openTitle, backend: 'libtv', episode: episodeOrder })
+          setReconcileResult(result && typeof result === 'object' ? result : { ok: false, reason: 'empty', detail: '对账返回为空' })
+        } catch (error) {
+          setReconcileResult({ ok: false, reason: 'error', detail: error.message })
+        } finally {
+          setReconcileBusy(false)
+        }
+      }
+
+      const createTaskRecord = async () => {
+        if (taskRecordBusy) return
+        setTaskRecordBusy(true)
+        setTaskNotice('')
+        try {
+          const result = await api('task-create', {
+            title: openTitle,
+            task: {
+              kind: genKind,
+              backend: taskRecordBackend,
+              episode: episodeOrder,
+              model: genModel.trim() || undefined,
+              prompt: taskRecordPrompt.trim() || undefined,
+            },
+          })
+          setTaskRecordPrompt('')
+          setTaskNotice(result && result.task ? '已登记任务 ' + String(result.task.id || '') + '（仅台账，未提交生成）' : '已登记任务（仅台账，未提交生成）')
+          const tasks = await api('tasks-list', { title: openTitle })
+          setGenTasks((tasks && tasks.tasks) || [])
+        } catch (error) {
+          setTaskNotice('登记失败：' + error.message + '（不阻塞，可重试）')
+        } finally {
+          setTaskRecordBusy(false)
+        }
+      }
+
+      const updateTaskStatus = async (task) => {
+        if (taskRecordBusy || !task || !task.id) return
+        setTaskRecordBusy(true)
+        setTaskNotice('')
+        try {
+          const draft = taskStatusDraft[task.id] || task.status
+          const result = await api('task-update', { title: openTitle, id: task.id, patch: { status: draft } })
+          setTaskNotice(result && result.task ? '已更新任务状态：' + result.task.status + '（仅台账）' : '任务状态已更新（仅台账）')
+          const tasks = await api('tasks-list', { title: openTitle })
+          setGenTasks((tasks && tasks.tasks) || [])
+        } catch (error) {
+          setTaskNotice('更新失败：' + error.message + '（不阻塞，可重试）')
+        } finally {
+          setTaskRecordBusy(false)
+        }
+      }
+
+
+      // v0.12.3（task-21 / M4 批2）：产物入库 —— 仅点击时调用；URL 下载/本地拷入由宿主控制超时与大小上限
+      const intakeGeneratedArtifact = async () => {
+        if (artifactBusy) return
+        const source = artifactSource.trim()
+        if (!source) {
+          setArtifactResult({ ok: false, error: '请输入本地文件路径或 http(s) URL' })
+          return
+        }
+        setArtifactBusy(true)
+        setArtifactResult(null)
+        try {
+          const isUrl = /^https?:\/\//i.test(source)
+          const result = await api('intake-artifact', {
+            title: openTitle,
+            artifact: {
+              ...(isUrl ? { url: source } : { file: source }),
+              kind: artifactKind,
+              ...(artifactName.trim() ? { name: artifactName.trim() } : {}),
+            },
+          })
+          setArtifactResult(result && typeof result === 'object' ? result : { ok: false, error: '入库返回为空' })
+        } catch (error) {
+          setArtifactResult({ ok: false, error: error.message })
+        } finally {
+          setArtifactBusy(false)
+        }
+      }
+
+      /* ---------------------- v0.11.5（task-4 · P0-1）：未保存守卫 / 全局保存 / 关窗保护 ---------------------- */
+
+      // 7 个可保存页签 → 保存函数映射（全局 Ctrl/⌘+S 按当前页签派发；文档栏聚焦时优先保存文档）
+      const SAVEABLE_TABS = {
+        contract: saveContract,
+        outline: saveOutline,
+        characters: saveCharacters,
+        world: saveWorld,
+        memory: saveMemory,
+        episode: saveEpisode,
+        storyboard: saveShots,
+      }
+
+      // 「保存并离开」：先保存全部脏 scope（文档 + 7 页签），任一失败则留在原处（错误/守卫提示由各自保存函数负责）
+      const saveDirtyScopes = async () => {
+        let allOk = true
+        if (docDirty) {
+          if (!docPath || docUnavailable) {
+            say('文档尚未载入，无法保存文档修改')
+            allOk = false
+          } else {
+            const docOk = await saveDoc()
+            if (!docOk) allOk = false
+          }
+        }
+        if (allOk) {
+          for (const key of DIRTY_KEYS) {
+            if (!dirty[key]) continue
+            const saveFn = SAVEABLE_TABS[key]
+            if (!saveFn) continue
+            const ok = await saveFn()
+            if (!ok) {
+              allOk = false
+              break
+            }
+          }
+        }
+        return allOk
+      }
+
+      const confirmLeaveSave = async () => {
+        if (leaveSaving) return
+        const action = leavePrompt && leavePrompt.action
+        setLeaveSaving(true)
+        try {
+          const saved = await saveDirtyScopes()
+          if (saved) {
+            setLeavePrompt(null)
+            if (typeof action === 'function') action()
+          } else {
+            // 保存被守卫拦截或失败：留在原处并关闭对话框，让用户看到面板内错误/守卫提示（不离开、不丢草稿）
+            setLeavePrompt(null)
+          }
+        } finally {
+          setLeaveSaving(false)
+        }
+      }
+      const confirmLeaveDiscard = () => {
+        if (leaveSaving) return
+        const action = leavePrompt && leavePrompt.action
+        resetAllDirty()
+        setLeavePrompt(null)
+        if (typeof action === 'function') action()
+      }
+      const cancelLeave = () => {
+        if (!leaveSaving) setLeavePrompt(null)
+      }
+
+      // 焦点是否在右栏文档区内（含 textarea / 下拉 / 按钮；文档栏聚焦时 Ctrl/⌘+S 优先保存文档）
+      const focusInsideDocPane = () => {
+        try {
+          const active = document.activeElement
+          return Boolean(active && typeof active.closest === 'function' && active.closest('.ad-doc'))
+        } catch {
+          return false
+        }
+      }
+      const saveCurrentTab = () => {
+        if (busy) {
+          say('正在处理中，请稍候…')
+          return
+        }
+        const saveFn = phase === 'project' ? SAVEABLE_TABS[tab] : null
+        if (!saveFn) {
+          say('本页没有可保存的修改')
+          return
+        }
+        saveFn()
+      }
+      // 全局 Ctrl/⌘+S：按 phase/tab 派发保存；仅当「当前上下文有可保存内容」时 preventDefault（不干扰宿主其它快捷键）
+      // 两处既有 textarea onKeyDown 会先 preventDefault，本监听用 e.defaultPrevented 去重，不会重复保存。
+      React.useEffect(() => {
+        const onKeyDown = (event) => {
+          if (leavePrompt) return
+          if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
+          if (String(event.key || '').toLowerCase() !== 's') return
+          if (event.defaultPrevented) return
+          const focusedInDoc = Boolean(docOpen && docPath && !docUnavailable && focusInsideDocPane())
+          const canSaveTab = phase === 'project' && Boolean(SAVEABLE_TABS[tab])
+          if (!focusedInDoc && !canSaveTab) {
+            // 不阻断宿主默认快捷键（Lead 约束：仅「当前页签有可保存内容」时 preventDefault），但面板内不静默
+            if (phase === 'project') say('本页没有可保存的修改')
+            return
+          }
+          event.preventDefault()
+          if (focusedInDoc) {
+            if (docBusy) say('文档处理中，请稍候…')
+            else saveDoc()
+            return
+          }
+          saveCurrentTab()
+        }
+        window.addEventListener('keydown', onKeyDown)
+        return () => window.removeEventListener('keydown', onKeyDown)
+      })
+      // P0-1：关窗/刷新保护（beforeunload 只能走浏览器原生确认，无法面板内三选一；仅在有未保存修改时挂监听 = 尽力保护）
+      React.useEffect(() => {
+        if (!hasUnsavedChanges()) return undefined
+        const onBeforeUnload = (event) => {
+          const message = '有未保存的修改，确定离开吗？'
+          event.preventDefault()
+          event.returnValue = message
+          return message
+        }
+        window.addEventListener('beforeunload', onBeforeUnload)
+        return () => window.removeEventListener('beforeunload', onBeforeUnload)
+      })
+      // 未保存守卫对话框：Esc = 取消（安全出口）
+      React.useEffect(() => {
+        if (!leavePrompt) return
+        const onEscape = (event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            if (!leaveSaving) setLeavePrompt(null)
+          }
+        }
+        window.addEventListener('keydown', onEscape)
+        return () => window.removeEventListener('keydown', onEscape)
+      })
+      // v0.12.1（task-8）：两棵 React 树状态同步 —— 宿主设置页/项目设置浮层关闭后窗口重新获得焦点时，静默重读 settings-get
+      // （仅既有调用点；失败忽略，降级为回主列表时 loadList 已重读）
+      React.useEffect(() => {
+        const refreshSettingsOnFocus = () => {
+          if (typeof document !== 'undefined' && document.visibilityState && document.visibilityState !== 'visible') return
+          api('settings-get').then((result) => setSettings(normalizeSettings(result.settings))).catch(() => {})
+        }
+        window.addEventListener('focus', refreshSettingsOnFocus)
+        return () => window.removeEventListener('focus', refreshSettingsOnFocus)
+      })
+      // 项目页设置浮层：Esc = 关闭（与未保存离开守卫互不影响）
+      React.useEffect(() => {
+        if (!settingsOverlay) return
+        const onEscape = (event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            setSettingsOverlay(false)
+          }
+        }
+        window.addEventListener('keydown', onEscape)
+        return () => window.removeEventListener('keydown', onEscape)
+      })
+
+      // v0.12.4（task-24 / M5-A）：离开守卫对话框焦点陷阱（初始焦点进入 / Tab 循环 / 关闭归还）
+      React.useEffect(() => {
+        if (!leavePrompt) return undefined
+        return installDialogFocusTrap('ad-leave-dialog')
+      }, [Boolean(leavePrompt)])
+      // v0.12.4（task-24 / M5-A）：项目页设置浮层焦点陷阱（与 Esc/遮罩关闭互不影响）
+      React.useEffect(() => {
+        if (!settingsOverlay) return undefined
+        return installDialogFocusTrap('ad-settings-dialog')
+      }, [Boolean(settingsOverlay)])
+      // v0.14.0（task-38 / M6-1）：交给 Agent（C 路径）动作
+      const openHandoff = () => {
+        if (busy) return
+        setHandoffOpen(true)
+        setHandoffBusy(true)
+        setHandoffCopied(false)
+        setHandoffCopyError('')
+        setHandoffInstr('')
+        window.setTimeout(() => {
+          setHandoffInstr(buildHandoffInstruction({
+            title: openTitle,
+            sourcePath: sourcePath,
+            tab,
+            tabLabel: tabLabelOfKey(tab),
+            summaryLines: handoffSummaryLinesOf(tab, {
+              contract, rows, characters, world, episodes, episodeOrder, episodeText, shots,
+              dialogue, assets, memory, draftList, ledger, genTasks, report, reviewReport, exported, finalized, tree,
+            }),
+          }))
+          setHandoffBusy(false)
+        }, 0)
+      }
+      const closeHandoff = () => {
+        setHandoffOpen(false)
+        setHandoffBusy(false)
+        setHandoffCopyError('')
+      }
+      const copyHandoff = () => {
+        const text = handoffInstr
+        const fail = (err) => {
+          setHandoffCopied(false)
+          setHandoffCopyError(String((err && err.message) || err || '剪贴板不可用'))
+        }
+        try {
+          if (typeof navigator === 'undefined' || !navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+            fail('剪贴板不可用')
+            return
+          }
+          const pending = navigator.clipboard.writeText(text)
+          if (pending && typeof pending.then === 'function') {
+            pending.then(() => { setHandoffCopied(true); setHandoffCopyError('') }).catch(fail)
+          } else {
+            setHandoffCopied(true)
+            setHandoffCopyError('')
+          }
+        } catch (err) {
+          fail(err)
+        }
+      }
+      // 弹窗 Esc 关闭（仅打开时）
+      React.useEffect(() => {
+        if (!handoffOpen) return
+        const onEscape = (event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            setHandoffOpen(false)
+            setHandoffBusy(false)
+            setHandoffCopyError('')
+          }
+        }
+        window.addEventListener('keydown', onEscape)
+        return () => window.removeEventListener('keydown', onEscape)
+      })
+      // 弹窗焦点陷阱（初始焦点进入 / Tab 循环 / 关闭归还触发按钮）
+      React.useEffect(() => {
+        if (!handoffOpen) return undefined
+        return installDialogFocusTrap('ad-agent-dialog')
+      }, [Boolean(handoffOpen)])
+      // v0.12.4（task-28 / M5-H hotfix）：设置浮层运行期可读性自愈 —— 若主题派生背景在该渲染上下文未解析为不透明色
+      // （g2 证据：遮罩正常、面板 background 未绘制）。取值优先级：①同页 .ad-shell 的 computed background/color（与宿主主题一致）
+      // → ②系统色 Canvas/CanvasText 兜底（浅/深自适应、0 hex、不新增 token）。只加 inline style 与诊断属性，
+      // 不改 DOM 结构、不绑事件、不影响 Esc/遮罩关闭/焦点 trap/保存逻辑。
+      React.useEffect(() => {
+        if (!settingsOverlay) return undefined
+        const readComputed = (el) => {
+          try {
+            if (!el || typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') return null
+            const style = window.getComputedStyle(el)
+            if (!style) return null
+            return {
+              background: typeof style.backgroundColor === 'string' ? style.backgroundColor : '',
+              color: typeof style.color === 'string' ? style.color : '',
+            }
+          } catch {
+            return null
+          }
+        }
+        const isTransparentColor = (value) => !value || value === 'transparent' || value === 'rgba(0, 0, 0, 0)' || value === 'rgba(0,0,0,0)'
+        const isOpaqueColor = (value) => Boolean(value) && !isTransparentColor(value)
+        try {
+          if (typeof document === 'undefined' || !document || typeof document.getElementById !== 'function') return undefined
+          const panel = document.getElementById('ad-settings-dialog')
+          if (!panel) return undefined
+          const backdrop = panel.parentElement || null
+          const shell = typeof panel.closest === 'function' ? panel.closest('.ad-shell') : null
+          const panelStyle = readComputed(panel)
+          const backdropStyle = readComputed(backdrop)
+          const shellStyle = readComputed(shell)
+          const panelBg = panelStyle ? panelStyle.background : ''
+          const backdropBg = backdropStyle ? backdropStyle.background : ''
+          // 自愈取值优先级：同页 .ad-shell computed 值 → Canvas 系统色
+          const shellBg = shellStyle ? shellStyle.background : ''
+          const shellColor = shellStyle ? shellStyle.color : ''
+          const adoptedBg = isOpaqueColor(shellBg) ? 'shell:' + shellBg : 'canvas:Canvas'
+          const adoptedColor = isOpaqueColor(shellColor) ? 'shell:' + shellColor : 'canvas:CanvasText'
+          // 诊断属性：记录实测色值与实际采用值（仅色值语义，无敏感信息），供 GUI/DevTools 核对根因与自愈是否生效
+          try {
+            panel.setAttribute('data-ad-overlay-bg', 'panel=' + (panelBg || 'unknown') + ';backdrop=' + (backdropBg || 'unknown') + ';shell=' + (shellBg || 'unknown') + ';adopted=' + (isTransparentColor(panelBg) ? adoptedBg : 'native:' + panelBg))
+          } catch {
+            /* setAttribute 不可用时忽略 */
+          }
+          if (isTransparentColor(panelBg) && panel.style) {
+            panel.style.background = isOpaqueColor(shellBg) ? shellBg : 'Canvas'
+            panel.style.color = isOpaqueColor(shellColor) ? shellColor : 'CanvasText'
+          }
+          if (backdrop && isTransparentColor(backdropBg) && backdrop.style) {
+            backdrop.style.background = 'rgba(0,0,0,.4)'
+          }
+        } catch {
+          /* 自愈失败不抛错、不影响交互 */
+        }
+        return undefined
+      }, [Boolean(settingsOverlay)])
+
+      // v0.12.4（task-26 / M5-C）：审读派生数据 memo（纯派生、无副作用；避免无关 state 更新时对全部 findings 重复 filter/sort/group）
+      const reviewFindingsMemo = React.useMemo(() => (reviewReport && reviewReport.findings) || [], [reviewReport])
+      const reviewFilteredMemo = React.useMemo(
+        () => reviewFindingsMemo.filter((finding) => !reviewDimensionFilter || finding.dimension === reviewDimensionFilter),
+        [reviewFindingsMemo, reviewDimensionFilter],
+      )
+      const reviewSortedMemo = React.useMemo(() => sortReviewFindings(reviewFilteredMemo, reviewSort), [reviewFilteredMemo, reviewSort])
+      const reviewGroupsMemo = React.useMemo(
+        () => REVIEW_SEVERITY_ORDER
+          .map((sevKey) => ({ sev: sevKey, items: reviewSortedMemo.filter((finding) => finding.severity === sevKey) }))
+          .filter((group) => group.items.length),
+        [reviewSortedMemo],
+      )
+      const reviewDimensionOptionsMemo = React.useMemo(
+        () => Object.entries(REVIEW_DIMENSION_LABELS)
+          .map(([key, label]) => ({ key, label, count: reviewFindingsMemo.filter((finding) => finding.dimension === key).length }))
+          .filter((option) => option.count > 0),
+        [reviewFindingsMemo],
+      )
+      const reviewSeverityCountsMemo = React.useMemo(
+        () => REVIEW_SEVERITY_ORDER.reduce((counts, sevKey) => {
+          counts[sevKey] = reviewFindingsMemo.filter((finding) => finding.severity === sevKey).length
+          return counts
+        }, {}),
+        [reviewFindingsMemo],
+      )
+      // v0.12.4（task-26 / M5-C）：分镜高级字段扫描 memo + 景别 option 元素复用（100 镜头场景减少无关重算）
+      const shotExtraEntriesMemo = React.useMemo(() => shots.map((shot) => storyboardExtraEntries(shot)), [shots])
+      const shotSizeOptionEls = React.useMemo(() => SHOT_SIZES.map((s) => h('option', { key: s, value: s }, s)), [])
+      // v0.12.4（task-26 / M5-C）：工具卡片页派生统计 memo（重页，避免无关渲染重算）
+      const toolcardsDerived = React.useMemo(() => {
+        const draftPending = draftList.filter((draft) => draft.status === 'pending').length
+        const receipts = [
+          ['剧集契约', contract ? `${contract.platform || '未定平台'} · 目标 ${contract.targetEpisodes || 0} 集` : '—'],
+          ['分集大纲', `${rows.length} 行`],
+          ['人物设定卡', `${characters.length} 人${characters.length ? '：' + characters.slice(0, 6).map((card) => card.name).filter(Boolean).join('、') : ''}`],
+          ['世界观', `${world.length} 条`],
+          ['本剧记忆', `${memory.length} 条（未回收 ${memory.filter((m) => m.status === 'open').length}）`],
+        ]
+        const episodeSceneCount = parseEpisodeScenes(episodeText).length
+        const episodeLineCount = episodeText ? episodeText.split(/\r?\n/).length : 0
+        const episodeCharCount = episodeText.replace(/\s/g, '').length
+        return { draftPending, receipts, episodeSceneCount, episodeLineCount, episodeCharCount }
+      }, [contract, rows, characters, world, memory, draftList, episodeText])
+
+      // v0.13.0（task-31 / M6-0a）：列表页项目卡（影视内容风；封面 button 内仅 span/装饰，禁止嵌套 button/a）
+      const renderProjectCard = (project) => {
+        const count = Number(project.episodeCount) || 0
+        const target = Number(settings && settings.defaultTargetEpisodes) || 0
+        const status = projectStatusOf(project, target)
+        const progressPercent = target > 0 ? Math.max(0, Math.min(100, Math.round((count / target) * 100))) : 0
+        const title = String(project.title == null ? '' : project.title)
+        return h('div', { className: 'ad-project-card', key: project.path, 'data-ad-surface': 'card' },
+          h('button', {
+            className: 'ad-project-cover',
+            'data-cover': projectCoverVariant(title),
+            'data-initial': projectInitialOf(title),
+            'aria-label': '打开短剧《' + title + '》',
+            title: project.path,
+            onClick: () => openProject(title),
+            disabled: busy,
+          },
+            h('span', { className: 'ad-project-badge', 'data-ad-surface': 'badge', 'data-state': status.key, title: status.hint }, status.label),
+            h('span', { className: 'ad-project-chip', 'aria-hidden': 'true' }, count + ' 集')),
+          h('div', { className: 'ad-project-body' },
+            h('div', { className: 'ad-project-title', title }, title),
+            h('div', { className: 'ad-project-meta', title: project.path }, '最近修改 · ' + formatProjectUpdatedAt(project.updatedAt)),
+            target > 0
+              ? h('div', { className: 'ad-project-progress-wrap' },
+                  h('div', {
+                    className: 'ad-project-progress',
+                    role: 'progressbar',
+                    'aria-valuemin': 0,
+                    'aria-valuemax': target,
+                    'aria-valuenow': Math.min(count, target),
+                    'aria-label': '进度 ' + Math.min(count, target) + ' / ' + target + ' 集（按默认目标估算）',
+                    title: '按默认目标 ' + target + ' 集估算，项目契约可单独设置目标集数',
+                  },
+                    h('div', { className: 'ad-project-progress-bar', style: { width: progressPercent + '%' } })),
+                  h('span', { className: 'ad-project-progress-label' }, Math.min(count, target) + ' / ' + target + ' 集'))
+              : null,
+            h('div', { className: 'ad-project-actions' },
+              h('button', { className: 'ad-btn ad-primary ad-sm', onClick: () => openProject(title), disabled: busy }, '打开'),
+              h('details', { className: 'ad-project-more' },
+                h('summary', { className: 'ad-btn ad-sm ad-icon-btn', 'aria-label': '更多操作', title: '更多操作' }, icon('ellipsis')),
+                h('div', { className: 'ad-project-more-panel', role: 'menu', 'aria-label': '短剧《' + title + '》操作' },
+                  h('button', { className: 'ad-project-more-item', role: 'menuitem', onClick: () => renameProject(title), disabled: busy }, icon('pencil'), '重命名'),
+                  h('button', { className: 'ad-project-more-item ad-project-more-danger', role: 'menuitem', onClick: () => deleteProject(title), disabled: busy }, icon('trash'), '删除'),
+                  h('div', { className: 'ad-project-more-path', title: project.path }, icon('folder'), '所在目录：' + project.path))))))
+      }
+
       /* ---------------------------------------------------------------- 渲染 */
 
       const children = [h(Styles, { key: 'styles' })]
 
+      // v0.15.0（task-39 / M6-2）：页头「下一步」CTA（只读 flowState/已加载内存状态；0 新 api）
+      const nextStep = openTitle ? nextStepTarget(flowState, {
+        loading: flowBusy && !flowState,
+        available: flowAvailable,
+        tab,
+        data: { contract, rows, characters, world, episodeText, shots },
+      }) : null
       const headRight = []
       if (flash) headRight.push(h('span', { className: 'ad-flash', key: 'flash', role: 'status', 'aria-live': 'polite' }, flash))
       if (phase === 'project') {
+        // P0-1（task-4）：页头常驻保存态（未保存修改 / 已保存）
+        const unsaved = hasUnsavedChanges()
+        headRight.push(h('span', {
+          className: unsaved ? 'ad-save-state ad-dirty' : 'ad-save-state ad-ok',
+          key: 'save-state',
+          role: 'status',
+          'aria-live': 'polite',
+          title: unsaved
+            ? '当前项目有未保存修改：Ctrl/⌘+S 可保存当前页签或文档栏，离开前会提示'
+            : '当前项目没有未保存修改',
+        }, unsaved ? '● 未保存修改' : '✓ 已保存'))
+        if (nextStep && (nextStep.disabled || nextStep.tab !== tab)) {
+          const nextStepBlocked = nextStep.disabled === true
+          headRight.push(h('div', { className: 'ad-next-step', key: 'next-step' },
+            h('button', {
+              className: 'ad-btn ad-primary ad-sm ad-next-cta',
+              'aria-label': nextStep.ariaLabel,
+              title: nextStep.ariaLabel,
+              'aria-disabled': (nextStepBlocked || busy) ? 'true' : 'false',
+              disabled: busy,
+              onClick: () => {
+                if (nextStepBlocked || busy) return
+                if (nextStep.tab) switchTab(nextStep.tab)
+              },
+            }, icon('chevron'),
+              h('span', { className: 'ad-next-label' }, nextStep.label),
+              h('span', { className: 'ad-next-label-short', 'aria-hidden': 'true' }, nextStep.shortLabel || nextStep.label)),
+            nextStep.alt ? h('button', {
+              className: 'ad-next-alt',
+              'aria-label': nextStep.alt.ariaLabel,
+              title: nextStep.alt.ariaLabel,
+              onClick: () => { if (nextStep.alt && nextStep.alt.tab) switchTab(nextStep.alt.tab) },
+            }, nextStep.alt.label) : null,
+            nextStep.hint ? h('span', { className: 'ad-next-hint', title: nextStep.hint }, nextStep.hint) : null,
+            nextStep.chipLabel ? h('span', { className: 'ad-next-chip', 'data-tone': nextStep.tone || 'neutral', 'aria-hidden': 'true' }, nextStep.chipLabel) : null))
+        }
+        headRight.push(h('button', {
+          className: 'ad-btn ad-sm ad-agent-entry',
+          key: 'agent-handoff',
+          'aria-label': '生成交接指令并复制，交给 Agent',
+          title: '生成交接指令并复制，交给 Agent',
+          'aria-haspopup': 'dialog',
+          'aria-expanded': handoffOpen ? 'true' : 'false',
+          disabled: busy,
+          onClick: () => openHandoff(),
+        }, icon('send'), h('span', { className: 'ad-agent-label' }, '交给 Agent')))
+        headRight.push(h('button', {
+          className: 'ad-btn ad-sm',
+          key: 'settings',
+          onClick: () => setSettingsOverlay(true),
+          disabled: busy,
+          'aria-haspopup': 'dialog',
+          'aria-expanded': settingsOverlay ? 'true' : 'false',
+          title: 'AI 短剧设置（默认契约 / 模型 / 任务模型 / 提示词模板 / 流程模式 / 存储位置 + 环境诊断）',
+        }, '设置'))
         headRight.push(h('button', {
           className: 'ad-btn',
           key: 'doc',
@@ -2512,9 +5017,9 @@ window.__ModuleLoader__.load({
           'aria-pressed': docOpen ? 'true' : 'false',
           title: '面板内右栏文档编辑器（T7 / E1；不接管原生 documentpreview）',
         }, docOpen ? '收起文档' : '文档'))
-        headRight.push(h('button', { className: 'ad-btn', key: 'back', onClick: () => { setPhase('ready'); setTree(null); loadList() }, disabled: busy, 'aria-label': '返回短剧列表' }, '← 返回'))
+        headRight.push(h('button', { className: 'ad-btn', key: 'back', onClick: () => requestLeave(goBackToList), disabled: busy, 'aria-label': '返回短剧列表' }, '← 返回'))
       } else {
-        headRight.push(h('button', { className: 'ad-btn', key: 'refresh', onClick: loadList, disabled: busy, 'aria-label': '刷新短剧列表' }, '刷新'))
+        headRight.push(h('button', { className: 'ad-btn', key: 'refresh', onClick: loadList, disabled: busy, 'aria-label': '刷新短剧列表' }, icon('refresh'), '刷新'))
       }
 
       children.push(
@@ -2527,38 +5032,37 @@ window.__ModuleLoader__.load({
               sourcePath
                 ? h('span', { className: 'ad-count', style: { marginLeft: 8, fontWeight: 400 } }, '数据源：' + shortSourcePath(sourcePath))
                 : null),
-            h('div', { className: 'ad-sub' },
-              phase === 'project' && progress
-                ? `进度：${(progress.steps.find((s) => s.key === progress.stage) || {}).label || progress.stage}` +
-                  ` · 大纲 ${progress.facts.outlineCount} · 人物 ${progress.facts.characterCount} · 剧本 ${progress.facts.episodeCount} · 分镜 ${progress.facts.storyboardCount}` +
-                  (progress.facts.openMemoryCount ? ` · 未回收伏笔 ${progress.facts.openMemoryCount}` : '')
-                : '短剧创作中枢')),
+            h('div', { className: 'ad-sub' }, '短剧创作中枢')),
           h('div', { style: { flex: 1 } }),
           headRight,
         ),
       )
 
-      // T8：创作流水线常驻条（项目页签上方，数据源 progress-get）
-      if (phase === 'project') children.push(renderPipelineBar(progress, refreshProgress))
-
-      // P2-2：流程状态机步骤条（6 步 / 当前-已确认-待重做三态）+ 恢复提示 + 详情操作
+      // P2-2：流程状态机步骤条 = 项目页唯一主进度（6 步三态 + facts 计数 + 恢复提示 + 详情操作；flow-state 读写不变）
       if (phase === 'project') {
         const flowCurrent = flowState ? flowCurrentKey(flowState) : ''
         const staleSteps = flowState ? FLOW_STEPS.filter(([key]) => flowState.steps[key] === 'stale') : []
-        children.push(h('div', { className: 'ad-flow', key: 'flow', role: 'group', 'aria-label': '创作流程状态（P2-2）' },
+        const flowFacts = (progress && progress.facts) || {}
+        children.push(h('div', { className: 'ad-flow', key: 'flow', role: 'group', 'aria-label': '创作进度（流程状态机 + 内容计数）' },
           flowState
-            ? FLOW_STEPS.map(([key, label], index) => {
+            ? FLOW_STEPS.flatMap(([key, label], index) => {
                 const status = flowState.steps[key] || 'not_started'
                 const kind = status === 'confirmed' ? 'confirmed' : status === 'stale' ? 'stale' : key === flowCurrent ? 'current' : 'pending'
                 const mark = kind === 'confirmed' ? '✓ ' : kind === 'stale' ? '! ' : kind === 'current' ? '● ' : '· '
-                return h('button', {
+                const factKey = FLOW_FACT_KEYS[key]
+                const factValue = factKey ? flowFacts[factKey] : null
+                const stepButton = h('button', {
                   key,
                   className: 'ad-flow-step',
                   'data-state': kind,
                   'aria-pressed': flowDetail === key ? 'true' : 'false',
-                  title: `${label} · ${FLOW_STATUS_LABELS[status] || status}（点击查看 / 操作）`,
+                  title: `${label} · ${FLOW_STATUS_LABELS[status] || status}${factKey ? ` · 计数 ${factValue == null ? 0 : factValue}` : ''}（点击查看 / 操作）`,
                   onClick: () => setFlowDetail(flowDetail === key ? '' : key),
-                }, `${mark}${index + 1}. ${label}`)
+                }, `${mark}${index + 1}. ${label}`,
+                factKey ? h('span', { className: 'ad-count', style: { marginLeft: 2 } }, String(factValue == null ? 0 : factValue)) : null)
+                return index < FLOW_STEPS.length - 1
+                  ? [stepButton, h('span', { key: 'sep-' + key, className: 'ad-flow-sep', 'aria-hidden': 'true' }, '→')]
+                  : [stepButton]
               })
             : h('span', { className: 'ad-flow-hint' }, '流程状态：未开始（打开项目后读取 flow-state）'),
           h('span', { className: 'ad-flow-hint' }, flowState ? flowRecoveryText(flowState) : ''),
@@ -2572,6 +5076,7 @@ window.__ModuleLoader__.load({
             'aria-label': '切换流程模式（宽松 / 强制门禁）',
             title: '切换流程模式（默认宽松：只提示不强制；强制：未确认上一阶段时宿主阻止越步写入/确认，HTTP 409）',
           }, flowStrictActive() ? '强制模式' : '宽松模式（只提示）'),
+          h('button', { className: 'ad-btn ad-sm', onClick: refreshProgress, disabled: busy }, icon('refresh'), '刷新进度'),
           flowMsg ? h('span', { className: 'ad-flow-msg', role: 'status' }, flowMsg) : null,
           flowError ? h('span', { className: 'ad-err' }, flowError) : null,
         ))
@@ -2607,13 +5112,13 @@ window.__ModuleLoader__.load({
                 title: canConfirm ? '确认当前步骤' : (whyNot || '不可确认'),
               }, '确认本步'),
               h('button', {
-                className: 'ad-btn ad-sm',
+                className: 'ad-btn ad-sm ad-btn-danger',
                 onClick: () => rollbackFlowTo(detailKey),
                 disabled: !canRollback,
                 title: canRollback ? '撤销确认，下游标记待重做（二次确认）' : '仅已确认步骤可撤销确认',
               }, '撤销确认 / 回退'),
               h('button', { className: 'ad-btn ad-sm', onClick: () => setFlowDetail('') }, '关闭详情'),
-              h('button', { className: 'ad-btn ad-sm', onClick: () => loadFlow(openTitle), disabled: flowBusy }, flowBusy ? '刷新中…' : '刷新流程状态'))))
+              h('button', { className: 'ad-btn ad-sm', onClick: () => loadFlow(openTitle), disabled: flowBusy }, icon('refresh'), flowBusy ? '刷新中…' : '刷新流程状态'))))
         }
       }
 
@@ -2642,7 +5147,7 @@ window.__ModuleLoader__.load({
           actions.push(h('button', {
             className: 'ad-btn ad-sm',
             key: 'back-list',
-            onClick: () => { setError(''); setErrorInfo(null); setRetryAction(null); setPhase('ready'); setTree(null); loadList() },
+            onClick: () => requestLeave(goBackToList),
             disabled: busy,
           }, '返回列表'))
         }
@@ -2658,13 +5163,18 @@ window.__ModuleLoader__.load({
           h('div', { className: 'ad-skeleton-line w60' }),
           h('div', { className: 'ad-skeleton-line w90' }),
           h('div', { className: 'ad-skeleton-line w80' }),
-          h('div', { className: 'ad-skeleton-line w40' })))
+          h('div', { className: 'ad-skeleton-line w40' }),
+          h('div', { className: 'ad-project-grid', key: 'skel-grid', 'aria-hidden': 'true' },
+            [0, 1, 2].map((index) => h('div', { className: 'ad-project-skeleton-card', key: index },
+              h('div', { className: 'ad-project-skeleton-cover' }),
+              h('div', { className: 'ad-skeleton-line w60' }),
+              h('div', { className: 'ad-skeleton-line w40' }))))))
       } else if (phase === 'error') {
         body.push(h('button', { className: 'ad-btn', key: 'retry', onClick: loadList }, '重试'))
       } else if (phase === 'ready') {
         // P2-1 多数据源：数据源选择器（B 阶段：宿主 sources-list；旧宿主降级 A：工作区枚举）
         body.push(
-          h('div', { className: 'ad-row', key: 'source', style: { marginBottom: 12, flexWrap: 'wrap' } },
+          h('div', { className: 'ad-row ad-source-row', key: 'source', style: { marginBottom: 12, flexWrap: 'wrap' } },
             h('span', { className: 'ad-sec', style: { margin: 0 } }, '数据源'),
             h('select', {
               className: 'ad-select',
@@ -2676,10 +5186,10 @@ window.__ModuleLoader__.load({
             },
             sources.length ? null : h('option', { value: '' }, sourcesMode === 'loading' ? '枚举数据源中…' : '（使用宿主默认数据源）'),
             sources.map((item, index) => h('option', { key: item.path, value: item.path }, sourceLabelOf(item, index)))),
-            h('button', { className: 'ad-btn ad-sm', onClick: () => refreshSources(), disabled: busy || sourceBusy }, sourceBusy ? '刷新中…' : '刷新数据源'),
+            h('button', { className: 'ad-btn ad-sm', onClick: () => refreshSources(), disabled: busy || sourceBusy }, icon('refresh'), sourceBusy ? '刷新中…' : '刷新数据源'),
             sourcesMode === 'legacy' ? h('span', { className: 'ad-count' }, '旧宿主降级：仅工作区') : null,
             sourcesMode === 'host' ? h('span', { className: 'ad-count' }, `共 ${sources.length} 个源`) : null,
-            sourcesDegraded ? h('span', { className: 'ad-count', style: { color: 'var(--dsw-alias-label-warning,#ad6800)' } }, '部分数据源不可用') : null,
+            sourcesDegraded ? h('span', { className: 'ad-count', style: { color: 'var(--ad-warn)' } }, '部分数据源不可用') : null,
             sourcePath ? h('span', { className: 'ad-count' }, `当前：${shortSourcePath(sourcePath)}`) : null,
             !sources.length && sourcesMode !== 'loading'
               ? h('span', { className: 'ad-hint-next' }, '未枚举到数据源：将使用宿主默认源；切到含短剧项目的目录后可点「刷新数据源」')
@@ -2687,7 +5197,7 @@ window.__ModuleLoader__.load({
         )
 
         body.push(
-          h('div', { className: 'ad-row', key: 'new', style: { marginBottom: 14 } },
+          h('div', { className: 'ad-list-toolbar ad-create-hero', key: 'new', 'data-ad-surface': 'hero' },
             h('input', {
               className: 'ad-input',
               'aria-label': '新建短剧名称',
@@ -2696,11 +5206,11 @@ window.__ModuleLoader__.load({
               onChange: (e) => setDraftTitle(e.target.value),
               onKeyDown: (e) => { if (e.key === 'Enter') createProject() },
             }),
-            h('button', { className: 'ad-btn ad-primary', onClick: createProject, disabled: busy || !draftTitle.trim() }, '新建短剧')),
+            h('button', { className: 'ad-btn ad-primary ad-cta', onClick: createProject, disabled: busy || !draftTitle.trim() }, '新建短剧')),
         )
 
         body.push(
-          h('div', { className: 'ad-row', key: 'search', style: { marginBottom: 16 } },
+          h('div', { className: 'ad-list-toolbar', key: 'search' },
             h('input', {
               className: 'ad-input',
               'aria-label': '搜索短剧名称或正文内容',
@@ -2722,47 +5232,42 @@ window.__ModuleLoader__.load({
                     h('div', { className: 'ad-hit', key: i },
                       h('div', { className: 'ad-hit-path' }, `${hit.path}${hit.line ? ':' + hit.line : ''}`),
                       h('div', null, hit.text)))
-                : h('div', { className: 'ad-empty' }, '没有命中')),
+                : emptyState({ key: 'search-empty', title: '没有命中', description: '换个关键词，或检查数据源是否包含目标项目目录。', next: '修改关键词后重新搜索（Enter）', actions: [{ label: '清除搜索', onClick: () => setHits(null) }] })),
           )
         }
 
-        body.push(h('div', { className: 'ad-sec', key: 'sec' }, `我的短剧 · ${projects.length}`))
+        body.push(h('div', { className: 'ad-list-head', key: 'sec' },
+          h('span', { className: 'ad-sec', style: { margin: 0 } }, `我的短剧 · ${projects.length}`),
+          h('span', { className: 'ad-count' }, '按最近修改')))
         if (!projects.length) {
-          body.push(emptyState({
-            key: 'empty',
-            title: '还没有短剧项目',
-            description: '新建后会在工作区下生成 AI短剧/<短剧名>/ 及固定创作目录（项目 / 大纲 / 人物 / 分集剧本 / 分镜 / 导出）。',
-            next: '在上方输入短剧名并点「新建短剧」；若短剧在别的目录，先切换数据源',
-          }))
-        }
-        for (const project of projects) {
-          body.push(
-            h('div', { className: 'ad-card', key: project.path },
-              h('div', { className: 'ad-card-main' },
-                h('div', { className: 'ad-card-title' }, project.title),
-                h('div', { className: 'ad-card-meta' }, `分集剧本 ${project.episodeCount || 0} 集 · ${project.path}`)),
-              h('button', { className: 'ad-btn', onClick: () => openProject(project.title), disabled: busy }, '打开'),
-              h('button', { className: 'ad-btn ad-sm', onClick: () => renameProject(project.title), disabled: busy }, '重命名'),
-              h('button', { className: 'ad-btn ad-sm', onClick: () => deleteProject(project.title), disabled: busy }, '删除')),
-          )
+          body.push(h('div', { className: 'ad-empty-poster', key: 'empty-poster', 'data-ad-surface': 'poster' },
+            emptyState({
+              key: 'empty',
+              title: '还没有短剧项目',
+              description: '新建后会在工作区下生成 AI短剧/<短剧名>/ 及固定创作目录（项目 / 大纲 / 人物 / 分集剧本 / 分镜 / 导出）。',
+              next: '在上方输入短剧名并点「新建短剧」；若短剧在别的目录，先切换数据源',
+            })))
+        } else {
+          body.push(h('div', { className: 'ad-project-grid', key: 'grid' }, projects.map((project) => renderProjectCard(project))))
         }
 
         // 共享资料（跨项目复用，FR-A05）
         body.push(
-          h('div', { key: 'shared' },
+          h('div', { key: 'shared', id: 'ad-shared-surface', 'data-ad-surface': 'shared' },
             h('div', { className: 'ad-row', style: { margin: '18px 0 8px' } },
               h('span', { className: 'ad-sec', style: { margin: 0 } }, '共享资料'),
               h('div', { style: { flex: 1 } }),
-              h('button', { className: 'ad-btn ad-sm', onClick: () => loadList(), disabled: busy }, '刷新')),
+              h('button', { className: 'ad-btn ad-sm', onClick: () => loadList(), disabled: busy }, icon('refresh'), '刷新')),
             shared && shared.entries && shared.entries.length
-              ? h('div', { className: 'ad-row', style: { flexWrap: 'wrap', gap: 6 } },
+              ? h('div', { className: 'ad-shared-grid' },
                   shared.entries.map((entry) =>
                     h('button', {
                       key: entry.name,
-                      className: 'ad-btn ad-sm',
+                      className: 'ad-shared-card',
                       onClick: () => (entry.kind === 'dir' ? null : openShared(entry.name)),
                     }, (entry.kind === 'dir' ? '📁 ' : '📄 ') + entry.name)))
-              : h('div', { className: 'ad-empty' }, '共享资料是跨项目复用的空间（题材库、平台规范、参考桥段），当前为空。'),
+              : h('div', { className: 'ad-shared-empty', key: 'shared-empty-wrap' },
+                  emptyState({ key: 'shared-empty', title: '共享资料为空', description: '共享资料是跨项目复用的空间（题材库、平台规范、参考桥段）。', next: '把文件放到工作区共享资料目录后点「刷新」', actions: [{ label: '刷新', onClick: () => loadList(), disabled: busy }] })),
             sharedPath
               ? h('div', { style: { marginTop: 10 } },
                   h('div', { className: 'ad-row', style: { marginBottom: 6 } },
@@ -2775,122 +5280,12 @@ window.__ModuleLoader__.load({
           ),
         )
 
-        // 设置（FR-F01）
+        // v0.12.1（task-8）：设置区块 + 环境信息已迁入宿主「设置 → AI 短剧」独立设置页；列表页仅保留主任务
         body.push(
-          h('div', { key: 'settings' },
-            h('div', { className: 'ad-row', style: { margin: '18px 0 8px' } },
-              h('span', { className: 'ad-sec', style: { margin: 0 } }, '设置'),
-              h('div', { style: { flex: 1 } }),
-              h('button', { className: 'ad-btn ad-sm', onClick: () => setShowSettings((v) => !v) }, showSettings ? '收起' : '展开')),
-            showSettings && settings
-              ? h('div', null,
-                  h(Field, { label: '默认平台', value: settings.defaultPlatform, placeholder: '抖音 / 快手 / 红果', onChange: (v) => setSettings({ ...settings, defaultPlatform: v }) }),
-                  h('div', { className: 'ad-field' },
-                    h('label', null, '默认单集时长'),
-                    h('input', { className: 'ad-input', type: 'number', value: settings.defaultEpisodeDurationSec[0], onChange: (e) => setSettings({ ...settings, defaultEpisodeDurationSec: [Number(e.target.value), settings.defaultEpisodeDurationSec[1]] }) }),
-                    h('span', null, '~'),
-                    h('input', { className: 'ad-input', type: 'number', value: settings.defaultEpisodeDurationSec[1], onChange: (e) => setSettings({ ...settings, defaultEpisodeDurationSec: [settings.defaultEpisodeDurationSec[0], Number(e.target.value)] }) })),
-                  h(Field, { label: '默认目标集数', value: settings.defaultTargetEpisodes, onChange: (v) => setSettings({ ...settings, defaultTargetEpisodes: Number(v) || 0 }) }),
-                  h(Field, { label: '检索条数', value: settings.retrievalTopK, onChange: (v) => setSettings({ ...settings, retrievalTopK: Number(v) || 5 }) }),
-                  h(Field, { label: '默认模型', value: settings.defaultModel, placeholder: '留空 = 跟随会话当前模型', onChange: (v) => setSettings({ ...settings, defaultModel: v }) }),
-                  (() => {
-                    // P2-6（Q5）：设置页内「任务模型」区块（不新增页签/slot；v0.6.1 仅渲染 audit）
-                    // 注意：此处用原始 settings.taskModels 判断「已配置/跟随默认」（空 model 的草稿也保留输入态），
-                    // 持久化前再经 normalizeTaskModels 归一化。
-                    const rawModels = settings && settings.taskModels && typeof settings.taskModels === 'object' ? settings.taskModels : {}
-                    const rawAudit = rawModels.audit && typeof rawModels.audit === 'object' && !Array.isArray(rawModels.audit) ? rawModels.audit : null
-                    const useDefault = !rawAudit
-                    const audit = rawAudit || {}
-                    return h('div', { className: 'ad-box', style: { marginBottom: 10 } },
-                      h('div', { className: 'ad-row', style: { marginBottom: 6, flexWrap: 'wrap' } },
-                        h('span', { className: 'ad-sec', style: { margin: 0 } }, '任务模型'),
-                        h('span', { className: 'ad-count' }, '按任务覆盖模型参数；未配置 = 跟随宿主默认'),
-                        h('div', { style: { flex: 1 } }),
-                        h('label', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 } },
-                          h('input', {
-                            className: 'ad-check',
-                            type: 'checkbox',
-                            checked: useDefault,
-                            'aria-label': '审读任务使用宿主默认模型',
-                            onChange: (e) => setAuditTaskModelDefault(e.target.checked),
-                          }),
-                          '审读：使用宿主默认')),
-                      useDefault
-                        ? h('div', { className: 'ad-hint-next' }, '跟随宿主默认（回退链：settings.defaultModel → 宿主 agentDefaultModel）。取消勾选可配置任务级模型。')
-                        : h('div', { className: 'ad-grid', style: { marginBottom: 8 } },
-                            h(Field, { label: 'Provider', value: audit.provider || '', placeholder: '留空 = 宿主默认 provider', onChange: (v) => setAuditTaskModelField('provider', v) }),
-                            h(Field, { label: '审读模型', value: audit.model || '', placeholder: '必填，例如 deepseek-reasoner', onChange: (v) => setAuditTaskModelField('model', v) }),
-                            h(Field, { label: 'Temperature', value: audit.temperature == null ? '' : audit.temperature, placeholder: '0~2，留空 = 宿主默认', onChange: (v) => setAuditTaskModelField('temperature', v) }),
-                            h(Field, { label: 'MaxTokens', value: audit.maxTokens == null ? '' : audit.maxTokens, placeholder: '≤60000，留空 = 宿主默认 60k', onChange: (v) => setAuditTaskModelField('maxTokens', v) }),
-                            h(Field, { label: '超时(ms)', value: audit.timeoutMs == null ? '' : audit.timeoutMs, placeholder: '1000~60000，留空 = 宿主默认 45s', onChange: (v) => setAuditTaskModelField('timeoutMs', v) })),
-                      !useDefault
-                        ? h('div', { className: 'ad-row', key: 'tm-recent', style: { marginBottom: 8, flexWrap: 'wrap' } },
-                            h('span', { className: 'ad-sub' }, '最近使用：'),
-                            taskModelRecent.length
-                              ? taskModelRecent.map((item, index) => h('button', {
-                                  className: 'ad-btn ad-sm',
-                                  key: `${item.provider}/${item.model}/${index}`,
-                                  title: '填入该模型配置',
-                                  onClick: () => applyRecentTaskModel(item),
-                                }, `${item.provider ? item.provider + ' / ' : ''}${item.model}`))
-                              : h('span', { className: 'ad-hint-next' }, '暂无记录（保存一次任务模型后自动记录，最多 8 条）'))
-                        : null,
-                      taskModelError ? h('div', { className: 'ad-err', style: { marginBottom: 6 }, role: 'alert' }, taskModelError) : null,
-                      h('div', { className: 'ad-path' }, '回退链：任务模型 → 默认模型 → 宿主默认（agentDefaultModel）。模型运行时不可用时宿主降级并标记，不阻断审读。其他任务键（review/outline/characters/episode/storyboard）已预留，v0.6.1 暂不渲染。快捷键：Ctrl/⌘+S 保存当前页 / 文档，Enter 执行搜索。'))
-                  })(),
-                  h(Field, { label: '存储位置', value: settings.storageLocation, placeholder: '留空 = 默认位置（P1 仅持久化预留，切换存储根在 P2 生效）', onChange: (v) => setSettings({ ...settings, storageLocation: v }) }),
-                  h('div', { className: 'ad-field' },
-                    h('label', null, '检索增强'),
-                    h('select', { className: 'ad-select', value: settings.retrievalEnabled ? 'on' : 'off', onChange: (e) => setSettings({ ...settings, retrievalEnabled: e.target.value === 'on' }) },
-                      h('option', { value: 'on' }, '开启（生成前召回设定 / 伏笔）'), h('option', { value: 'off' }, '关闭'))),
-                  h('div', { className: 'ad-field' },
-                    h('label', null, '流程模式'),
-                    h('select', {
-                      className: 'ad-select',
-                      value: flowStrictActive() ? 'on' : 'off',
-                      onChange: (e) => toggleFlowStrict(e.target.value === 'on'),
-                      disabled: busy || flowBusy,
-                      'aria-label': '流程模式（宽松 / 强制门禁）',
-                    },
-                      h('option', { value: 'off' }, '宽松（默认，只提示不强制）'),
-                      h('option', { value: 'on' }, '强制（未确认上一阶段时禁止越步写入/确认）')),
-                    h('span', { className: 'ad-sub' }, '由宿主 settings.strictMode 生效')),
-                  h('div', { className: 'ad-path' }, '流程状态存于 <项目>/.aidrama/flow-state.json（不随导出；回退只标「待重做」，不删除文件）'),
-                  h('div', { className: 'ad-field' },
-                    h('label', null, '默认画幅'),
-                    h('select', { className: 'ad-select', value: settings.defaultOrientation, onChange: (e) => setSettings({ ...settings, defaultOrientation: e.target.value }) },
-                      h('option', { value: 'portrait' }, '竖屏'), h('option', { value: 'landscape' }, '横屏'))),
-                  h('div', { className: 'ad-sec', style: { margin: '6px 0 8px' } }, `提示词模板（${PROMPT_TEMPLATE_KEYS.length} 个环节，留空 = 内置默认）`),
-                  h('div', { className: 'ad-grid', style: { marginBottom: 10 } },
-                    PROMPT_TEMPLATE_KEYS.map(([key, label]) =>
-                      h(TextField, {
-                        key,
-                        label,
-                        rows: 2,
-                        placeholder: `${label}环节的自定义提示词前缀（可选）`,
-                        value: settings.promptTemplates[key] || '',
-                        onChange: (v) => setSettings({ ...settings, promptTemplates: { ...settings.promptTemplates, [key]: v } }),
-                      }))),
-                  h('button', { className: 'ad-btn ad-primary', onClick: saveSettings, disabled: busy }, '保存设置'),
-                  h('div', { className: 'ad-path' }, '新建短剧时会用这些默认值预填剧集契约；默认模型 / 检索开关 / 提示词模板由宿主 v0.4.0+ 校验并实际生效。存储位置 P1 只做持久化与展示（不会立即迁移已有项目目录，切换存储根在 P2 生效）。'))
-              : h('div', { className: 'ad-empty' }, '这里配置新建短剧时的默认契约（平台 / 单集时长 / 目标集数 / 画幅）、默认模型、检索开关、存储位置与提示词模板。'),
-          ),
+          h('div', { className: 'ad-path', key: 'settings-moved' },
+            '设置与环境信息已移至：侧栏「设置」→「AI 短剧」；项目页右上「设置」可直接打开面板内设置（同一组件、同一 settings 数据）。'),
         )
 
-        body.push(
-          h('div', { className: 'ad-path', key: 'path' },
-            `数据源：${sourcePath || '（宿主回退默认源）'}${
-              sources.some((item) => item.path === sourcePath)
-                ? '（' + sourceTypeLabel((sources.find((item) => item.path === sourcePath) || {}).sourceType) + '）'
-                : ''
-            }${sourcesMode === 'legacy' ? '（旧宿主降级）' : ''}`,
-            h('br'),
-            `工作区：${(status && status.workspace) || '（未解析）'}（来源：${(status && status.workspaceSource) || '-'}）`,
-            h('br'),
-            `数据目录：${(status && status.root) || '-'}${status && status.exists ? '' : '（尚未创建）'}`,
-            h('br'),
-            `宿主版本：v${(status && status.version) || '?'}`),
-        )
       } else if (phase === 'project') {
         const tabs = [
           ['contract', '剧集契约'],
@@ -2909,18 +5304,81 @@ window.__ModuleLoader__.load({
           ['tree', '目录'],
           ['toolcards', '工具卡片'],
         ]
-        body.push(
-          h('div', { className: 'ad-tabs', key: 'tabs', role: 'tablist', 'aria-label': '短剧工作区页签' },
-            tabs.map(([key, label]) =>
-              h('button', {
-                key,
-                className: 'ad-tab',
-                role: 'tab',
-                'aria-selected': tab === key ? 'true' : 'false',
-                'data-on': tab === key ? '1' : '0',
-                onClick: () => switchTab(key),
-              }, label))),
-        )
+        // v0.12.0（task-7）：15 页签 4 组 + 窄窗「更多」收纳；aria：tablist/tab/aria-selected 保留，内容区统一 tabpanel
+        const tabLabelOf = new Map(tabs)
+        const groupedTabs = TAB_GROUPS.map((group) => ({ ...group, items: group.tabs.map((key) => [key, tabLabelOf.get(key)]) }))
+        // v0.12.4（task-24 / M5-A）：页签 roving tabindex + ←/→/Home/End 仅移动焦点（manual activation：不调用 switchTab，避免误触发未保存守卫）
+        const focusTabByKey = (targetKey) => {
+          if (typeof document === 'undefined' || !document || typeof document.getElementById !== 'function') return
+          const el = document.getElementById('ad-tab-' + targetKey)
+          if (el && typeof el.focus === 'function') {
+            try {
+              el.focus()
+            } catch {
+              /* 隐藏分组/不可聚焦元素安全跳过 */
+            }
+          }
+        }
+        const onTabKeyDown = (event, key) => {
+          const keyName = String((event && event.key) || '')
+          if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(keyName)) return
+          const index = tabs.findIndex(([tabKey]) => tabKey === key)
+          if (index < 0) return
+          let nextIndex = index
+          if (keyName === 'Home') nextIndex = 0
+          else if (keyName === 'End') nextIndex = tabs.length - 1
+          else nextIndex = (index + (keyName === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
+          if (event && typeof event.preventDefault === 'function') event.preventDefault()
+          focusTabByKey(tabs[nextIndex][0])
+        }
+        const renderMainTab = (key, label) => h('button', {
+          key,
+          id: 'ad-tab-' + key,
+          className: 'ad-tab',
+          role: 'tab',
+          'aria-selected': tab === key ? 'true' : 'false',
+          'aria-controls': 'ad-tabpanel',
+          'data-on': tab === key ? '1' : '0',
+          tabIndex: tab === key ? 0 : -1,
+          onKeyDown: (event) => onTabKeyDown(event, key),
+          onClick: () => switchTab(key),
+        }, label,
+        dirty[key] ? h('span', { className: 'ad-tab-dirty', 'aria-label': '未保存修改', title: '有未保存修改' }, '●') : null)
+        const tabsNode = h('div', { className: 'ad-tabs', key: 'tabs' },
+          h('div', { className: 'ad-tab-groups', role: 'tablist', 'aria-label': '短剧工作区页签' },
+            groupedTabs.map((group) => h('div', { className: 'ad-tab-group', key: group.id, role: 'presentation' },
+              h('span', { className: 'ad-tab-group-label' }, group.label),
+              group.items.map(([key, label]) => renderMainTab(key, label))))),
+          h('div', { className: 'ad-tabs-more', key: 'tabs-more' },
+            h('button', {
+              className: 'ad-btn ad-sm',
+              'aria-expanded': tabsMoreOpen ? 'true' : 'false',
+              'aria-haspopup': 'true',
+              title: '窄窗页签收纳（当前：' + (tabLabelOf.get(tab) || '') + '）',
+              onClick: () => setTabsMoreOpen((open) => !open),
+              'aria-label': '更多页签',
+            }, icon('ellipsis')),
+            tabsMoreOpen
+              ? h('div', { className: 'ad-tabs-more-panel', role: 'menu', 'aria-label': '全部页签' },
+                  tabs.map(([key, label]) => h('button', {
+                    key,
+                    className: tab === key ? 'ad-btn ad-sm ad-primary' : 'ad-btn ad-sm',
+                    role: 'menuitem',
+                    'data-on': tab === key ? '1' : '0',
+                    onClick: () => { setTabsMoreOpen(false); switchTab(key) },
+                  }, label)))
+              : null),
+          h('div', { className: 'ad-tabs-agent', key: 'tabs-agent' },
+            h('button', {
+              className: 'ad-btn ad-sm',
+              'aria-label': '生成交接指令并复制，交给 Agent',
+              title: '生成交接指令并复制，交给 Agent',
+              'aria-haspopup': 'dialog',
+              'aria-expanded': handoffOpen ? 'true' : 'false',
+              disabled: busy,
+              onClick: () => openHandoff(),
+            }, icon('send'), h('span', { className: 'ad-agent-label' }, '交给 Agent'))))
+        body.push(tabsNode)
 
         // P2-2：当前页签对应步骤的 stale 黄色提示（不阻止编辑）
         const tabStaleKey = flowState && FLOW_TAB_STEP[tab] ? FLOW_TAB_STEP[tab] : ''
@@ -2942,21 +5400,30 @@ window.__ModuleLoader__.load({
         if (tab === 'contract' && contract) {
           body.push(
             h('div', { key: 'c' },
-              h(Field, { label: '平台', value: contract.platform, placeholder: '抖音 / 快手 / 红果 / 微信小程序', onChange: (v) => setContract({ ...contract, platform: v }) }),
-              h(Field, { label: '受众', value: contract.audience, onChange: (v) => setContract({ ...contract, audience: v }) }),
-              h('div', { className: 'ad-field' },
-                h('label', null, '单集时长(秒)'),
-                h('input', { className: 'ad-input', type: 'number', value: contract.episodeDurationSec[0], onChange: (e) => setContract({ ...contract, episodeDurationSec: [Number(e.target.value), contract.episodeDurationSec[1]] }) }),
-                h('span', null, '~'),
-                h('input', { className: 'ad-input', type: 'number', value: contract.episodeDurationSec[1], onChange: (e) => setContract({ ...contract, episodeDurationSec: [contract.episodeDurationSec[0], Number(e.target.value)] }) })),
-              h(Field, { label: '目标集数', value: contract.targetEpisodes, onChange: (v) => setContract({ ...contract, targetEpisodes: Number(v) || 0 }) }),
-              h('div', { className: 'ad-field' },
-                h('label', null, '画幅'),
-                h('select', { className: 'ad-select', value: contract.orientation, onChange: (e) => setContract({ ...contract, orientation: e.target.value }) },
-                  h('option', { value: 'portrait' }, '竖屏'), h('option', { value: 'landscape' }, '横屏'))),
-              h(Field, { label: '钩子密度', value: contract.hookDensity, placeholder: '例如：每 30 秒一个钩子', onChange: (v) => setContract({ ...contract, hookDensity: v }) }),
-              h(TextField, { label: '审核红线', rows: 3, value: contract.redlines, onChange: (v) => setContract({ ...contract, redlines: v }) }),
-              h('button', { className: 'ad-btn ad-primary', onClick: saveContract, disabled: busy }, '保存契约'),
+              h('div', { className: 'ad-form-group' },
+                h('div', { className: 'ad-sec' }, '基本信息'),
+                h(Field, { label: '平台', value: contract.platform, placeholder: '抖音 / 快手 / 红果 / 微信小程序', onChange: (v) => updateContract({ ...contract, platform: v }) }),
+                h(Field, { label: '受众', value: contract.audience, onChange: (v) => updateContract({ ...contract, audience: v }) }),
+                h('div', { className: 'ad-field' },
+                  h('label', null, '单集时长(秒)'),
+                  h('input', { className: 'ad-input', type: 'number', value: contract.episodeDurationSec[0], onChange: (e) => updateContract({ ...contract, episodeDurationSec: [Number(e.target.value), contract.episodeDurationSec[1]] }) }),
+                  h('span', null, '~'),
+                  h('input', { className: 'ad-input', type: 'number', value: contract.episodeDurationSec[1], onChange: (e) => updateContract({ ...contract, episodeDurationSec: [contract.episodeDurationSec[0], Number(e.target.value)] }) })),
+                h(Field, { label: '目标集数', value: contract.targetEpisodes, onChange: (v) => updateContract({ ...contract, targetEpisodes: Number(v) || 0 }) }),
+                h('div', { className: 'ad-field' },
+                  h('label', null, '画幅'),
+                  h('select', { className: 'ad-select', value: contract.orientation, onChange: (e) => updateContract({ ...contract, orientation: e.target.value }) },
+                    h('option', { value: 'portrait' }, '竖屏'), h('option', { value: 'landscape' }, '横屏')))),
+              h('div', { className: 'ad-form-group' },
+                h('div', { className: 'ad-sec' }, '创作约束'),
+                h(TextField, { label: '钩子密度', rows: 2, value: contract.hookDensity, placeholder: '例如：每 30 秒一个钩子（可多行）', onChange: (v) => updateContract({ ...contract, hookDensity: v }) })),
+              h('div', { className: 'ad-form-group' },
+                h('div', { className: 'ad-sec' }, '审核红线'),
+                h(TextField, { label: '审核红线', rows: 4, value: contract.redlines, onChange: (v) => updateContract({ ...contract, redlines: v }) })),
+              h('div', { className: 'ad-row', style: { gap: 8 } },
+                h('button', { className: 'ad-btn ad-primary', onClick: saveContract, disabled: busy, 'aria-keyshortcuts': 'Control+S Meta+S' }, '保存契约'),
+                dirty.contract ? dirtyMark('contract') : null,
+                h('span', { className: 'ad-sub' }, 'Ctrl/⌘+S 保存本页')),
               h('div', { className: 'ad-path' }, '剧集契约是后续 AI 生成时的强约束输入（FR-B01），同时会渲染到 剧集契约.md。'),
             ),
           )
@@ -2975,12 +5442,15 @@ window.__ModuleLoader__.load({
         if (tab === 'outline') {
           body.push(
             h('div', { key: 'o' },
-              h('div', { className: 'ad-row', style: { marginBottom: 10 } },
-                h('button', { className: 'ad-btn ad-sm', onClick: addRow, disabled: busy }, '+ 增加一集'),
-                h('button', { className: 'ad-btn ad-primary ad-sm', onClick: saveOutline, disabled: busy }, '保存总纲')),
+              h('div', { className: 'ad-row', style: { marginBottom: 10, flexWrap: 'wrap' } },
+                h('button', { className: 'ad-btn ad-sm', onClick: addRow, disabled: busy }, icon('plus'), '增加一集'),
+                h('button', { className: 'ad-btn ad-primary ad-sm', onClick: saveOutline, disabled: busy, 'aria-keyshortcuts': 'Control+S Meta+S' }, '保存总纲'),
+                dirty.outline ? dirtyMark('outline') : null,
+                h('span', { className: 'ad-sub' }, 'Ctrl/⌘+S 保存本页')),
               h('table', { className: 'ad-table' },
+                h('caption', { className: 'ad-sr-only' }, '总纲分集表'),
                 h('thead', null, h('tr', null,
-                  ['集数', '标题', '一句话梗概', '开场钩子', '中段反转', '结尾悬念', '时长(秒)', ''].map((t, i) => h('th', { key: i }, t)))),
+                  ['集数', '标题', '一句话梗概', '开场钩子', '中段反转', '结尾悬念', '时长(秒)', ''].map((t, i) => h('th', { key: i, scope: 'col' }, t)))),
                 h('tbody', null,
                   rows.length
                     ? rows.map((row, i) =>
@@ -2992,8 +5462,8 @@ window.__ModuleLoader__.load({
                           h('td', null, h('input', { value: row.twist, onChange: (e) => setRow(i, 'twist', e.target.value) })),
                           h('td', null, h('input', { value: row.cliffhanger, onChange: (e) => setRow(i, 'cliffhanger', e.target.value) })),
                           h('td', null, h('input', { value: row.estDurationSec, onChange: (e) => setRow(i, 'estDurationSec', Number(e.target.value) || 0) })),
-                          h('td', null, h('button', { className: 'ad-btn ad-sm', onClick: () => removeRow(i) }, '删'))))
-                    : h('tr', null, h('td', { colSpan: 8, className: 'ad-empty' }, '还没有分集，点「增加一集」开始'))),
+                          h('td', null, h('button', { type: 'button', className: 'ad-btn ad-sm ad-btn-danger ad-icon-btn ad-icon-btn-sm', 'data-tone': 'danger', 'aria-label': '删除该集', title: '删除该集', onClick: () => removeRow(i) }, icon('trash')))))
+                    : h('tr', null, h('td', { colSpan: 8, className: 'ad-table-empty' }, '还没有分集，点「增加一集」开始'))),
               ),
               rows.length ? h('div', { className: 'ad-path' }, `合计 ${rows.reduce((s, r) => s + (Number(r.estDurationSec) || 0), 0)} 秒`) : null,
             ),
@@ -3003,9 +5473,11 @@ window.__ModuleLoader__.load({
         if (tab === 'characters') {
           body.push(
             h('div', { key: 'ch' },
-              h('div', { className: 'ad-row', style: { marginBottom: 10 } },
-                h('button', { className: 'ad-btn ad-sm', onClick: addCard, disabled: busy }, '+ 增加角色'),
-                h('button', { className: 'ad-btn ad-primary ad-sm', onClick: saveCharacters, disabled: busy }, '保存人物卡')),
+              h('div', { className: 'ad-row', style: { marginBottom: 10, flexWrap: 'wrap' } },
+                h('button', { className: 'ad-btn ad-sm', onClick: addCard, disabled: busy }, icon('plus'), '增加角色'),
+                h('button', { className: 'ad-btn ad-primary ad-sm', onClick: saveCharacters, disabled: busy, 'aria-keyshortcuts': 'Control+S Meta+S' }, '保存人物卡'),
+                dirty.characters ? dirtyMark('characters') : null,
+                h('span', { className: 'ad-sub' }, 'Ctrl/⌘+S 保存本页')),
               h('div', { className: 'ad-grid' },
                 characters.length
                   ? characters.map((card, i) =>
@@ -3014,28 +5486,39 @@ window.__ModuleLoader__.load({
                           h('input', { className: 'ad-input', placeholder: '角色姓名', value: card.name, onChange: (e) => setCard(i, 'name', e.target.value) }),
                           h('select', { className: 'ad-select', value: card.role, onChange: (e) => setCard(i, 'role', e.target.value) },
                             ROLES.map((r) => h('option', { key: r, value: r }, r))),
-                          h('button', { className: 'ad-btn ad-sm', onClick: () => removeCard(i) }, '删')),
+                          h('button', { type: 'button', className: 'ad-btn ad-sm ad-icon-btn', 'data-tone': 'danger', 'aria-label': '删除人物', title: '删除人物', onClick: () => removeCard(i) }, h('svg', { width: 16, height: 16, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', focusable: 'false' }, h('path', { d: 'M2.5 4.2h11M6 4.2V2.9c0-.5.4-.9.9-.9h2.2c.5 0 .9.4.9.9v1.3M4.2 4.2l.5 8.6c0 .6.5 1 1.1 1h4.4c.6 0 1.1-.4 1.1-1l.5-8.6M6.6 6.8v4.4M9.4 6.8v4.4' })))),
                         h(Field, { label: '性格', value: (card.personality || []).join('、'), placeholder: '冷静、护短', onChange: (v) => setCard(i, 'personality', v) }),
                         h(Field, { label: '形象提示词', value: card.appearancePrompt, onChange: (v) => setCard(i, 'appearancePrompt', v) }),
                         h(Field, { label: '音色', value: card.voiceHint, onChange: (v) => setCard(i, 'voiceHint', v) }),
                         h(TextField, { label: '小传', rows: 3, value: card.bio, onChange: (v) => setCard(i, 'bio', v) })))
-                  : h('div', { className: 'ad-empty' }, '还没有角色，点「增加角色」开始')),
+                  : emptyState({ key: 'characters-empty', title: '还没有角色', description: '先建主角/反派/配角，后续生成会引用人物卡。', next: '点上方「+ 增加角色」开始', actions: [{ label: '增加角色', onClick: addCard, disabled: busy }] })),
             ),
           )
         }
 
         if (tab === 'episode') {
           const scenes = parseEpisodeScenes(episodeText)
+          const episodeIsLoaded = loadedEpisodeOrder === (Number(episodeOrder) || 1)
           body.push(
             h('div', { key: 'ep' },
-              h('div', { className: 'ad-row', style: { marginBottom: 10 } },
+              h('div', { className: 'ad-row', style: { marginBottom: 10, flexWrap: 'wrap' } },
                 h('label', { className: 'ad-sub' }, '集数'),
                 h('input', { className: 'ad-input', style: { maxWidth: 100 }, type: 'number', value: episodeOrder, onChange: (e) => setEpisodeOrder(Number(e.target.value) || 1) }),
-                h('button', { className: 'ad-btn ad-sm', onClick: () => loadEpisode(episodeOrder), disabled: busy }, '载入'),
-                h('button', { className: 'ad-btn ad-primary ad-sm', onClick: saveEpisode, disabled: busy }, '保存本集'),
+                h('button', { className: 'ad-btn ad-sm', onClick: () => requestLeave(() => loadEpisode(episodeOrder)), disabled: busy }, '载入'),
+                h('button', { className: 'ad-btn ad-primary ad-sm', onClick: saveEpisode, disabled: busy, 'aria-keyshortcuts': 'Control+S Meta+S', title: episodeIsLoaded ? '保存本集到磁盘' : '未载入时保存会被拦截（防止覆盖磁盘已有内容）' }, '保存本集'),
                 dirty.episode ? dirtyMark('episode') : null,
                 h('span', { className: 'ad-sub' }, 'Ctrl/⌘+S 保存'),
                 episodes.length ? h('span', { className: 'ad-sub' }, `已有：${episodes.map((e) => '第' + e.order + '集').join('、')}`) : null),
+              saveBlock && saveBlock.scope === 'episode'
+                ? h('div', { className: 'ad-warn', key: 'ep-block', role: 'alert' }, saveBlock.text)
+                : null,
+              episodeLoadError
+                ? h('div', { className: 'ad-warn', key: 'ep-load-err', role: 'alert' }, episodeLoadError,
+                    h('button', { className: 'ad-btn ad-sm', style: { marginLeft: 8 }, onClick: () => requestLeave(() => loadEpisode(episodeOrder)), disabled: busy }, '重试载入'))
+                : null,
+              !episodeIsLoaded && !episodeLoadError
+                ? h('div', { className: 'ad-hint-next', key: 'ep-unloaded' }, `第 ${episodeOrder} 集尚未载入：点「载入」可查看磁盘内容；若是新集，可直接保存创建（未载入且磁盘已有内容时保存会被拦截）。`)
+                : null,
               h('textarea', {
                 className: 'ad-area',
                 rows: 22,
@@ -3077,11 +5560,12 @@ window.__ModuleLoader__.load({
               h('div', { className: 'ad-sec' }, '定稿与回滚'),
               h('div', { className: 'ad-row', style: { marginBottom: 8 } },
                 h('button', { className: 'ad-btn ad-sm', onClick: finalizeEpisode, disabled: busy }, `定稿第 ${episodeOrder} 集`),
-                h('button', { className: 'ad-btn ad-sm', onClick: loadFinalized, disabled: busy }, '刷新定稿记录'),
+                h('button', { className: 'ad-btn ad-sm', onClick: loadFinalized, disabled: busy }, icon('refresh'), '刷新定稿记录'),
                 h('span', { className: 'ad-sub' }, '定稿会把当前剧本与分镜冻结成带版本号的快照，随时可回滚')),
               finalized.length
                 ? h('table', { className: 'ad-table' },
-                    h('thead', null, h('tr', null, ['集数', '最新版本', '定稿时间', '行数', '镜头数', '快照文件', '操作'].map((t, i) => h('th', { key: i }, t)))),
+                  h('caption', { className: 'ad-sr-only' }, '定稿版本记录表'),
+                    h('thead', null, h('tr', null, ['集数', '最新版本', '定稿时间', '行数', '镜头数', '快照文件', '操作'].map((t, i) => h('th', { key: i, scope: 'col' }, t)))),
                     h('tbody', null,
                       finalized.map((f) =>
                         h('tr', { key: f.order },
@@ -3094,11 +5578,11 @@ window.__ModuleLoader__.load({
                             (f.files || []).join('、') || '—'),
                           h('td', null,
                             h('div', { className: 'ad-row', style: { gap: 4 } },
-                              h('button', { className: 'ad-btn ad-sm', onClick: () => restoreFinalized(f.order, f.version), disabled: busy }, `回滚最新 v${f.version}`),
+                              h('button', { className: 'ad-btn ad-sm ad-btn-danger', onClick: () => restoreFinalized(f.order, f.version), disabled: busy }, `回滚最新 v${f.version}`),
                               f.version > 1
                                 ? h('button', { className: 'ad-btn ad-sm', onClick: () => restoreFinalizedVersion(f), disabled: busy }, '指定版本…')
                                 : null))))))
-                : h('div', { className: 'ad-empty' }, '还没有定稿记录。剧本满意后点「定稿」，形成可回滚的版本。'),
+                : emptyState({ key: 'finalized-empty', title: '还没有定稿记录', description: '剧本满意后点「定稿」，形成可回滚的版本。', next: '先在剧本页点「定稿第 N 集」' }),
               h('div', { className: 'ad-sec' }, '导入已有剧本'),
               h('div', { className: 'ad-row', style: { marginBottom: 8 } },
                 h('button', { className: 'ad-btn ad-sm', onClick: () => setShowImport((v) => !v) }, showImport ? '收起导入' : '展开导入'),
@@ -3123,7 +5607,8 @@ window.__ModuleLoader__.load({
                             (importPreview.written ? ` · 已写入 ${importPreview.written.length} 集` : '') +
                             (importPreview.skipped && importPreview.skipped.length ? ` · 跳过 ${importPreview.skipped.length} 集` : '')),
                           h('table', { className: 'ad-table' },
-                            h('thead', null, h('tr', null, ['集数', '标题', '场次', '行数', '角色'].map((t, i) => h('th', { key: i }, t)))),
+                            h('caption', { className: 'ad-sr-only' }, '导入切分预览表'),
+                            h('thead', null, h('tr', null, ['集数', '标题', '场次', '行数', '角色'].map((t, i) => h('th', { key: i, scope: 'col' }, t)))),
                             h('tbody', null,
                               importPreview.episodes.map((e) =>
                                 h('tr', { key: e.order },
@@ -3140,26 +5625,47 @@ window.__ModuleLoader__.load({
 
         if (tab === 'storyboard') {
           const total = shots.reduce((s, x) => s + (Number(x.durationSec) || 0), 0)
+          // v0.10.4（task-91）：v0.10.0 add-only per-shot 字段只读展示。
+          // 仅当本集任一镜含新字段时才条件追加「详情」列/展开行；旧项目/无字段时表格与 v0.10.3 完全一致（10 列）。
+          const shotExtraEntries = shotExtraEntriesMemo
+          const hasExtraFields = shotExtraEntries.some((entries) => entries.length > 0)
+          const columnCount = hasExtraFields ? 11 : 10
+          const headerLabels = ['镜号', '景别', '运镜', '画面描述', '台词', '音效', '时长(秒)', '提示词', '视频提示词', '操作']
+          if (hasExtraFields) headerLabels.push('详情')
+          const shotsAreLoaded = loadedShotsOrder === (Number(episodeOrder) || 1)
           body.push(
             h('div', { key: 'sb' },
-              h('div', { className: 'ad-row', style: { marginBottom: 10 } },
+              h('div', { className: 'ad-row', style: { marginBottom: 10, flexWrap: 'wrap' } },
                 h('label', { className: 'ad-sub' }, '集数'),
                 h('input', { className: 'ad-input', style: { maxWidth: 100 }, type: 'number', value: episodeOrder, onChange: (e) => setEpisodeOrder(Number(e.target.value) || 1) }),
-                h('button', { className: 'ad-btn ad-sm', onClick: () => loadShots(episodeOrder), disabled: busy }, '载入'),
-                h('button', { className: 'ad-btn ad-sm', onClick: addShot, disabled: busy }, '+ 增加镜头'),
+                h('button', { className: 'ad-btn ad-sm', onClick: () => requestLeave(() => loadShots(episodeOrder)), disabled: busy }, '载入'),
+                h('button', { className: 'ad-btn ad-sm', onClick: addShot, disabled: busy }, icon('plus'), '增加镜头'),
                 h('button', { className: 'ad-btn ad-sm', onClick: renumberShots, disabled: busy || !shots.length }, '自动重编号'),
-                h('button', { className: 'ad-btn ad-primary ad-sm', onClick: saveShots, disabled: busy }, '保存分镜'),
+                h('button', { className: 'ad-btn ad-primary ad-sm', onClick: saveShots, disabled: busy, 'aria-keyshortcuts': 'Control+S Meta+S', title: shotsAreLoaded ? '保存本集分镜到磁盘' : '未载入时保存会被拦截（防止覆盖磁盘分镜）' }, '保存分镜'),
                 dirty.storyboard ? dirtyMark('storyboard') : null,
-                h('span', { className: 'ad-sub' }, '↑↓ 调整顺序；保存后写入 分镜/第' + String(episodeOrder).padStart(3, '0') + '集.分镜')),
+                h('span', { className: 'ad-sub' }, 'Ctrl/⌘+S 保存；↑↓ 调整顺序；保存后写入 分镜/第' + String(episodeOrder).padStart(3, '0') + '集.分镜')),
+              saveBlock && saveBlock.scope === 'storyboard'
+                ? h('div', { className: 'ad-warn', key: 'sb-block', role: 'alert' }, saveBlock.text)
+                : null,
+              shotsLoadError
+                ? h('div', { className: 'ad-warn', key: 'sb-load-err', role: 'alert' }, shotsLoadError,
+                    h('button', { className: 'ad-btn ad-sm', style: { marginLeft: 8 }, onClick: () => requestLeave(() => loadShots(episodeOrder)), disabled: busy }, '重试载入'))
+                : null,
+              !shotsAreLoaded && !shotsLoadError
+                ? h('div', { className: 'ad-hint-next', key: 'sb-unloaded' }, `第 ${episodeOrder} 集分镜尚未载入：点「载入」确认磁盘内容后再保存（未载入时保存会被拦截）。`)
+                : null,
               h('table', { className: 'ad-table' },
+                h('caption', { className: 'ad-sr-only' }, '分镜表'),
                 h('thead', null, h('tr', null,
-                  ['镜号', '景别', '运镜', '画面描述', '台词', '音效', '时长(秒)', '提示词', '视频提示词', '操作'].map((t, i) => h('th', { key: i }, t)))),
+                  headerLabels.map((t, i) => h('th', { key: i, scope: 'col' }, t)))),
                 h('tbody', null,
                   shots.length
-                    ? shots.map((shot, i) =>
-                        h('tr', { key: i },
+                    ? shots.flatMap((shot, i) => {
+                        const extraEntries = shotExtraEntries[i] || []
+                        const detailOpen = shotExtraOpen === i
+                        const row = h('tr', { key: `shot-${i}` },
                           h('td', null, h('input', { value: shot.shotNumber, onChange: (e) => setShot(i, 'shotNumber', e.target.value) })),
-                          h('td', null, h('select', { value: shot.shotSize, onChange: (e) => setShot(i, 'shotSize', e.target.value) }, SHOT_SIZES.map((s) => h('option', { key: s, value: s }, s)))),
+                          h('td', null, h('select', { value: shot.shotSize, onChange: (e) => setShot(i, 'shotSize', e.target.value) }, shotSizeOptionEls)),
                           h('td', null, h('input', { value: shot.cameraMove, onChange: (e) => setShot(i, 'cameraMove', e.target.value) })),
                           h('td', null, h('textarea', { rows: 2, value: shot.description, onChange: (e) => setShot(i, 'description', e.target.value) })),
                           h('td', null, h('textarea', { rows: 2, value: shot.dialogue, onChange: (e) => setShot(i, 'dialogue', e.target.value) })),
@@ -3174,9 +5680,61 @@ window.__ModuleLoader__.load({
                             h('div', { className: 'ad-row', style: { gap: 4 } },
                               h('button', { className: 'ad-btn ad-sm', title: '上移', 'aria-label': '上移镜头', onClick: () => moveShot(i, -1), disabled: busy || i === 0 }, '↑'),
                               h('button', { className: 'ad-btn ad-sm', title: '下移', 'aria-label': '下移镜头', onClick: () => moveShot(i, 1), disabled: busy || i === shots.length - 1 }, '↓'),
-                              h('button', { className: 'ad-btn ad-sm', onClick: () => removeShot(i), disabled: busy }, '删')))))
-                    : h('tr', null, h('td', { colSpan: 10, className: 'ad-empty' }, '本集还没有镜头，点「增加镜头」或先载入已有分镜'))),
+                              h('button', { type: 'button', className: 'ad-btn ad-sm ad-btn-danger ad-icon-btn ad-icon-btn-sm', 'data-tone': 'danger', 'aria-label': '删除该镜', title: '删除该镜', onClick: () => removeShot(i), disabled: busy }, icon('trash')))),
+                          hasExtraFields
+                            ? h('td', null, extraEntries.length
+                                ? h('button', {
+                                    className: 'ad-btn ad-sm',
+                                    'aria-label': `查看第 ${shot.shotNumber || i + 1} 镜高级字段`,
+                                    title: '只读展示 v0.10.0 分镜高级字段（不写盘）',
+                                    onClick: () => setShotExtraOpen(detailOpen ? null : i),
+                                  }, detailOpen ? '收起 ▴' : '详情 ▾')
+                                : null)
+                            : null)
+                        if (!hasExtraFields || !extraEntries.length || !detailOpen) return [row]
+                        const detailRow = h('tr', { key: `detail-${i}` },
+                          h('td', { colSpan: columnCount },
+                            h('div', {
+                              className: 'ad-shot-extras',
+                              role: 'note',
+                              'aria-label': `第 ${shot.shotNumber || i + 1} 镜高级字段（只读）`,
+                            },
+                              h('div', { className: 'ad-sub', style: { marginBottom: 4 } }, `第 ${shot.shotNumber || i + 1} 镜 · 高级字段（只读，来自宿主 v0.10.0+）`),
+                              extraEntries.map(([label, value]) => h('div', { className: 'ad-shot-extra', key: label },
+                                h('strong', null, label + '：'), value)))))
+                        return [row, detailRow]
+                      })
+                    : h('tr', null, h('td', { colSpan: columnCount, className: 'ad-table-empty' }, '本集还没有镜头，点「增加镜头」或先载入已有分镜'))),
               ),
+              // v0.11.2（task-99）：分镜分组（groups add-only）只读区；仅 groups 非空时渲染（旧项目零新显示）。
+              shotGroups && shotGroups.length
+                ? h('div', { className: 'ad-groups', 'aria-label': '分镜分组（只读）' },
+                    h('div', { className: 'ad-row', style: { marginBottom: 6, alignItems: 'center', gap: 8 } },
+                      h('span', { className: 'ad-sec', style: { margin: 0 } }, `分组 · ${shotGroups.length} 组（只读，来自宿主分组 sidecar）`),
+                      shotGroupsTruncated ? h('span', { className: 'ad-count' }, '仅展示前 100 组') : null),
+                    shotGroups.map((group, groupIndex) => h('div', {
+                      className: 'ad-group',
+                      key: `${group.groupId || 'group'}-${groupIndex}`,
+                      'aria-label': `第 ${groupIndex + 1} 组${group.name ? `：${group.name}` : ''}（只读）`,
+                    },
+                      h('div', null,
+                        group.groupId ? h('strong', null, `#${group.groupId} `) : null,
+                        h('strong', null, group.name || '（未命名分组）'),
+                        group.emotionCue ? h('span', { className: 'ad-count', style: { marginLeft: 8 } }, `情绪总控：${group.emotionCue}`) : null),
+                      group.shotNumbers.length
+                        ? h('div', { className: 'ad-count', style: { marginTop: 2 } },
+                            `镜号：${group.shotNumbers.slice(0, 20).join('、')}${group.shotNumbers.length > 20 ? ` 等 ${group.shotNumbers.length} 镜` : ''}`)
+                        : null,
+                      group.groupPrompt
+                        ? h('div', {
+                            className: 'ad-group-prompt',
+                            role: 'note',
+                            'aria-label': `第 ${groupIndex + 1} 组草帽视图（只读）`,
+                          },
+                            h('div', { className: 'ad-sub', style: { marginBottom: 2 } }, '草帽视图（只读）'),
+                            group.groupPrompt)
+                        : null)))
+                : null,
               !hostFlags.p1
                 ? h('div', { className: 'ad-warn' }, '当前宿主版本 < 0.4.0：「视频提示词」列只读展示（宿主 v0.4.0+ 才持久化；升级插件后自动可编辑）。')
                 : null,
@@ -3215,7 +5773,7 @@ window.__ModuleLoader__.load({
                                 h('div', { className: 'ad-hit-path' }, `第 ${s.episode} 集 · ${s.shotNumber}`),
                                 h('div', null, s.sfx)))))
                       : null)
-                : h('div', { className: 'ad-empty' }, '点「汇总台词」把全剧对白按角色归集，并生成可交付的配音稿。')),
+                : emptyState({ key: 'dialogue-empty', title: '还没有台词数据', description: '从分集剧本自动抽取「角色：台词」，并生成可交付的配音稿。', next: '点上方「汇总台词」开始', actions: [{ label: '汇总台词', onClick: loadDialogue, disabled: busy }] })),
           )
         }
 
@@ -3226,10 +5784,11 @@ window.__ModuleLoader__.load({
                 h('input', { className: 'ad-input', placeholder: '素材文件绝对路径，例如 D:\\素材\\shot-1-1.png', value: assetSource, onChange: (e) => setAssetSource(e.target.value) }),
                 h('input', { className: 'ad-input', style: { maxWidth: 160 }, placeholder: '关联镜号 1-1、1-2', value: assetShots, onChange: (e) => setAssetShots(e.target.value) }),
                 h('button', { className: 'ad-btn ad-primary ad-sm', onClick: addAsset, disabled: busy || !assetSource.trim() }, '登记'),
-                h('button', { className: 'ad-btn ad-sm', onClick: loadAssets, disabled: busy }, '刷新')),
+                h('button', { className: 'ad-btn ad-sm', onClick: loadAssets, disabled: busy }, icon('refresh'), '刷新')),
               h('div', { className: 'ad-sub', style: { marginBottom: 10 } }, '只登记路径与校验信息，**不复制原始文件**（大文件不会塞进项目目录）'),
               h('table', { className: 'ad-table' },
-                h('thead', null, h('tr', null, ['名称', '类型', '大小', '关联镜头', '校验', '路径', ''].map((t, i) => h('th', { key: i }, t)))),
+                h('caption', { className: 'ad-sr-only' }, '素材资产登记表'),
+                h('thead', null, h('tr', null, ['名称', '类型', '大小', '关联镜头', '校验', '路径', ''].map((t, i) => h('th', { key: i, scope: 'col' }, t)))),
                 h('tbody', null,
                   assets.length
                     ? assets.map((a) =>
@@ -3240,20 +5799,22 @@ window.__ModuleLoader__.load({
                           h('td', null, (a.linkedShots || []).join('、') || '—'),
                           h('td', { title: a.sha256 || '未计算' }, a.sha256 ? a.sha256.slice(0, 8) : '—'),
                           h('td', { style: { maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }, title: a.source }, a.source),
-                          h('td', null, h('button', { className: 'ad-btn ad-sm', onClick: () => removeAsset(a.id) }, '移除'))))
-                    : h('tr', null, h('td', { colSpan: 7, className: 'ad-empty' }, '还没有登记素材。出图/出片后把文件路径登记进来，就能和镜号对上。')))),
+                          h('td', null, h('button', { type: 'button', className: 'ad-btn ad-sm ad-btn-danger ad-icon-btn ad-icon-btn-sm', 'data-tone': 'danger', 'aria-label': '移除素材', title: '移除素材', onClick: () => removeAsset(a.id) }, icon('trash')))))
+                    : h('tr', null, h('td', { colSpan: 7, className: 'ad-table-empty' }, '还没有登记素材。出图/出片后把文件路径登记进来，就能和镜号对上。')))),
           ))
         }
 
         if (tab === 'memory') {
           body.push(
             h('div', { key: 'mem' },
-              h('div', { className: 'ad-row', style: { marginBottom: 10 } },
-                h('button', { className: 'ad-btn ad-sm', onClick: addMem, disabled: busy }, '+ 增加条目'),
+              h('div', { className: 'ad-row', style: { marginBottom: 10, flexWrap: 'wrap' } },
+                h('button', { className: 'ad-btn ad-sm', onClick: addMem, disabled: busy }, icon('plus'), '增加条目'),
                 h('button', { className: 'ad-btn ad-primary ad-sm', onClick: saveMemory, disabled: busy }, '保存本剧记忆'),
-                h('span', { className: 'ad-sub' }, '伏笔 / 已用桥段 / 时间线 / 待回收 —— 生成前先读这里可避免重复与冲突')),
+                dirty.memory ? dirtyMark('memory') : null,
+                h('span', { className: 'ad-sub' }, '伏笔 / 已用桥段 / 时间线 / 待回收 —— 生成前先读这里可避免重复与冲突；Ctrl/⌘+S 保存本页')),
               h('table', { className: 'ad-table' },
-                h('thead', null, h('tr', null, ['类型', '内容', '集数', '状态', ''].map((t, i) => h('th', { key: i }, t)))),
+                h('caption', { className: 'ad-sr-only' }, '本剧记忆表'),
+                h('thead', null, h('tr', null, ['类型', '内容', '集数', '状态', ''].map((t, i) => h('th', { key: i, scope: 'col' }, t)))),
                 h('tbody', null,
                   memory.length
                     ? memory.map((entry, i) =>
@@ -3264,8 +5825,8 @@ window.__ModuleLoader__.load({
                           h('td', null, h('input', { style: { maxWidth: 64 }, value: entry.episode == null ? '' : entry.episode, onChange: (e) => setMem(i, 'episode', e.target.value === '' ? null : Number(e.target.value) || null) })),
                           h('td', null, h('select', { value: entry.status, onChange: (e) => setMem(i, 'status', e.target.value) },
                             h('option', { value: 'open' }, '未回收'), h('option', { value: 'resolved' }, '已回收'))),
-                          h('td', null, h('button', { className: 'ad-btn ad-sm', onClick: () => removeMem(i) }, '删'))))
-                    : h('tr', null, h('td', { colSpan: 5, className: 'ad-empty' }, '还没有记忆条目。记下伏笔和已用桥段，后续生成才不会撞车。')))),
+                          h('td', null, h('button', { type: 'button', className: 'ad-btn ad-sm ad-btn-danger ad-icon-btn ad-icon-btn-sm', 'data-tone': 'danger', 'aria-label': '删除记忆条目', title: '删除记忆条目', onClick: () => removeMem(i) }, icon('trash')))))
+                    : h('tr', null, h('td', { colSpan: 5, className: 'ad-table-empty' }, '还没有记忆条目。记下伏笔和已用桥段，后续生成才不会撞车。')))),
               h('div', { className: 'ad-path' }, '保存后会同时渲染到 本剧记忆/本剧记忆.md'),
             ),
           )
@@ -3274,12 +5835,14 @@ window.__ModuleLoader__.load({
         if (tab === 'world') {
           body.push(
             h('div', { key: 'wd' },
-              h('div', { className: 'ad-row', style: { marginBottom: 10 } },
-                h('button', { className: 'ad-btn ad-sm', onClick: addWorldEntry, disabled: busy }, '+ 增加设定'),
-                h('button', { className: 'ad-btn ad-primary ad-sm', onClick: saveWorld, disabled: busy }, '保存世界观'),
-                h('span', { className: 'ad-sub' }, '地点 / 组织 / 规则 / 道具 / 时间线 —— 分集剧本与分镜会引用这些设定')),
+              h('div', { className: 'ad-row', style: { marginBottom: 10, flexWrap: 'wrap' } },
+                h('button', { className: 'ad-btn ad-sm', onClick: addWorldEntry, disabled: busy }, icon('plus'), '增加设定'),
+                h('button', { className: 'ad-btn ad-primary ad-sm', onClick: saveWorld, disabled: busy, 'aria-keyshortcuts': 'Control+S Meta+S' }, '保存世界观'),
+                dirty.world ? dirtyMark('world') : null,
+                h('span', { className: 'ad-sub' }, '地点 / 组织 / 规则 / 道具 / 时间线 —— 分集剧本与分镜会引用这些设定；Ctrl/⌘+S 保存本页')),
               h('table', { className: 'ad-table' },
-                h('thead', null, h('tr', null, ['类型', '名称', '说明', ''].map((t, i) => h('th', { key: i }, t)))),
+                h('caption', { className: 'ad-sr-only' }, '世界观设定表'),
+                h('thead', null, h('tr', null, ['类型', '名称', '说明', ''].map((t, i) => h('th', { key: i, scope: 'col' }, t)))),
                 h('tbody', null,
                   world.length
                     ? world.map((entry, i) =>
@@ -3288,8 +5851,8 @@ window.__ModuleLoader__.load({
                             ['地点', '组织', '规则', '道具', '时间线'].map((k) => h('option', { key: k, value: k }, k)))),
                           h('td', null, h('input', { value: entry.name, onChange: (e) => setWorldEntry(i, 'name', e.target.value) })),
                           h('td', null, h('textarea', { rows: 2, value: entry.detail, onChange: (e) => setWorldEntry(i, 'detail', e.target.value) })),
-                          h('td', null, h('button', { className: 'ad-btn ad-sm', onClick: () => removeWorldEntry(i) }, '删'))))
-                    : h('tr', null, h('td', { colSpan: 4, className: 'ad-empty' }, '还没有世界观设定。先把地点与规则定下来，后面写剧本才不会自相矛盾。')))),
+                          h('td', null, h('button', { type: 'button', className: 'ad-btn ad-sm ad-btn-danger ad-icon-btn ad-icon-btn-sm', 'data-tone': 'danger', 'aria-label': '删除世界观条目', title: '删除世界观条目', onClick: () => removeWorldEntry(i) }, icon('trash')))))
+                    : h('tr', null, h('td', { colSpan: 4, className: 'ad-table-empty' }, '还没有世界观设定。先把地点与规则定下来，后面写剧本才不会自相矛盾。')))),
               h('div', { className: 'ad-path' }, '保存后会同时渲染到 世界观/世界观.md'),
             ),
           )
@@ -3300,7 +5863,7 @@ window.__ModuleLoader__.load({
           body.push(
             h('div', { key: 'dr' },
               h('div', { className: 'ad-row', style: { marginBottom: 8, flexWrap: 'wrap' } },
-                h('button', { className: 'ad-btn ad-sm', onClick: () => loadDrafts(false), disabled: busy }, '刷新待处理'),
+                h('button', { className: 'ad-btn ad-sm', onClick: () => loadDrafts(false), disabled: busy }, icon('refresh'), '刷新待处理'),
                 h('button', { className: 'ad-btn ad-sm', onClick: () => loadDrafts(true), disabled: busy }, '含已处理'),
                 hostFlags.p1 && pendingDrafts.length
                   ? h('button', { className: 'ad-btn ad-sm', onClick: toggleSelectAllDrafts, disabled: busy }, allSelected ? '取消全选' : `全选待处理（${pendingDrafts.length}）`)
@@ -3309,7 +5872,7 @@ window.__ModuleLoader__.load({
                   ? h('button', { className: 'ad-btn ad-primary ad-sm', onClick: () => batchResolveDrafts('accept'), disabled: busy || !selectedDraftIds.length }, `批量采纳（${selectedDraftIds.length}）`)
                   : null,
                 hostFlags.p1
-                  ? h('button', { className: 'ad-btn ad-sm', onClick: () => batchResolveDrafts('discard'), disabled: busy || !selectedDraftIds.length }, `批量丢弃（${selectedDraftIds.length}）`)
+                  ? h('button', { className: 'ad-btn ad-sm ad-btn-danger', onClick: () => batchResolveDrafts('discard'), disabled: busy || !selectedDraftIds.length }, `批量丢弃（${selectedDraftIds.length}）`)
                   : null,
                 h('span', { className: 'ad-sub' }, 'AI 生成物先落草稿区，采纳后才写入正式稿')),
               !hostFlags.p1
@@ -3336,7 +5899,7 @@ window.__ModuleLoader__.load({
                           ? h('button', { className: 'ad-btn ad-primary ad-sm', onClick: () => resolveDraft(draft.id, 'accept'), disabled: busy }, '采纳')
                           : null,
                         draft.status === 'pending'
-                          ? h('button', { className: 'ad-btn ad-sm', onClick: () => resolveDraft(draft.id, 'discard'), disabled: busy }, '丢弃')
+                          ? h('button', { className: 'ad-btn ad-sm ad-btn-danger', onClick: () => resolveDraft(draft.id, 'discard'), disabled: busy }, '丢弃')
                           : null,
                         draft.status === 'discarded' && hostFlags.p1
                           ? h('button', { className: 'ad-btn ad-sm', onClick: () => restoreDraft(draft.id), disabled: busy }, '恢复')
@@ -3348,7 +5911,7 @@ window.__ModuleLoader__.load({
                       h('div', { className: 'ad-count', style: { marginBottom: 6 } },
                         `来源：${draft.origin.preset}${draft.origin.toolName ? ' · ' + draft.origin.toolName : ''} · ${draft.origin.at}`),
                       h('pre', { className: 'ad-pre' }, String(draft.content).slice(0, 800) + (String(draft.content).length > 800 ? '\n…' : ''))))
-                : h('div', { className: 'ad-empty' }, '草稿区是空的。在「短剧模式」会话里让 Agent 生成内容后，会出现在这里等你采纳。')),
+                : emptyState({ key: 'drafts-empty', title: '草稿区是空的', description: '在「短剧模式」会话里让 Agent 生成内容后，会出现在这里等你采纳。', next: '对 Agent 说「写第 N 集」或使用对应 drama_* 工具' })),
           )
         }
 
@@ -3364,7 +5927,8 @@ window.__ModuleLoader__.load({
                     h('div', { className: 'ad-count', style: { marginBottom: 10 } },
                       `集数 ${ledger.totals.episodes} · 场景 ${ledger.totals.scenes} · 镜头 ${ledger.totals.shots} · 总时长 ${ledger.totals.durationSec}s（约 ${(ledger.totals.durationSec / 60).toFixed(1)} 分钟）· 角色 ${ledger.totals.characters.length} 人 · 地点 ${ledger.totals.locations.length} 处`),
                     h('table', { className: 'ad-table' },
-                      h('thead', null, h('tr', null, ['集数', '场景', '内景', '外景', '镜头', '时长(秒)', '出场角色', '地点'].map((t, i) => h('th', { key: i }, t)))),
+                      h('caption', { className: 'ad-sr-only' }, '账本合计表'),
+                      h('thead', null, h('tr', null, ['集数', '场景', '内景', '外景', '镜头', '时长(秒)', '出场角色', '地点'].map((t, i) => h('th', { key: i, scope: 'col' }, t)))),
                       h('tbody', null,
                         ledger.perEpisode.map((e) =>
                           h('tr', { key: e.order },
@@ -3379,9 +5943,9 @@ window.__ModuleLoader__.load({
                     h('div', { className: 'ad-sec' }, `成本提示 · ${ledger.warnings.length}`),
                     ledger.warnings.length
                       ? h('div', { className: 'ad-hits' }, ledger.warnings.map((w, i) => h('div', { className: 'ad-hit', key: i }, w)))
-                      : h('div', { className: 'ad-empty' }, '未发现明显成本风险。'),
+                      : h('div', { className: 'ad-hint-next' }, '未发现明显成本风险。'),
                     h('div', { className: 'ad-path' }, '同时渲染到 账本/账本.md'))
-                : h('div', { className: 'ad-empty' }, '点「生成账本」看全剧的场景、镜头、时长与成本结构。')),
+                : emptyState({ key: 'ledger-empty', title: '还没有拍摄账本', description: '点「生成账本」看全剧的场景、镜头、时长与成本结构。', next: '点上方「生成账本」', actions: [{ label: '生成账本', onClick: loadLedger, disabled: busy }] })),
           )
         }
 
@@ -3393,7 +5957,7 @@ window.__ModuleLoader__.load({
           body.push(
             h('div', { key: 'gen' },
               h('div', { className: 'ad-row', style: { marginBottom: 10 } },
-                h('button', { className: 'ad-btn ad-primary ad-sm', onClick: loadGenerate, disabled: busy }, '刷新状态'),
+                h('button', { className: 'ad-btn ad-primary ad-sm', onClick: loadGenerate, disabled: busy }, icon('refresh'), '刷新状态'),
                 h('span', { className: 'ad-sub' }, '主选 LibTV（画布 CLI），备选 NeoWoW（CLI）')),
 
               h('div', { className: 'ad-sec' }, '① 画布绑定'),
@@ -3401,30 +5965,60 @@ window.__ModuleLoader__.load({
                 ? (binding.ok
                     ? h('div', { className: 'ad-count' }, `已绑定：${binding.uuid}`)
                     : h('div', null,
-                        h('div', { className: 'ad-empty' }, binding.detail),
+                        h('div', { className: 'ad-hint-next' }, binding.detail),
                         h('div', { className: 'ad-path' }, binding.fix || '')))
-                : h('div', { className: 'ad-empty' }, '点「刷新状态」查看绑定情况。'),
+                : h('div', { className: 'ad-hint-next' }, '点「刷新状态」查看绑定情况。'),
               canvases.length
                 ? h('div', { className: 'ad-hits', style: { maxHeight: 180, overflow: 'auto', marginTop: 6 } },
                     canvases.slice(0, 30).map((c) =>
                       h('div', { className: 'ad-hit', key: c.uuid, style: { display: 'flex', alignItems: 'center', gap: 8 } },
                         h('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' } }, `${c.name} · ${c.uuid.slice(0, 8)}`),
-                        h('button', { className: 'ad-btn ad-sm', onClick: () => bindCanvas(c.uuid), disabled: busy }, '绑定'))))
-                : h('div', { className: 'ad-empty' }, '没读到候选画布（LibTV CLI 不可用时为空）。'),
+                        h('button', { className: 'ad-btn ad-sm', 'aria-label': '绑定画布 ' + c.name, onClick: () => bindCanvas(c.uuid), disabled: busy }, '绑定'))))
+                : h('div', { className: 'ad-hint-next' }, '没读到候选画布（LibTV CLI 不可用时为空）。'),
+              canvases.length > 30
+                ? h('div', { className: 'ad-hint-next', key: 'canvas-truncated', role: 'status', 'aria-live': 'polite' }, '已截断：仅显示前 30 个候选画布（共 ' + canvases.length + ' 个）；可点上方「刷新状态」重新载入。')
+                : null,
 
               h('div', { className: 'ad-sec' }, '② 预算护栏'),
               genBudget
                 ? h('div', { className: 'ad-row', style: { flexWrap: 'wrap', gap: 8, marginBottom: 8 } },
                     h('span', { className: 'ad-count' },
                       `上限 ${genBudget.limitPoints == null ? '未设' : genBudget.limitPoints} · 已消耗 ${genBudget.spentPoints} · 剩余 ${genBudget.remainingPoints == null ? '—' : genBudget.remainingPoints}`),
-                    h('input', { className: 'ad-input ad-sm', style: { width: 110 }, placeholder: '上限（空=取消）', value: genLimit, onChange: (e) => setGenLimit(e.target.value) }),
+                    h('input', { className: 'ad-input ad-sm', style: { width: 110 }, 'aria-label': '预算上限（留空取消）', placeholder: '上限（空=取消）', value: genLimit, onChange: (e) => setGenLimit(e.target.value) }),
                     h('button', { className: 'ad-btn ad-sm', onClick: saveBudget, disabled: busy }, '保存'))
-                : h('div', { className: 'ad-empty' }, '点「刷新状态」读取预算。'),
+                : h('div', { className: 'ad-hint-next' }, '点「刷新状态」读取预算。'),
+              h('div', { className: 'ad-hint-next', key: 'hint-estimate' }, '生成前查看各后端预计消耗（只查价目，不触发生成）'),
+              h('div', { className: 'ad-row', style: { marginBottom: 10, flexWrap: 'wrap', gap: 8 } },
+                h('button', { className: 'ad-btn ad-sm', onClick: estimateGeneration, disabled: genEstimateBusy || busy }, genEstimateBusy ? '预估中…' : '预估成本（只读）'),
+                h('span', { className: 'ad-sub' }, '按当前类型 / 模型 / 本集镜头数查询价目；不触发生成、不消耗积分'),
+                genEstimate && !genEstimateBusy
+                  ? (() => {
+                      const estimates = Array.isArray(genEstimate.estimates) ? genEstimate.estimates : []
+                      if (genEstimate.error) return h('div', { className: 'ad-hint-next', style: { width: '100%' } }, '预估失败：' + genEstimate.error + '（不阻塞；可稍后重试）')
+                      if (!estimates.length) return h('div', { className: 'ad-hint-next', style: { width: '100%' } }, genEstimate.detail || '未获取到后端预估（后端不可用时不阻塞）')
+                      return h('div', { className: 'ad-hits', role: 'status', style: { width: '100%', maxHeight: 180, overflow: 'auto' } },
+                        estimates.map((item, i) =>
+                          h('div', { className: 'ad-hit', key: i },
+                            h('div', { className: 'ad-hit-path' }, (item.label || item.backend || '后端') + (item.ok ? '' : ' · 不可估算')),
+                            h('div', null, item.ok
+                              ? '单位 ' + (item.unit == null ? '—' : item.unit) + ' · 合计 ' + (item.total == null ? '—' : item.total) + ' ' + (item.currency || '积分') + '（' + (item.basis || '—') + '）；数量 ' + (genEstimate.unitCount || '—')
+                              : String(item.detail || item.reason || '无本地价目') + (item.note ? ' · ' + item.note : '')))))
+                    })()
+                  : null),
 
               h('div', { className: 'ad-sec' }, `③ 任务（${genTasks.length}）`),
+              h('div', { className: 'ad-hint-next', key: 'hint-task-record' }, '仅记录任务台账，不提交生成'),
+              h('div', { className: 'ad-row', style: { marginBottom: 8, flexWrap: 'wrap', gap: 8 } },
+                h('span', { className: 'ad-sub' }, '登记任务（只写台账，不提交生成）'),
+                h('select', { className: 'ad-input ad-sm', 'aria-label': '登记任务后端', value: taskRecordBackend, onChange: (e) => setTaskRecordBackend(e.target.value), disabled: taskRecordBusy },
+                  h('option', { value: 'libtv' }, 'libtv'), h('option', { value: 'neowow' }, 'neowow')),
+                h('input', { className: 'ad-input ad-sm', style: { width: 260 }, 'aria-label': '登记任务提示词（可选）', placeholder: '提示词 / 备注（可选）', value: taskRecordPrompt, onChange: (e) => setTaskRecordPrompt(e.target.value) }),
+                h('button', { className: 'ad-btn ad-sm', onClick: createTaskRecord, disabled: taskRecordBusy || busy || !openTitle }, taskRecordBusy ? '处理中…' : '登记任务')),
+              taskNotice ? h('div', { className: 'ad-hint-next', key: 'task-notice', role: 'status' }, taskNotice) : null,
               genTasks.length
                 ? h('table', { className: 'ad-table' },
-                    h('thead', null, h('tr', null, ['集', '类型', '模型', '状态', '预估', '实际', '产物'].map((t, i) => h('th', { key: i }, t)))),
+                  h('caption', { className: 'ad-sr-only' }, '生成任务表'),
+                    h('thead', null, h('tr', null, ['集', '类型', '模型', '状态', '预估', '实际', '产物', '操作'].map((t, i) => h('th', { key: i, scope: 'col' }, t)))),
                     h('tbody', null,
                       genTasks.slice(0, 30).map((t) =>
                         h('tr', { key: t.id },
@@ -3434,8 +6028,20 @@ window.__ModuleLoader__.load({
                           h('td', null, t.status),
                           h('td', null, t.estimatePoints == null ? '—' : t.estimatePoints),
                           h('td', null, t.actualPoints == null ? '—' : t.actualPoints),
-                          h('td', null, String((t.artifacts || []).length))))))
-                : h('div', { className: 'ad-empty' }, '还没有生成任务。'),
+                          h('td', null, String((t.artifacts || []).length)),
+                          h('td', null,
+                            h('select', {
+                              className: 'ad-input ad-sm',
+                              'aria-label': '任务 ' + t.id + ' 状态',
+                              value: taskStatusDraft[t.id] || t.status,
+                              onChange: (e) => setTaskStatusDraft((prev) => ({ ...prev, [t.id]: e.target.value })),
+                              disabled: taskRecordBusy,
+                            }, ['planned', 'submitted', 'running', 'done', 'failed', 'cancelled'].map((s) => h('option', { key: s, value: s }, s))),
+                            h('button', { className: 'ad-btn ad-sm', 'aria-label': '更新任务 ' + t.id + ' 状态', onClick: () => updateTaskStatus(t), disabled: taskRecordBusy || !openTitle }, '更新'))))))
+                : h('div', { className: 'ad-hint-next' }, '还没有生成任务。'),
+              genTasks.length > 30
+                ? h('div', { className: 'ad-hint-next', key: 'task-truncated', role: 'status', 'aria-live': 'polite' }, '已截断：仅显示前 30 条生成任务（共 ' + genTasks.length + ' 条）。')
+                : null,
 
               h('div', { className: 'ad-sec' }, `④ 批次（当前集 第 ${episodeOrder} 集）`),
               h('div', { className: 'ad-row', style: { flexWrap: 'wrap', gap: 8, marginBottom: 8 } },
@@ -3443,7 +6049,7 @@ window.__ModuleLoader__.load({
                   h('option', { value: 'image' }, '分镜图'),
                   h('option', { value: 'video' }, '分镜视频'),
                   h('option', { value: 'audio' }, '配音')),
-                h('input', { className: 'ad-input ad-sm', style: { width: 200 }, placeholder: '模型名（可留空）', value: genModel, onChange: (e) => setGenModel(e.target.value) }),
+                h('input', { className: 'ad-input ad-sm', style: { width: 200 }, 'aria-label': '分镜生成模型名（可留空）', placeholder: '模型名（可留空）', value: genModel, onChange: (e) => setGenModel(e.target.value) }),
                 h('button', { className: 'ad-btn ad-sm', onClick: planBatch, disabled: busy }, '规划（不触发）'),
                 h('button', { className: 'ad-btn ad-primary ad-sm', onClick: submitBatch, disabled: busy || !genPlan }, '提交'),
                 h('button', { className: 'ad-btn ad-sm', onClick: collectBatch, disabled: busy }, '收敛取产物')),
@@ -3451,7 +6057,7 @@ window.__ModuleLoader__.load({
                 ? h('div', null,
                     h('div', { className: 'ad-count', style: { marginBottom: 6 } },
                       `已规划 ${genPlan.count} 项 · 预估 ${genPlan.estimatePoints || 0} 积分 · 预算闸门 ${genPlan.quota.ok ? '通过' : '拦截'}`),
-                    genPlan.quota.detail ? h('div', { className: 'ad-empty' }, genPlan.quota.detail) : null,
+                    genPlan.quota.detail ? h('div', { className: 'ad-hint-next' }, genPlan.quota.detail) : null,
                     h('div', { className: 'ad-hits', style: { maxHeight: 200, overflow: 'auto' } },
                       genPlan.items.map((it) =>
                         h('div', { className: 'ad-hit', key: it.shotNumber },
@@ -3459,6 +6065,42 @@ window.__ModuleLoader__.load({
                           h('div', null, it.prompt)))))
                 : null,
 
+              h('div', { className: 'ad-sec' }, '⑤ 检索参考（本地检索，不调用模型）'),
+              h('div', { className: 'ad-hint-next', key: 'hint-search' }, '在项目文件里搜索关键词作参考（本地检索，不调用模型）'),
+              h('div', { className: 'ad-row', style: { marginBottom: 8, flexWrap: 'wrap', gap: 8 } },
+                h('input', {
+                  className: 'ad-input ad-sm',
+                  style: { width: 320 },
+                  'aria-label': '项目上下文检索关键词',
+                  placeholder: '检索关键词，例如：当铺 伏笔 林越',
+                  value: genSearchQuery,
+                  onChange: (e) => setGenSearchQuery(e.target.value),
+                  onKeyDown: (e) => { if (e.key === 'Enter') searchProjectContext() },
+                  disabled: genSearchBusy,
+                }),
+                h('input', {
+                  className: 'ad-input ad-sm',
+                  style: { width: 70 },
+                  type: 'number',
+                  'aria-label': '检索条数',
+                  value: genSearchTopK,
+                  onChange: (e) => setGenSearchTopK(e.target.value),
+                }),
+                h('button', { className: 'ad-btn ad-sm', onClick: searchProjectContext, disabled: genSearchBusy || busy }, genSearchBusy ? '检索中…' : '检索'),
+                genSearchResult && genSearchResult.degraded ? h('span', { className: 'ad-count' }, '降级：' + String(genSearchResult.degradeReason || '未知')) : null),
+              genSearchResult
+                ? (genSearchResult.error
+                    ? h('div', { className: 'ad-hint-next' }, '检索失败：' + genSearchResult.error + '（不阻塞；可重试）')
+                    : genSearchResult.emptyQuery
+                      ? h('div', { className: 'ad-hint-next' }, '输入关键词后点「检索」')
+                      : (genSearchResult.hits && genSearchResult.hits.length
+                          ? h('div', { className: 'ad-hits', role: 'status', style: { maxHeight: 200, overflow: 'auto' } },
+                              genSearchResult.hits.slice(0, 10).map((hit, i) =>
+                                h('div', { className: 'ad-hit', key: i },
+                                  h('div', { className: 'ad-hit-path' }, String(hit.path || '—') + (hit.score != null ? ' · score ' + hit.score : '')),
+                                  h('div', null, String(hit.excerpt || hit.text || '')))))
+                          : h('div', { className: 'ad-hint-next' }, genSearchResult.enabled === false ? '检索增强已在设置页关闭（enabled=false）' : '无检索结果（可换关键词；本地检索不调用模型）')))
+                : null,
               warn ? h('div', { className: 'ad-warn' }, '⚠ ' + warn) : null,
               snapshot && snapshot.ok
                 ? h('div', { className: 'ad-path' }, `画布节点指纹：${snapshot.count} 个（${String(snapshot.at).slice(0, 19)}）`)
@@ -3469,20 +6111,13 @@ window.__ModuleLoader__.load({
         if (tab === 'check') {
           // P2-3：审读报告展示数据（severity 分组 + 定位/证据/建议/置信度 + 本地裁决状态）
           // v0.6.3：维度筛选 / 排序 / 总数摘要（severity & dimension 计数）/ evidence 高亮
-          const reviewFindings = (reviewReport && reviewReport.findings) || []
+          const reviewFindings = reviewFindingsMemo
           const reviewFilterKey = reviewDimensionFilter || ''
-          const reviewFiltered = reviewFindings.filter((finding) => !reviewFilterKey || finding.dimension === reviewFilterKey)
-          const reviewSorted = sortReviewFindings(reviewFiltered, reviewSort)
-          const reviewGroups = REVIEW_SEVERITY_ORDER
-            .map((sevKey) => ({ sev: sevKey, items: reviewSorted.filter((finding) => finding.severity === sevKey) }))
-            .filter((group) => group.items.length)
-          const reviewDimensionOptions = Object.entries(REVIEW_DIMENSION_LABELS)
-            .map(([key, label]) => ({ key, label, count: reviewFindings.filter((finding) => finding.dimension === key).length }))
-            .filter((option) => option.count > 0)
-          const reviewSeverityCounts = REVIEW_SEVERITY_ORDER.reduce((counts, sevKey) => {
-            counts[sevKey] = reviewFindings.filter((finding) => finding.severity === sevKey).length
-            return counts
-          }, {})
+          const reviewFiltered = reviewFilteredMemo
+          const reviewSorted = reviewSortedMemo
+          const reviewGroups = reviewGroupsMemo
+          const reviewDimensionOptions = reviewDimensionOptionsMemo
+          const reviewSeverityCounts = reviewSeverityCountsMemo
           const reviewSummaryText = reviewFindings.length
             ? `审读摘要：共 ${reviewFindings.length} 条 · ${REVIEW_SEVERITY_ORDER.map((sevKey) => `${reviewSeverity(sevKey).label} ${reviewSeverityCounts[sevKey] || 0}`).join(' · ')}` +
               (reviewDimensionOptions.length ? ` · 维度：${reviewDimensionOptions.map((option) => `${option.label} ${option.count}`).join('、')}` : '')
@@ -3500,9 +6135,22 @@ window.__ModuleLoader__.load({
           )
           body.push(
             h('div', { key: 'ck' },
-              h('div', { className: 'ad-row', style: { marginBottom: 10 } },
+              h('div', { className: 'ad-hint-next', key: 'hint-reconcile' }, '核对分镜表与 LibTV 画布镜头是否一致（只读）'),
+              h('div', { className: 'ad-row', style: { marginBottom: 10, flexWrap: 'wrap' } },
                 h('button', { className: 'ad-btn ad-primary ad-sm', onClick: runCheck, disabled: busy }, '运行一致性检查'),
+                h('button', { className: 'ad-btn ad-sm', onClick: reconcileCanvas, disabled: reconcileBusy || busy }, reconcileBusy ? '对账中…' : '画布对账（只读）'),
                 h('span', { className: 'ad-sub' }, '契约完整性 / 集数一致性 / 说话人 / 分镜时长 / 镜号 / 缺口 / 重复桥段')),
+              reconcileResult
+                ? h('div', { className: 'ad-hits', style: { marginBottom: 8 }, role: 'status' },
+                    h('div', { className: 'ad-hit', key: 'rc' },
+                      h('div', { className: 'ad-hit-path' }, reconcileResult.ok ? '画布对账：' + (reconcileResult.consistent ? '一致 ✓' : '存在差异（只报告，不自动改画布）') : '画布对账不可用：' + String(reconcileResult.reason || 'unknown')),
+                      h('div', null, reconcileResult.ok
+                        ? '分镜镜头 ' + (reconcileResult.storyboardShots == null ? 0 : reconcileResult.storyboardShots) + ' / 画布镜头 ' + (reconcileResult.canvasShots == null ? 0 : reconcileResult.canvasShots) + '（画布节点 ' + (reconcileResult.totalNodes == null ? 0 : reconcileResult.totalNodes) + '）；缺失 ' + ((reconcileResult.missingOnCanvas || []).length) + '、多余 ' + ((reconcileResult.extraOnCanvas || []).length)
+                        : String(reconcileResult.detail || '读不到画布节点') + '（先绑定画布 / 确认 LibTV CLI 可用；不阻塞其它检查）'),
+                      reconcileResult.ok && (reconcileResult.suggestions || []).length
+                        ? h('div', { className: 'ad-hint-next' }, '建议：' + reconcileResult.suggestions.join('；'))
+                        : null))
+                : null,
               report
                 ? h('div', { key: 'rp' },
                     h('div', { className: 'ad-row', style: { marginBottom: 8 } },
@@ -3516,12 +6164,12 @@ window.__ModuleLoader__.load({
                             h('div', { className: 'ad-hit', key: i },
                               h('div', { className: 'ad-hit-path' }, `${issue.severity} · ${issue.code}${issue.where ? ' · ' + issue.where : ''}`),
                               h('div', null, issue.message))))
-                      : h('div', { className: 'ad-empty' }, '未发现问题。'))
-                : h('div', { className: 'ad-empty' }, '点上面的按钮开始检查。'),
+                      : h('div', { className: 'ad-hint-next' }, '未发现问题。'))
+                : emptyState({ key: 'check-empty', title: '还没有一致性检查结果', description: '点上方「运行一致性检查」看契约完整性 / 集数一致性 / 说话人 / 分镜时长 / 镜号 / 缺口 / 重复桥段。', next: '点「运行一致性检查」开始', actions: [{ label: '运行一致性检查', onClick: runCheck, disabled: busy }] }),
 
               h('div', { className: 'ad-sec', key: 'rv-sec' }, '最新审读报告（AI 深度审读 · 面板只展示，触发由 Agent 完成）'),
               h('div', { className: 'ad-row', key: 'rv-bar', style: { marginBottom: 8, flexWrap: 'wrap' } },
-                h('button', { className: 'ad-btn ad-sm', onClick: () => loadReview({ notice: true }), disabled: busy || reviewBusy }, reviewBusy ? '读取中…' : '刷新审读报告'),
+                h('button', { className: 'ad-btn ad-sm', onClick: () => loadReview({ notice: true }), disabled: busy || reviewBusy }, icon('refresh'), reviewBusy ? '读取中…' : '刷新审读报告'),
                 reviewEpisode ? h('span', { className: 'ad-count' }, `第 ${reviewEpisode} 集`) : null,
                 reviewReport && reviewReport.generatedAt ? h('span', { className: 'ad-count' }, `生成：${reviewReport.generatedAt}`) : null,
                 reviewReport && reviewReport.meta && reviewReport.meta.model ? h('span', { className: 'ad-count' }, `模型：${reviewReport.meta.model}`) : null,
@@ -3558,7 +6206,7 @@ window.__ModuleLoader__.load({
                         REVIEW_SORT_OPTIONS.map(([value, label]) => h('option', { key: value, value }, label))),
                       reviewFilterKey ? h('button', { className: 'ad-btn ad-sm', onClick: () => setReviewDimensionFilter('') }, '清除筛选') : null),
                     h('div', { className: 'ad-sub', role: 'status' }, reviewSummaryText),
-                    h('div', { className: 'ad-hint-next' }, '快捷键：Ctrl/⌘+S 保存当前页 / 文档；Enter 执行搜索；点「跳转定位」可跳到对应集/场/镜'))
+                    h('div', { className: 'ad-hint-next' }, '快捷键：Ctrl/⌘+S 保存当前页签或文档栏；Enter 执行搜索；点「跳转定位」可跳到对应集/场/镜'))
                 : null,
               // P2-6 增强（v0.6.2）：标注本次审读实际使用的模型来源 / 是否回退（消费报告 meta.modelSource 等字段）
               reviewReport && (reviewReport.modelSource || (reviewReport.meta && reviewReport.meta.model) || reviewReport.modelFallback)
@@ -3568,6 +6216,14 @@ window.__ModuleLoader__.load({
                     'data-model-source': reviewReport.modelSource || '',
                     role: 'note',
                   }, reviewModelUsageText(reviewReport))
+                : null,
+              // v0.9.2（P3-E）：成本档位标注 + 回退提示（host task-65 只增字段）
+              reviewReport && (reviewReport.costTier || reviewReport.costTierRequested || reviewReport.costTierFallback)
+                ? h('div', { className: 'ad-flow-hint', key: 'rv-cost-tier', 'data-cost-tier': reviewReport.costTier || '', role: 'note' },
+                    `成本档位：${reviewReport.costTier ? costTierLabel(reviewReport.costTier) : '未指定'}` +
+                    (reviewReport.costTierFallback
+                      ? `（请求 ${reviewReport.costTierRequested || '—'} 不可用，已回退默认${reviewReport.costTierFallbackReason ? '：' + reviewReport.costTierFallbackReason : ''}）`
+                      : ''))
                 : null,
               reviewReport && reviewReport.degraded
                 ? h('div', { className: 'ad-flow-stale', key: 'rv-degraded' }, `已降级：${reviewReport.degradedReason || '模型不可用 / 超预算，仅返回确定性检查结果'}（默认不阻断定稿与导出）`)
@@ -3616,22 +6272,39 @@ window.__ModuleLoader__.load({
                 ? h('div', { className: 'ad-path', key: 'exl' },
                     exported.map((item) => h('div', { key: item.format }, `${item.format} · ${item.relative} · ${item.bytes} 字节`)))
                 : null,
+              h('div', { className: 'ad-sec', key: 'intake-art' }, '产物入库（只登记已产出文件，不触发生成）'),
+              h('div', { className: 'ad-hint-next', key: 'hint-intake' }, '把已生成的文件/链接登记到素材库（记录 sha256）'),
+              h('div', { className: 'ad-row', key: 'intake-bar', style: { flexWrap: 'wrap', gap: 8, marginBottom: 6 } },
+                h('input', {
+                  className: 'ad-input ad-sm',
+                  style: { width: 360 },
+                  'aria-label': '产物来源（本地路径或 URL）',
+                  placeholder: '本地文件路径 或 https://…（生成产物地址）',
+                  value: artifactSource,
+                  onChange: (e) => setArtifactSource(e.target.value),
+                  onKeyDown: (e) => { if (e.key === 'Enter') intakeGeneratedArtifact() },
+                  disabled: artifactBusy,
+                }),
+                h('select', { className: 'ad-select', 'aria-label': '产物类型', value: artifactKind, onChange: (e) => setArtifactKind(e.target.value), disabled: artifactBusy },
+                  h('option', { value: 'image' }, '分镜图'), h('option', { value: 'video' }, '分镜视频'), h('option', { value: 'audio' }, '配音')),
+                h('input', { className: 'ad-input ad-sm', style: { width: 160 }, 'aria-label': '产物名称（可选）', placeholder: '名称（可选）', value: artifactName, onChange: (e) => setArtifactName(e.target.value), disabled: artifactBusy }),
+                h('button', { className: 'ad-btn ad-sm', onClick: intakeGeneratedArtifact, disabled: artifactBusy || busy || !openTitle }, artifactBusy ? '入库中…' : '登记入库')),
+              artifactResult
+                ? (artifactResult.ok === false || artifactResult.error
+                    ? h('div', { className: 'ad-hint-next', key: 'intake-err', role: 'status' }, '入库失败：' + String(artifactResult.error || artifactResult.reason || '未知错误') + '（不阻塞；可检查路径/URL 后重试）')
+                    : h('div', { className: 'ad-hits', key: 'intake-ok', role: 'status' },
+                        h('div', { className: 'ad-hit' },
+                          h('div', { className: 'ad-hit-path' }, '已入库：' + String(artifactResult.relative || artifactResult.name || '')),
+                          h('div', null, (artifactResult.bytes == null ? '' : String(artifactResult.bytes) + ' 字节 · ') + 'sha256 ' + String(artifactResult.sha256 || '').slice(0, 16) + '… · 资产 ' + String(artifactResult.assetId || '—') + '（可在「素材库」查看）'))))
+                : null,
+              h('div', { className: 'ad-path', key: 'intake-note' },
+                '仅登记已产出文件：本地文件拷入 / URL 下载（大小与超时上限由宿主控制）；写入 素材/生成/ 新文件并更新素材清单与资产索引；不触发生成、不调用模型。'),
             ),
           )
         }
 
         if (tab === 'toolcards') {
-          const draftPending = draftList.filter((draft) => draft.status === 'pending').length
-          const receipts = [
-            ['剧集契约', contract ? `${contract.platform || '未定平台'} · 目标 ${contract.targetEpisodes || 0} 集` : '—'],
-            ['分集大纲', `${rows.length} 行`],
-            ['人物设定卡', `${characters.length} 人${characters.length ? '：' + characters.slice(0, 6).map((card) => card.name).filter(Boolean).join('、') : ''}`],
-            ['世界观', `${world.length} 条`],
-            ['本剧记忆', `${memory.length} 条（未回收 ${memory.filter((m) => m.status === 'open').length}）`],
-          ]
-          const episodeSceneCount = parseEpisodeScenes(episodeText).length
-          const episodeLineCount = episodeText ? episodeText.split(/\r?\n/).length : 0
-          const episodeCharCount = episodeText.replace(/\s/g, '').length
+          const { draftPending, receipts, episodeSceneCount, episodeLineCount, episodeCharCount } = toolcardsDerived
           body.push(
             h('div', { key: 'tc' },
               h('div', { className: 'ad-sec', style: { marginTop: 0 } }, '创作流水线（数据源 progress-get，与 drama_get_progress 一致）'),
@@ -3757,7 +6430,7 @@ window.__ModuleLoader__.load({
               h('div', { className: 'ad-row', style: { marginBottom: 10 } },
                 h('span', { className: 'ad-sec', style: { margin: 0 } }, `${tree.title} · 目录`),
                 h('div', { style: { flex: 1 } }),
-                h('button', { className: 'ad-btn ad-sm', onClick: refreshTree, disabled: busy }, '刷新')),
+                h('button', { className: 'ad-btn ad-sm', onClick: refreshTree, disabled: busy }, icon('refresh'), '刷新')),
               tree.nodes.map((node) => {
                 const isOpen = !collapsed[node.name]
                 const kids = node.children || []
@@ -3779,10 +6452,10 @@ window.__ModuleLoader__.load({
                         ? h('button', { className: 'ad-btn ad-sm', onClick: () => createEntryDir(node.name), disabled: busy, title: '在此目录下新建子目录' }, '＋目录')
                         : null,
                       node.name !== '剧集契约.md'
-                        ? h('button', { className: 'ad-btn ad-sm', onClick: () => renameEntry(node.name), disabled: busy, title: '重命名一级节点' }, '重命名')
+                        ? h('button', { className: 'ad-btn ad-sm', onClick: () => renameEntry(node.name), disabled: busy, title: '重命名一级节点' }, icon('pencil'), '重命名')
                         : null,
                       !required
-                        ? h('button', { className: 'ad-btn ad-sm', onClick: () => deleteEntry(node.name), disabled: busy, title: '删除一级节点' }, '删除')
+                        ? h('button', { type: 'button', className: 'ad-btn ad-sm ad-btn-danger ad-icon-btn ad-icon-btn-sm', 'data-tone': 'danger', 'aria-label': '删除一级节点', title: '删除一级节点', onClick: () => deleteEntry(node.name), disabled: busy }, icon('trash'))
                         : null)),
                   node.kind === 'dir' && isOpen && kids.length
                     ? h('div', { style: { marginLeft: 46 } },
@@ -3796,6 +6469,14 @@ window.__ModuleLoader__.load({
                 h('br'),
                 '折叠状态按项目记忆在浏览器本地（FR-A04）。P1 支持：目录内新建文件/子目录、一级节点改名与删除（必需节点已保护）；二级条目的改名/删除列 P2。')),
           )
+        }
+
+        // v0.12.0（task-7）：页签内容统一 tabpanel（aria 最小集：tab aria-controls 指向它）
+        const tabPanelStart = body.indexOf(tabsNode) + 1
+        const tabPanelChildren = body.slice(tabPanelStart)
+        if (tabPanelStart > 0 && tabPanelChildren.length) {
+          body.splice(tabPanelStart, tabPanelChildren.length,
+            h('div', { className: 'ad-tabpanel', key: 'tabpanel', role: 'tabpanel', id: 'ad-tabpanel', 'aria-labelledby': 'ad-tab-' + tab }, tabPanelChildren))
         }
       }
 
@@ -3873,10 +6554,109 @@ window.__ModuleLoader__.load({
       children.push(
         h('div', { className: 'ad-shell-row', key: 'row' },
           h('div', { className: 'ad-main-col', key: 'main' },
-            h('div', { className: 'ad-body', key: 'body' }, body)),
+            h('div', { className: 'ad-body', key: 'body' }, h('div', { className: 'ad-content' }, body))),
           docPane,
         ),
       )
+
+      // v0.11.5（task-4 · P0-1）：未保存离开守卫三选一（面板内自绘，不用原生 confirm；完整 ConfirmDialog 组件留 v0.12.x）
+      if (leavePrompt) {
+        const scopeText = unsavedScopeLabels().join('、') || '当前内容'
+        children.push(h('div', {
+          className: 'ad-modal-backdrop',
+          key: 'leave-guard',
+          onMouseDown: (event) => {
+            if (event.target === event.currentTarget && !leaveSaving) setLeavePrompt(null)
+          },
+        },
+          h('div', {
+            className: 'ad-modal',
+            id: 'ad-leave-dialog',
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-label': '有未保存的修改',
+            'aria-describedby': 'ad-leave-desc',
+            'aria-keyshortcuts': 'Escape',
+          },
+            h('div', { className: 'ad-modal-title' }, '有未保存的修改'),
+            h('div', { className: 'ad-modal-desc', id: 'ad-leave-desc' },
+              '检测到未保存的修改：',
+              h('strong', null, scopeText),
+              '。离开当前页面会丢失这些内容，请选择：'),
+            h('div', { className: 'ad-modal-actions' },
+              h('button', { className: 'ad-btn ad-sm', onClick: cancelLeave, disabled: leaveSaving, autoFocus: true, title: '留在当前页面（Esc）' }, '取消'),
+              h('button', { className: 'ad-btn ad-sm', onClick: confirmLeaveDiscard, disabled: leaveSaving, title: '丢弃未保存修改并离开' }, '放弃修改'),
+              h('button', { className: 'ad-btn ad-primary ad-sm', onClick: confirmLeaveSave, disabled: leaveSaving || busy }, leaveSaving ? '保存中…' : '保存并离开'),
+            ),
+          ),
+        ))
+      }
+      // v0.12.1（task-8）：项目页「设置」入口 = 面板内设置浮层（与宿主设置页共用同一 SettingsSection 组件）
+      if (settingsOverlay) {
+        children.push(h('div', {
+          className: 'ad-modal-backdrop',
+          key: 'settings-overlay',
+          onMouseDown: (event) => { if (event.target === event.currentTarget) setSettingsOverlay(false) },
+        },
+          h('div', { className: 'ad-modal ad-settings-overlay-panel', id: 'ad-settings-dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'AI 短剧设置', 'aria-keyshortcuts': 'Escape' },
+            h(SettingsSection, {
+              embedded: true,
+              onClose: () => setSettingsOverlay(false),
+              onSaved: (nextSettings) => { if (nextSettings) setSettings(nextSettings) },
+            }))))
+      }
+      // v0.14.0（task-38 / M6-1）：交给 Agent（C 路径）弹窗
+      if (handoffOpen) {
+        children.push(h('div', {
+          className: 'ad-modal-backdrop',
+          key: 'agent-handoff',
+          onMouseDown: (event) => { if (event.target === event.currentTarget) closeHandoff() },
+        },
+          h('div', {
+            className: 'ad-modal',
+            id: 'ad-agent-dialog',
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-labelledby': 'ad-agent-dialog-title',
+            'aria-describedby': 'ad-agent-dialog-desc',
+            'aria-busy': handoffBusy ? 'true' : 'false',
+            'aria-keyshortcuts': 'Escape',
+          },
+            h('div', { className: 'ad-modal-title', id: 'ad-agent-dialog-title' }, '交给 Agent'),
+            h('div', { className: 'ad-modal-desc', id: 'ad-agent-dialog-desc' },
+              '交付范围：当前项目《' + String(openTitle || '') + '》 · 页签「' + String(tabLabelOfKey(tab)) + '」'),
+            h('div', { className: 'ad-modal-desc' }, '仅发送必要上下文（项目名 + 当前页签内容摘要）；不发送无关本机信息。'),
+            handoffBusy
+              ? h('div', { className: 'ad-skeleton', role: 'status', 'aria-live': 'polite' },
+                  h('div', { className: 'ad-skeleton-line w80' }),
+                  h('div', { className: 'ad-skeleton-line w60' }),
+                  h('div', { className: 'ad-skeleton-line w40' }),
+                  h('div', { className: 'ad-hint-next' }, '正在准备交接…'))
+              : h('div', { className: 'ad-agent-instr' },
+                  h('textarea', {
+                    className: 'ad-area',
+                    readOnly: true,
+                    rows: 6,
+                    value: handoffInstr,
+                    'aria-label': '交接指令预览',
+                    onFocus: (event) => { try { event.target.select() } catch { /* 只读预览 */ } },
+                  }),
+                  handoffInstr.includes('（已截断') ? h('div', { className: 'ad-hint-next' }, '指令已截断（≤2000 字符 / 4KB）') : null,
+                  handoffCopied ? h('div', { className: 'ad-hint-next', role: 'status', 'aria-live': 'polite' }, '已复制交接指令。请到 Agent 对话输入框粘贴并发送。') : null,
+                  handoffCopyError
+                    ? h('div', { className: 'ad-err-box', role: 'alert' },
+                        h('div', { className: 'ad-err-head' }, '复制失败'),
+                        h('div', { className: 'ad-err' }, String(handoffCopyError)),
+                        h('div', { className: 'ad-err-next' }, '下一步：请手动全选下方指令复制，粘贴到 Agent 对话发送。'))
+                    : null),
+            h('div', { className: 'ad-modal-actions' },
+              h('button', {
+                className: 'ad-btn ad-primary',
+                onClick: copyHandoff,
+                disabled: handoffBusy || !handoffInstr,
+              }, handoffBusy ? '准备中…' : (handoffCopyError ? '重试复制' : (handoffCopied ? '再次复制' : '复制交接指令'))),
+              h('button', { className: 'ad-btn', onClick: closeHandoff }, '关闭')))))
+      }
       return h('div', { className: 'ad-shell', role: 'region', 'aria-label': 'AI 短剧工作区' }, children)
     }
 
@@ -3893,6 +6673,19 @@ window.__ModuleLoader__.load({
         )
         ctx.slots.inject('main', () =>
           ctx.slots.register({ name: 'main', key: PANEL_ID }, DramaPanel),
+        )
+        ctx.slots.inject('settings.section', () =>
+          ctx.slots.register(
+            { name: 'settings.section', id: 'ai-drama', order: 60, label: 'AI 短剧' },
+            SettingsSection,
+          ),
+        )
+        // v0.12.1（task-17）：会话内工具卡 K=1 —— 只注册 drama_check_consistency（官方 inject+register 写法）
+        ctx.slots.inject('tool.call.toolview', () =>
+          ctx.slots.register(
+            { name: 'tool.call.toolview', key: 'drama_check_consistency' },
+            DramaCheckToolCard,
+          ),
         )
       },
     }

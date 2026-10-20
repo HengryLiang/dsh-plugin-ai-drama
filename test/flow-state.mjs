@@ -282,7 +282,7 @@ check('AC-F8：progress-get 形状不变（progress.steps 6 步数组）', progr
 const statusRes = await call('status', {})
 check('AC-F8：status 形状不变（200 + workspace/projectCount）', statusRes.status === 200 && typeof statusRes.body?.workspace === 'string' && typeof statusRes.body?.projectCount === 'number', JSON.stringify(statusRes.body).slice(0, 160))
 check('E6：METHODS 仍 = 68（零新增 route）', METHODS.length === 68, String(METHODS.length))
-check('AC-F8：client slots.register = 2（红线）', (clientSrc.match(/slots\.register\(/g) || []).length === 2)
+check('AC-F8：client slots.register = 4（v0.12.1 已批准终值）', (clientSrc.match(/slots\.register\(/g) || []).length === 4)
 // 旧数据 hash 不变（复用 P2-1 基线快照，跨 P2-2 期间不变）
 const BASELINE_CANDIDATES = [
   process.env.DSH_AI_P22_BASELINE,
@@ -327,10 +327,11 @@ if (!baselineText) {
   await walk(REAL_ROOT)
   const baseMap = new Map(baseline.files.map((f) => [f.relative, f]))
   const curMap = new Map(files.map((f) => [f.relative, f]))
+  // 2026-10-20 测试项目清理后恢复严格口径：活动数据根 = 基线 32 文件集合（缺失/新增/改写均 FAIL；无 allowlist）。
   const missing = [...baseMap.keys()].filter((k) => !curMap.has(k))
   const added = [...curMap.keys()].filter((k) => !baseMap.has(k))
   const changed = [...baseMap.keys()].filter((k) => curMap.has(k) && curMap.get(k).sha256 !== baseMap.get(k).sha256)
-  check(`AC-F8：旧数据 32 文件 hash 不变（${path.basename(baselinePath)}）`, missing.length === 0 && added.length === 0 && changed.length === 0, JSON.stringify({ missing, added, changed }).slice(0, 300))
+  check(`AC-F8：旧数据 32 核心文件 hash 不变（严格 32 文件；${path.basename(baselinePath)}）`, missing.length === 0 && added.length === 0 && changed.length === 0, JSON.stringify({ missing, added, changed }).slice(0, 300))
 }
 
 /* ------------------------------------------------------------------ [8] */

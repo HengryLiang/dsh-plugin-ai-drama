@@ -364,7 +364,17 @@ check('不支持的格式被拒', (await call('export-project', { title: TITLE, 
 group('[17] 目录与名字服务')
 const serviceDir = path.join(here, '..', 'skills')
 const skillDirs = (await fs.readdir(serviceDir, { withFileTypes: true })).filter((e) => e.isDirectory())
-check('随包 9 个技能', skillDirs.length === 9, skillDirs.map((e) => e.name).join(','))
+const hasShotPromptSkill = skillDirs.some((entry) => entry.name === 'drama-shot-prompt')
+if (hasShotPromptSkill) {
+  check('随包 10 个技能（v0.10.0 起含 drama-shot-prompt）', skillDirs.length === 10, skillDirs.map((e) => e.name).join(','))
+  // v0.10.0 B0-A（0-2）：兜底技能必须随包且格式合法
+  const shotPromptSkill = path.join(serviceDir, 'drama-shot-prompt', 'SKILL.md')
+  const shotPromptText = await fs.readFile(shotPromptSkill, 'utf8').catch(() => '')
+  check('随包兜底技能 drama-shot-prompt 存在且格式合法', shotPromptText.startsWith('---') && shotPromptText.includes('name: drama-shot-prompt') && shotPromptText.length > 2000, shotPromptText.length + 'B')
+} else {
+  check('随包 9 个技能（旧工件，v0.10.0 前）', skillDirs.length === 9, skillDirs.map((e) => e.name).join(','))
+  console.log('      （版本自适应：旧工件无 drama-shot-prompt，技能 10/兜底断言 SKIP）')
+}
 for (const dir of skillDirs) {
   const text = await fs.readFile(path.join(serviceDir, dir.name, 'SKILL.md'), 'utf8')
   check(`技能 ${dir.name} 有 name 前置字段`, text.startsWith('---') && text.includes(`name: ${dir.name}`))

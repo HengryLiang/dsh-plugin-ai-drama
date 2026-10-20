@@ -32,6 +32,21 @@ const suites = [
   ['任务级模型参数（P2-6 / AC-M）', 'task-models.mjs'],
   ['审读鲁棒性（D-12 / v0.6.2）', 'audit-robust.mjs'],
   ['客户端增强池（v0.6.3）', 'client-polish.mjs'],
+  ['宿主级输出契约（D-13 / v0.6.5）', 'tool-output-contract.mjs'],
+  ['审读质量基准 R-P2-11（v0.6.6 门禁）', 'rp211-gate.mjs'],
+  ['v0.6.6 验收（P2-5 成本预估+三级闸门）', 'v066-acceptance.mjs'],
+  ['v0.6.7 验收（重试/resume/漂移）', 'v067-acceptance.mjs'],
+  ['v0.7.1 验收（P2-7 多集批量）', 'v071-acceptance.mjs'],
+  ['P3-C 评测门禁（v0.9.1）', 'p3c-gate.mjs'],
+  ['v0.9.2 验收（P3-E 成本档位路由）', 'p3e-acceptance.mjs'],
+  ['v0.10.1 导入桥（B0-C）', 'import-bridge.mjs'],
+  ['v0.10.2 判据机器化（B1-QA）', 'criteria-checks.mjs'],
+  ['v0.10.3 videoPrompt 接线（B2-QA）', 'video-prompt.mjs'],
+  ['v0.11.0 资产体系（B2-1Q）', 'assets.mjs'],
+  ['v0.11.1 场景卡/风格 DNA（B2-2Q）', 'scenes.mjs'],
+  ['v0.11.2 groups 读侧（E7）', 'groups-read.mjs'],
+  ['v0.11.3 风格注入（2-2 二期）', 'style-injection.mjs'],
+  ['v0.11.4 互通导入导出（2-5）', 'import-export.mjs'],
 ]
 /** 显式 skip 理由（登记在此处，验收证据引用同一份清单）。 */
 const SKIP_REASONS = {

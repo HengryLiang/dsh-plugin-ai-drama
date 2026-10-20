@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-10-18",
+  "note": "v0.11.0（task-94 / 2-3）资产质量门禁：AST-01…AST-06，全部 severityDefault=warn、category=criteria、skipIfMissing=true、不阻断 strict；无资产卡（cards=0）时 6 条全 SKIP（灰度，旧项目零噪声）。新增必退休：每条 judge 必须填写 lifecycle.retireCandidate。updatedAt 为静态字符串，不运行时生成。",
+  "judges": [
+    {
+      "id": "AST-01",
+      "name": "资产必填字段",
+      "category": "criteria",
+      "severityDefault": "warn",
+      "inputs": ["assets[].id", "assets[].type", "assets[].name"],
+      "skipIfMissing": true,
+      "code": "asset-required-fields",
+      "message": "资产必填字段：{n} 张资产卡缺少必填项（{卡ID 缺 name}）；id/type/name 必须完整",
+      "rules": [{ "type": "requiredFields", "action": "warn" }],
+      "lifecycle": { "addedIn": "v0.11.0", "retireCandidate": "AST-03" }
+    },
+    {
+      "id": "AST-02",
+      "name": "编号非法",
+      "category": "criteria",
+      "severityDefault": "warn",
+      "inputs": ["assets[].id", "assets[].type"],
+      "skipIfMissing": true,
+      "code": "asset-id-format",
+      "message": "资产编号非法：{卡ID}（{原因}）；合法编号为 9 类前缀（CHR/SPC/PRP/SHT/CST/EXP/SFX/VOX/MUS）+ 3 位序号，可选 _01–_99 变体，且 type 必须与编号前缀一致",
+      "rules": [{ "type": "idFormat", "action": "warn" }],
+      "lifecycle": { "addedIn": "v0.11.0", "retireCandidate": "AST-06" }
+    },
+    {
+      "id": "AST-03",
+      "name": "重复 ID",
+      "category": "criteria",
+      "severityDefault": "warn",
+      "inputs": ["assets[].id"],
+      "skipIfMissing": true,
+      "code": "asset-duplicate-id",
+      "message": "重复 ID：{卡ID} 出现 {n} 次；同一资产编号在卡库中必须唯一",
+      "rules": [{ "type": "duplicateId", "action": "warn" }],
+      "lifecycle": { "addedIn": "v0.11.0", "retireCandidate": "AST-04" }
+    },
+    {
+      "id": "AST-04",
+      "name": "重复 name",
+      "category": "criteria",
+      "severityDefault": "warn",
+      "inputs": ["assets[].name", "assets[].type"],
+      "skipIfMissing": true,
+      "code": "asset-duplicate-name",
+      "message": "重复名称：{名称} 同时用于 {卡ID列表}；同类型资产名称应唯一（aliases 同类型唯一由保存时校验保证，本版门禁只比较 name）",
+      "rules": [{ "type": "duplicateName", "action": "warn" }],
+      "lifecycle": { "addedIn": "v0.11.0", "retireCandidate": "AST-03" }
+    },
+    {
+      "id": "AST-05",
+      "name": "孤儿引用",
+      "category": "criteria",
+      "severityDefault": "warn",
+      "inputs": ["storyboard[].description", "storyboard[].naturalLanguagePrompt", "storyboard[].imagePrompt", "storyboard[].videoPrompt", "storyboard[].subject", "storyboard[].groupId"],
+      "skipIfMissing": true,
+      "code": "asset-orphan-reference",
+      "message": "孤儿引用：{卡ID} 在分镜中被引用（{第N集·镜号}）但资产卡不存在；请先补资产卡或修正编号",
+      "rules": [{ "type": "orphanReference", "action": "warn" }],
+      "lifecycle": { "addedIn": "v0.11.0", "retireCandidate": "AST-01" }
+    },
+    {
+      "id": "AST-06",
+      "name": "variant 一致性",
+      "category": "criteria",
+      "severityDefault": "warn",
+      "inputs": ["assets[].variantOf", "assets[].id", "assets[].type"],
+      "skipIfMissing": true,
+      "code": "asset-variant-consistency",
+      "message": "variant 一致性：{卡ID} 的 variantOf {原因}；变体编号（_01–_99）必须挂到已存在的同类型基础资产 ID",
+      "rules": [{ "type": "variantConsistency", "action": "warn" }],
+      "lifecycle": { "addedIn": "v0.11.0", "retireCandidate": "AST-02" }
+    }
+  ],
+  "severity": {
+    "fail": [],
+    "warn": ["AST-01", "AST-02", "AST-03", "AST-04", "AST-05", "AST-06"]
+  },
+  "lexicons": {}
+}

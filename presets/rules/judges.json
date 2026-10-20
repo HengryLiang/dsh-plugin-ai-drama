@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-10-18",
+  "note": "v0.10.2 批次 1 首批 8 条判据（PD-01/02/03/04/05/06/08/09）；PD-07（POV/资产视图依赖）留批次 2，未列入 judges。全部默认 WARN、skipIfMissing=true、不阻断 strict；新增必退休：每条 judge 必须填写 lifecycle.retireCandidate。",
+  "judges": [
+    {
+      "id": "PD-01",
+      "name": "可观测性",
+      "category": "criteria",
+      "severityDefault": "warn",
+      "inputs": ["shots[].description", "shots[].naturalLanguagePrompt"],
+      "skipIfMissing": true,
+      "code": "prompt-observability",
+      "message": "抽象心理/修辞不可直接拍摄：请改写为画面可观测变化（尺寸/位置/清晰度/边界/明暗）",
+      "rules": [{ "type": "lexicon", "file": "lexicon-rhetoric.json", "action": "warn", "message": "命中修辞黑名单词，建议改写为可观测动作" }],
+      "lifecycle": { "addedIn": "v0.10.2", "retireCandidate": "PD-06" }
+    },
+    {
+      "id": "PD-02",
+      "name": "景别接续",
+      "category": "criteria",
+      "severityDefault": "warn",
+      "inputs": ["shots[].shotSize", "shots[].subject"],
+      "skipIfMissing": true,
+      "code": "shot-size-continuity",
+      "message": "同主体相邻镜不要直接接相邻两级景别（需跳级或换主体）",
+      "rules": [{ "type": "transition", "ladder": "shotSizeLadder", "forbidAdjacentLevels": true, "action": "warn" }],
+      "lifecycle": { "addedIn": "v0.10.2", "retireCandidate": "PD-09" }
+    },
+    {
+      "id": "PD-03",
+      "name": "体态承接",
+      "category": "criteria",
+      "severityDefault": "warn",
+      "inputs": ["shots[].poses"],
+      "skipIfMissing": true,
+      "code": "pose-continuity",
+      "message": "下一镜起始体态应承接上一镜结束体态（差异需有过渡声明）",
+      "rules": [{ "type": "continuity", "fields": ["startPose", "endPose"], "action": "warn" }],
+      "lifecycle": { "addedIn": "v0.10.2", "retireCandidate": "PD-02" }
+    },
+    {
+      "id": "PD-04",
+      "name": "每镜光影",
+      "category": "criteria",
+      "severityDefault": "warn",
+      "inputs": ["shots[].light"],
+      "skipIfMissing": true,
+      "code": "light-per-shot",
+      "message": "每镜应有独立光影句：光源/方向/强弱/是否在动/遮挡与反射",
+      "rules": [{ "type": "requiredField", "field": "light", "minWords": 8, "action": "warn" }],
+      "lifecycle": { "addedIn": "v0.10.2", "retireCandidate": "PD-05" }
+    },
+    {
+      "id": "PD-05",
+      "name": "现场声",
+      "category": "criteria",
+      "severityDefault": "warn",
+      "inputs": ["shots[].ambientSound"],
+      "skipIfMissing": true,
+      "code": "ambient-sound",
+      "message": "现场声只写画面内真实声源，不写 BGM/配乐；与动作对齐、跨镜连续",
+      "rules": [
+        { "type": "requiredField", "field": "ambientSound", "minWords": 2, "action": "warn" },
+        { "type": "denyLexicon", "file": "thresholds.json", "key": "bgmLexicon", "action": "warn" }
+      ],
+      "lifecycle": { "addedIn": "v0.10.2", "retireCandidate": "PD-04" }
+    },
+    {
+      "id": "PD-06",
+      "name": "正负打架",
+      "category": "criteria",
+      "severityDefault": "warn",
+      "inputs": ["shots[].description", "shots[].naturalLanguagePrompt"],
+      "skipIfMissing": true,
+      "code": "positive-negative-conflict",
+      "message": "负向词只用于风格/品质/元素排除；行为/时序/状态应正写，交付前做双向检查",
+      "rules": [{ "type": "conflict", "file": "lexicon-positive-negative.json", "action": "warn" }],
+      "lifecycle": { "addedIn": "v0.10.2", "retireCandidate": "PD-01" }
+    },
+    {
+      "id": "PD-08",
+      "name": "一镜一事",
+      "category": "criteria",
+      "severityDefault": "warn",
+      "inputs": ["shots[].description", "shots[].naturalLanguagePrompt"],
+      "skipIfMissing": true,
+      "code": "one-event-per-shot",
+      "message": "单镜动作事件 ≤ 2；超过建议拆镜（一镜一信息、一主体焦点）",
+      "rules": [{ "type": "eventCount", "thresholdsFile": "thresholds.json", "key": "maxActionsPerShot", "action": "warn" }],
+      "lifecycle": { "addedIn": "v0.10.2", "retireCandidate": "PD-01" }
+    },
+    {
+      "id": "PD-09",
+      "name": "焦段纪律",
+      "category": "criteria",
+      "severityDefault": "warn",
+      "inputs": ["shots[].lens", "shots[].shotSize"],
+      "skipIfMissing": true,
+      "code": "lens-discipline",
+      "message": "焦段与景别必须相容（广角避免脸部特写；长焦避免大全景；微距只配特写）",
+      "rules": [{ "type": "lensMatrix", "file": "lexicon-lens.json", "action": "warn" }],
+      "lifecycle": { "addedIn": "v0.10.2", "retireCandidate": "PD-02" }
+    }
+  ],
+  "severity": { "fail": [], "warn": ["PD-01", "PD-02", "PD-03", "PD-04", "PD-05", "PD-06", "PD-08", "PD-09"] },
+  "lexicons": {
+    "rhetoric": "lexicon-rhetoric.json",
+    "positiveNegative": "lexicon-positive-negative.json",
+    "lens": "lexicon-lens.json",
+    "thresholds": "thresholds.json"
+  }
+}

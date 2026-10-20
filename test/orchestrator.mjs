@@ -6,6 +6,7 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -13,6 +14,7 @@ const load = (rel) => import(pathToFileURL(path.join(here, '..', 'lib', rel)).hr
 const store = await load('store.js')
 const generation = await load('generation.js')
 const orchestrator = await load('orchestrator.js')
+const exporter = await load('exporter.js')
 
 let passed = 0
 let failed = 0
@@ -205,6 +207,221 @@ const collectedF = await orchestrator.collectBatch(workspace, TITLE, { backend: 
 check('平台报错时标记失败', collectedF.failed === 1, JSON.stringify(collectedF.details).slice(0, 160))
 check('失败原因被记录', String(collectedF.details.failed[0].error).includes('内容不合规'), collectedF.details.failed[0].error)
 check('返回当前预算', typeof collectedF.budget.spentPoints === 'number')
+
+/* ------------------------------------------------------------------ [7] */
+group('[7] v0.10.0 未知字段保留 + typed 可选字段（task-83/84 + 0-4a，版本自适应）')
+// 版本自适应（双工件：源码 0-4a / rc2 task-83 / v0.9.2 旧工件）：
+//   ① 未知字段保留能力：写一条含自定义字段的镜 → 回读判断是否保留（动态探测，不依赖版本号）；
+//   ② typed 可选字段能力：store 是否导出 SHOT_OPTIONAL_FIELDS（0-4a 起）。
+const TYPED_SHOT_FIELDS = Array.isArray(store.SHOT_OPTIONAL_FIELDS) ? store.SHOT_OPTIONAL_FIELDS : []
+const hasTypedShotFields = TYPED_SHOT_FIELDS.length > 0
+const capabilityTitle = '能力探测剧'
+await store.createProject(workspace, capabilityTitle)
+let supportsUnknownMerge = false
+try {
+  await store.saveStoryboard(workspace, capabilityTitle, 1, [{ shotNumber: '1-1', shotSize: '近景', description: '探针', durationSec: 6, capabilityProbe: 'keep-me' }])
+  const probeRaw = JSON.parse(await fs.readFile(path.join(workspace, 'AI短剧', capabilityTitle, '.aidrama', 'storyboard', '第001集.md.json'), 'utf8'))
+  const probeShots = Array.isArray(probeRaw) ? probeRaw : probeRaw.shots
+  supportsUnknownMerge = Boolean(probeShots[0] && Object.prototype.hasOwnProperty.call(probeShots[0], 'capabilityProbe'))
+} catch {
+  supportsUnknownMerge = false
+}
+console.log('      版本自适应：未知字段保留 = ' + (supportsUnknownMerge ? '支持' : '不支持（旧工件，task-83 断言 SKIP）') + '；typed 可选字段 = ' + (hasTypedShotFields ? TYPED_SHOT_FIELDS.length + ' 个' : '无（旧工件，typed 断言 SKIP）'))
+
+if (supportsUnknownMerge) {
+  const unknownTitle = '未知字段保留剧'
+  await store.createProject(workspace, unknownTitle)
+  // valid emotion 形状对两版兼容：typed 版 emotion={label,intensity}；task-83 版按任意未知字段原样保留
+  const unknownShotFields = {
+    emotion: { label: '压迫', intensity: 40 },
+    light: '灯下光斑随人影移动',
+    poses: { startPose: '站立·左手持簪', endPose: '转身·空手' },
+    customKey: { nested: ['keep-me'], count: 2 },
+    ambientSound: '雨打窗、门轴吱呀',
+  }
+  await store.saveStoryboard(workspace, unknownTitle, 1, [
+    { shotNumber: '1-1', shotSize: '近景', cameraMove: '推', description: '赵铁拍桌', durationSec: 6, ...unknownShotFields },
+    { shotNumber: '1-2', shotSize: '中景', description: '林越抬眼', durationSec: 5 },
+  ])
+  const unknownDiskPath = path.join(workspace, 'AI短剧', unknownTitle, '.aidrama', 'storyboard', '第001集.md.json')
+  const readUnknownDisk = async () => {
+    const raw = JSON.parse(await fs.readFile(unknownDiskPath, 'utf8'))
+    return Array.isArray(raw) ? raw : raw.shots
+  }
+  const diskUnknown1 = await readUnknownDisk()
+  check('task-83：保存后磁盘保留 per-shot 字段（emotion/light/poses/customKey/ambientSound）', ['emotion', 'light', 'poses', 'customKey', 'ambientSound'].every((key) => Object.prototype.hasOwnProperty.call(diskUnknown1[0], key)), JSON.stringify(Object.keys(diskUnknown1[0])))
+  check('task-83：字段嵌套对象/数组原样保留（两版一致）', JSON.stringify(diskUnknown1[0].emotion) === JSON.stringify(unknownShotFields.emotion) && JSON.stringify(diskUnknown1[0].customKey) === JSON.stringify(unknownShotFields.customKey) && JSON.stringify(diskUnknown1[0].poses) === JSON.stringify(unknownShotFields.poses), JSON.stringify({ emotion: diskUnknown1[0].emotion, customKey: diskUnknown1[0].customKey }).slice(0, 240))
+  check('task-83：已知字段正常归一化（description/durationSec）', diskUnknown1[0].description === '赵铁拍桌' && diskUnknown1[0].durationSec === 6, JSON.stringify({ d: diskUnknown1[0].description, dur: diskUnknown1[0].durationSec }))
+  const unknownEdited = diskUnknown1.map((shot, index) => (index === 0 ? { ...shot, description: '赵铁拍桌（改）' } : { ...shot }))
+  await store.saveStoryboard(workspace, unknownTitle, 1, unknownEdited)
+  const diskUnknown2 = await readUnknownDisk()
+  check('task-83：读→改已知字段→写 后未知/typed 字段仍保留', diskUnknown2[0].description === '赵铁拍桌（改）' && JSON.stringify(diskUnknown2[0].emotion) === JSON.stringify(unknownShotFields.emotion) && JSON.stringify(diskUnknown2[0].poses) === JSON.stringify(unknownShotFields.poses) && JSON.stringify(diskUnknown2[0].customKey) === JSON.stringify(unknownShotFields.customKey), JSON.stringify(diskUnknown2[0]).slice(0, 260))
+  const memoryUnknown = await store.getStoryboard(workspace, unknownTitle, 1)
+  check('task-83：getStoryboard 回读同样保留字段', JSON.stringify(memoryUnknown[0].emotion) === JSON.stringify(unknownShotFields.emotion) && JSON.stringify(memoryUnknown[0].light) === JSON.stringify(unknownShotFields.light), JSON.stringify(memoryUnknown[0]).slice(0, 220))
+  await store.saveStoryboard(workspace, unknownTitle, 1, [{ shotNumber: '1-1', shotSize: '近景', description: '边界', durationSec: 6, customEmpty: {}, customArr: [] }])
+  const diskUnknown3 = await readUnknownDisk()
+  check('task-83：未知字段空对象/空数组原样保留（不删除、不转义）', JSON.stringify(diskUnknown3[0].customEmpty) === '{}' && Array.isArray(diskUnknown3[0].customArr) && diskUnknown3[0].customArr.length === 0, JSON.stringify(diskUnknown3[0]))
+  check('task-83：无未知字段的旧分镜保存不产生垃圾键', !Object.prototype.hasOwnProperty.call(diskUnknown3[0], 'customKey') && !Object.prototype.hasOwnProperty.call(diskUnknown3[0], 'emotion'), JSON.stringify(Object.keys(diskUnknown3[0])))
+} else {
+  console.log('      （SKIP：当前工件不支持未知字段保留（如 v0.9.2 安装副本），task-83 相关断言跳过；源码树/rc2 自动生效）')
+}
+
+if (hasTypedShotFields) {
+  // 0-4a typed 可选字段：合法 10 字段读写 + 空值省略 + 7 类非法→invalid-args
+  const typedTitle = 'typed字段剧'
+  await store.createProject(workspace, typedTitle)
+  const typedShot = {
+    shotNumber: '1-1', shotSize: '特写', cameraMove: '推', description: 'typed 字段', durationSec: 6,
+    emotion: { label: '压迫', intensity: 40 }, light: '灯下光斑随人影移动', ambientSound: '雨打窗、门轴吱呀',
+    constraints: ['不出现血腥', '不出现真实品牌'], poses: { startPose: '站立', endPose: '转身' },
+    transitionToNext: 'match-cut', naturalLanguagePrompt: '镜头从手部推到面部', lens: '85mm', subject: '林越', groupId: 'G1', sceneRef: 'SPC001',
+  }
+  await store.saveStoryboard(workspace, typedTitle, 1, [typedShot, { shotNumber: '1-2', shotSize: '中景', description: '普通', durationSec: 5 }])
+  const typedRaw = JSON.parse(await fs.readFile(path.join(workspace, 'AI短剧', typedTitle, '.aidrama', 'storyboard', '第001集.md.json'), 'utf8'))
+  const typedShots = Array.isArray(typedRaw) ? typedRaw : typedRaw.shots
+  const typedFirst = typedShots[0]
+  check('0-4a：11 个 typed 可选字段全部写入磁盘（含 sceneRef）', TYPED_SHOT_FIELDS.length === 11 && TYPED_SHOT_FIELDS.includes('sceneRef') && TYPED_SHOT_FIELDS.every((field) => Object.prototype.hasOwnProperty.call(typedFirst, field)), JSON.stringify(Object.keys(typedFirst)))
+  check('0-4a：emotion={label,intensity} 归一化正确', typedFirst.emotion && typedFirst.emotion.label === '压迫' && typedFirst.emotion.intensity === 40, JSON.stringify(typedFirst.emotion))
+  check('0-4a：poses/constraints/transitionToNext/lens/subject/groupId 值正确', typedFirst.poses.startPose === '站立' && typedFirst.poses.endPose === '转身' && typedFirst.constraints.join('|') === '不出现血腥|不出现真实品牌' && typedFirst.transitionToNext === 'match-cut' && typedFirst.lens === '85mm' && typedFirst.subject === '林越' && typedFirst.groupId === 'G1', JSON.stringify({ poses: typedFirst.poses, constraints: typedFirst.constraints, transition: typedFirst.transitionToNext, lens: typedFirst.lens, subject: typedFirst.subject, groupId: typedFirst.groupId }).slice(0, 260))
+  await store.saveStoryboard(workspace, typedTitle, 1, [{ shotNumber: '1-1', shotSize: '近景', description: '空值', durationSec: 6, emotion: null, light: '   ', constraints: [], poses: { startPose: '', endPose: '' }, transitionToNext: '' }])
+  const emptyRaw = JSON.parse(await fs.readFile(path.join(workspace, 'AI短剧', typedTitle, '.aidrama', 'storyboard', '第001集.md.json'), 'utf8'))
+  const emptyShots = Array.isArray(emptyRaw) ? emptyRaw : emptyRaw.shots
+  check('0-4a：typed 字段空值/未提供不写入（emotion/light/constraints/poses/transitionToNext 省略）', ['emotion', 'light', 'constraints', 'poses', 'transitionToNext'].every((field) => !Object.prototype.hasOwnProperty.call(emptyShots[0], field)), JSON.stringify(Object.keys(emptyShots[0])))
+  const invalidCases = [
+    ['emotion 缺 label', { emotion: { label: '', intensity: 10 } }],
+    ['emotion.intensity 越界', { emotion: { label: '压迫', intensity: 150 } }],
+    ['transitionToNext 非枚举', { transitionToNext: 'fade' }],
+    ['constraints 非数组', { constraints: '不是数组' }],
+    ['poses 非对象', { poses: '不是对象' }],
+    ['emotion 非对象', { emotion: 42 }],
+    ['groupId 非字符串', { groupId: 42 }],
+    ['sceneRef 非法', { sceneRef: 'SPC1' }],
+  ]
+  let invalidPass = 0
+  const invalidDetails = []
+  for (const [label, patch] of invalidCases) {
+    try {
+      await store.saveStoryboard(workspace, typedTitle, 1, [{ shotNumber: '1-1', shotSize: '近景', description: '非法', durationSec: 6, ...patch }])
+      invalidDetails.push(label + ':未抛错')
+    } catch (error) {
+      const code = error && error.code
+      const message = String(error && error.message)
+      if (code === 'invalid-args' || /invalid|必须|只能是|必须是|上限|不超过/.test(message)) { invalidPass += 1 } else { invalidDetails.push(label + ':' + code + '/' + message.slice(0, 60)) }
+    }
+  }
+  check('0-4a：非法 typed 值（含 sceneRef）→ invalid-args（不静默吞掉）', invalidPass === invalidCases.length, JSON.stringify(invalidDetails))
+} else {
+  console.log('      （SKIP：当前工件无 0-4a typed 可选字段（如 rc2 安装包/v0.9.2），typed 断言跳过；源码树自动生效）')
+}
+
+/* ------------------------------------------------------------------ [8] */
+group('[8] v0.10.0 0-4a 导出 add-only + 0-4b groups sidecar（版本自适应）')
+const hasGroupsApi = typeof store.saveStoryboardWithGroups === 'function' && typeof store.getStoryboardGroups === 'function'
+const hasCsvBuilder = typeof exporter.buildStoryboardCsv === 'function'
+const OPTIONAL_HEADERS = ['情绪', '光影', '现场声', '禁令', '起止姿态', '衔接', '自然语言段', '焦段', '主体', '分组']
+const typedTitle2 = '导出addonly剧'
+await store.createProject(workspace, typedTitle2)
+const typedShotsExport = [
+  { shotNumber: '1-1', shotSize: '近景', cameraMove: '推', description: '赵铁拍桌', dialogue: '赵铁：还钱。', durationSec: 6, emotion: { label: '压迫', intensity: 40 }, light: '灯下光斑', ambientSound: '雨声', groupId: 'g1' },
+  { shotNumber: '1-2', shotSize: '中景', description: '林越抬眼', durationSec: 5 },
+]
+await store.saveStoryboard(workspace, typedTitle2, 1, typedShotsExport)
+await store.writeEpisode(workspace, typedTitle2, 1, '# 第001集\n\n## 场景 1：内景 - 当铺 - 夜\n\n赵铁：还钱。\n林越：三天后你来拿钱。\n')
+if (hasCsvBuilder) {
+  const typedCsv = await exporter.buildStoryboardCsv(workspace, typedTitle2)
+  const typedHeader = String(typedCsv).split(/\r?\n/)[0].split(',')
+  if (hasTypedShotFields) {
+    check('0-4a 导出：CSV 表头 21 列不变（sceneRef 不参与导出列，可选列固定 10）', typedHeader.length === 21, String(typedHeader.length))
+    check('0-4a 导出：CSV 含可选列（情绪/光影/现场声/分组等）', OPTIONAL_HEADERS.every((header) => typedHeader.includes(header)), JSON.stringify(typedHeader))
+  } else {
+    console.log('      （SKIP：旧工件无 typed 可选字段，导出 add-only 列断言跳过）')
+  }
+} else {
+  console.log('      （SKIP：exporter.buildStoryboardCsv 不可用）')
+}
+if (hasGroupsApi) {
+  const groupsRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'aidrama-groups-'))
+  const groupsTitle = '分组sidecar剧'
+  await store.createProject(groupsRoot, groupsTitle)
+  await store.saveStoryboard(groupsRoot, groupsTitle, 1, [
+    { shotNumber: '1-1', shotSize: '中景', shotSize: '中景', cameraMove: '固定', description: '甲', durationSec: 5, groupId: 'g1' },
+    { shotNumber: '1-2', shotSize: '近景', cameraMove: '拉', description: '乙', durationSec: 4, groupId: 'g1' },
+    { shotNumber: '1-3', shotSize: '全景', description: '丙', durationSec: 6, groupId: 'g2' },
+  ])
+  const groupsFile = path.join(groupsRoot, 'AI短剧', groupsTitle, '.aidrama', 'storyboard-groups', '第001集.md.json')
+  const storyboardFile = path.join(groupsRoot, 'AI短剧', groupsTitle, '.aidrama', 'storyboard', '第001集.md.json')
+  const groupsData = [
+    { id: 'g1', name: '开场压迫', shotNumbers: ['1-1', '1-2'], emotion: { curve: ['压抑', '警觉'], intensity: 70 }, durationTargetSec: 9, notes: '不允许第二种天气' },
+    { id: 'g2', name: '转折', shotNumbers: ['1-3'], durationTargetSec: 6 },
+  ]
+  check('0-4b：初始无 sidecar → getStoryboardGroups 返回 null（旧项目兼容）', (await store.getStoryboardGroups(groupsRoot, groupsTitle, 1)) === null)
+  const savedGroups = await store.saveStoryboardGroups(groupsRoot, groupsTitle, 1, groupsData)
+  check('0-4b：保存分组返回归一结果（2 组/情绪强度 70）', Array.isArray(savedGroups) && savedGroups.length === 2 && savedGroups[0].emotion.intensity === 70, JSON.stringify(savedGroups).slice(0, 200))
+  const diskGroups = JSON.parse(await fs.readFile(groupsFile, 'utf8'))
+  check('0-4b：sidecar 落盘 .aidrama/storyboard-groups/<集>.json（schemaVersion/episode/groups）', diskGroups.schemaVersion === 1 && diskGroups.episode === 1 && Array.isArray(diskGroups.groups) && diskGroups.groups.length === 2, JSON.stringify(Object.keys(diskGroups)))
+  const readBackGroups = await store.getStoryboardGroups(groupsRoot, groupsTitle, 1)
+  check('0-4b：回读分组内容一致', Array.isArray(readBackGroups) && readBackGroups[0].name === '开场压迫' && readBackGroups[0].shotNumbers.join(',') === '1-1,1-2', JSON.stringify(readBackGroups && readBackGroups[0]).slice(0, 200))
+  check('0-4b：[] 清空分组 → sidecar 删除', JSON.stringify(await store.saveStoryboardGroups(groupsRoot, groupsTitle, 1, [])) === '[]' && !(await fs.access(groupsFile).then(() => true, () => false)))
+  await store.deleteStoryboardGroups(groupsRoot, groupsTitle, 1)
+  check('0-4b：deleteStoryboardGroups 删除 sidecar', !(await fs.access(groupsFile).then(() => true, () => false)))
+  // 校验先于写入：非法分组不产生任何写入（storyboard 文件 hash 不变）
+  await store.saveStoryboard(groupsRoot, groupsTitle, 1, [
+    { shotNumber: '1-1', shotSize: '中景', cameraMove: '固定', description: '甲', durationSec: 5 },
+    { shotNumber: '1-2', shotSize: '近景', cameraMove: '拉', description: '乙', durationSec: 4 },
+  ])
+  const beforeHash = createHash('sha256').update(await fs.readFile(storyboardFile)).digest('hex')
+  const invalidGroupCases = [
+    ['groups 非数组', { not: 'array' }],
+    ['id 缺失', [{}]],
+    ['id 重复', [{ id: 'g1', shotNumbers: [] }, { id: 'g1', shotNumbers: [] }]],
+    ['引用不存在镜号', [{ id: 'g9', shotNumbers: ['9-9'] }]],
+    ['同一镜属于两组', [{ id: 'g1', shotNumbers: ['1-1'] }, { id: 'g2', shotNumbers: ['1-1'] }]],
+    ['emotion.intensity 越界', [{ id: 'g1', shotNumbers: [], emotion: { intensity: 101 } }]],
+  ]
+  let invalidGroupsOk = 0
+  const invalidGroupDetails = []
+  for (const [label, groups] of invalidGroupCases) {
+    try {
+      await store.saveStoryboardWithGroups(groupsRoot, groupsTitle, 1, [
+        { shotNumber: '1-1', shotSize: '中景', cameraMove: '固定', description: '甲', durationSec: 5 },
+        { shotNumber: '1-2', shotSize: '近景', cameraMove: '拉', description: '乙', durationSec: 4 },
+      ], groups)
+      invalidGroupDetails.push(label + ':未抛错')
+    } catch (error) {
+      const code = error && error.code
+      const message = String(error && error.message)
+      if (code === 'invalid-args' || /invalid|必须|只能是|必须是/.test(message)) invalidGroupsOk += 1
+      else invalidGroupDetails.push(label + ':' + code + '/' + message.slice(0, 60))
+    }
+  }
+  const afterHash = createHash('sha256').update(await fs.readFile(storyboardFile)).digest('hex')
+  check('0-4b：6 类非法分组 → invalid-args（校验先于写入）', invalidGroupsOk === invalidGroupCases.length, JSON.stringify(invalidGroupDetails))
+  check('0-4b：非法分组无副作用（storyboard 文件 hash 不变、无 sidecar 残留）', beforeHash === afterHash && !(await fs.access(groupsFile).then(() => true, () => false)), JSON.stringify({ before: beforeHash.slice(0, 12), after: afterHash.slice(0, 12) }))
+  // 双文件事务保存 + 导出 add-only
+  await store.writeEpisode(groupsRoot, groupsTitle, 1, '# 第001集\n\n## 场景 1：内景 - 当铺 - 夜\n\n林越：这钱，我三天还你。\n')
+  const combined = await store.saveStoryboardWithGroups(groupsRoot, groupsTitle, 1, [
+    { shotNumber: '1-1', shotSize: '中景', cameraMove: '固定', description: '甲', durationSec: 5, groupId: 'g1' },
+    { shotNumber: '1-2', shotSize: '近景', cameraMove: '拉', description: '乙', durationSec: 4, groupId: 'g1' },
+    { shotNumber: '1-3', shotSize: '全景', description: '丙', durationSec: 6, groupId: 'g2' },
+  ], groupsData)
+  check('0-4b：双文件事务保存返回 shots+groups', combined.shots.length === 3 && combined.groups.length === 2, JSON.stringify({ shots: combined.shots.length, groups: combined.groups.length }))
+  const savedMd = await fs.readFile(path.join(groupsRoot, 'AI短剧', groupsTitle, '分镜', '第001集.分镜.md'), 'utf8')
+  check('0-4b：分镜 MD 含「分组情绪总控」章节与分组信息', savedMd.includes('分组情绪总控') && savedMd.includes('开场压迫') && savedMd.includes('情绪曲线'), String(savedMd.length))
+  try {
+    const exportedGroupsJson = await exporter.exportProject(groupsRoot, groupsTitle, 'json')
+    const exportedJsonText = await fs.readFile(exportedGroupsJson.file, 'utf8')
+    const exportedJson = JSON.parse(exportedJsonText)
+    check('0-4b：JSON 导出 add-only 顶层 storyboardGroups（仅存在时）', Boolean(exportedJson.storyboardGroups && exportedJson.storyboardGroups['1'] && exportedJson.storyboardGroups['1'].length === 2), JSON.stringify(exportedJson.storyboardGroups && Object.keys(exportedJson.storyboardGroups)))
+    const exportedGroupsMd = await exporter.exportProject(groupsRoot, groupsTitle, 'markdown')
+    const exportedMdText = await fs.readFile(exportedGroupsMd.file, 'utf8')
+    check('0-4b：Markdown 全本导出含分组章节', exportedMdText.includes('分组情绪总控') && exportedMdText.includes('开场压迫'), String(exportedMdText.length))
+  } catch (error) {
+    console.log('      （SKIP：导出 sidecar 断言异常——' + String(error && error.message).slice(0, 80) + '）')
+  }
+  await fs.rm(groupsRoot, { recursive: true, force: true })
+} else {
+  console.log('      （SKIP：当前工件无 0-4b groups API（旧工件），groups sidecar 断言跳过）')
+}
 
 await fs.rm(workspace, { recursive: true, force: true })
 

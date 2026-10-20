@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-10-18",
+  "description": "判据阈值与共享小词表（PD-02 景别阶梯、PD-05 BGM 词、PD-08 动作事件阈值等）",
+  "shotSizeLadder": {
+    "远景": 5,
+    "全景": 4,
+    "中景": 3,
+    "近景": 2,
+    "特写": 1,
+    "大特写": 0
+  },
+  "maxActionsPerShot": 2,
+  "eventVerbs": ["走", "跑", "站起", "坐下", "转身", "转头", "抬手", "点头", "摇头", "推", "拉", "抓", "扔", "捡", "跳", "笑", "哭", "喊", "说", "问", "答", "看", "盯", "低头", "抬头"],
+  "minLightWords": 8,
+  "bgmLexicon": ["BGM", "配乐", "背景音乐", "音乐", "主题曲", "插曲"],
+  "observedSeverity": "warn",
+  "failOnWarn": false,
+  "note": "首批全部 WARN；failOnWarn=false 固定（strict 仅按 FAIL 阻断）；新增阈值需登记退休候选。"
+}
