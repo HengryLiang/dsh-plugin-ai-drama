@@ -324,9 +324,9 @@ check('N2', 'AC-C2-16', 'skills 文档不暗示 Agent 可直接写 style（skill
   for (const f of files) { const t = await fs.readFile(path.join(skillsDir, ...f.rel.split('/')), 'utf8'); if (t.includes('style-save')) hit = true }
   return !hit
 })(), 'skills/** 未出现 style-save')
-const generationSha = sha(await fs.readFile(path.join(PLUGIN, 'lib', 'generation.js')))
+const generationSha = sha(Buffer.from((await fs.readFile(path.join(PLUGIN, 'lib', 'generation.js'), 'utf8')).replace(/\r\n/g, '\n')))
 // v0.16.10（M2）：generation.js 写点已接入 guardedProjectWrite；基线换为 M2 加固后 SHA
-const GENERATION_BASELINE_V01610 = '4b6e5352079e4bea5cdbe89c445abce95dd6df53573625021296cf05474775ff'
+const GENERATION_BASELINE_V01610 = 'e373575b7c52dbbc8238f130c7bb11c346f7f50b7158b9a28925ea11be11afac'
 const generationText = await fs.readFile(path.join(PLUGIN, 'lib', 'generation.js'), 'utf8').catch(() => '')
 check('N3', 'AC-C2-17', '生成链文件未改（generation.js == v0.16.10 M2 加固基线；含 guardedProjectWrite）', generationSha === GENERATION_BASELINE_V01610 && generationText.includes('guardedProjectWrite'), JSON.stringify({ now: generationSha.slice(0, 12), base: GENERATION_BASELINE_V01610.slice(0, 12) }))
 
