@@ -7,7 +7,7 @@
  *   AC-S3 部分维度只注入已有（不编造缺失维度）
  *   AC-S4 确定性（两次 planEpisode/buildVideoPromptText 严格相等）
  *   AC-S5 imagePrompt 零回归（与基线逐字节一致）
- *   AC-S6 工具 34 / METHODS 69（task-110 media-read +1） / 无新 route / 无新依赖 / 旧数据 32 hash / all.mjs 35 套件 / 真实模型 0
+ *   AC-S6 工具 34 / METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） / 无新 route / 无新依赖 / 旧数据 32 hash / all.mjs 35 套件 / 真实模型 0
  *
  * 版本自适应：有 style 与无 style 的 videoPrompt 相同 → 无注入实现，整套件 SKIP（exit 0）。
  * 基线：`_recover/v0113-baseline/`（QA-owned，v0.11.2 注入前现态；安装副本无该目录时字节断言 SKIP 注明）。
@@ -82,7 +82,7 @@ const clientCalls = new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/
 const toolCount = Array.isArray(toolsModule.DRAMA_TOOL_NAMES) ? toolsModule.DRAMA_TOOL_NAMES.length : 0
 check('0.1 风格注入已生效（有 style ≠ 无 style 的 videoPrompt）', injectionActive)
 check('0.2 风格句上限常量 STYLE_CUE_MAX_CHARS=600', vp.STYLE_CUE_MAX_CHARS === 600, String(vp.STYLE_CUE_MAX_CHARS))
-check('0.3 工具 34 / METHODS 69（task-110 media-read +1） / client 69（task-110 media-read +1）（M4 批1+批2 +10 已批准）/ 无新依赖', toolCount === 34 && methods.size === 69 && clientCalls.size === 69 && Object.keys(pkg.dependencies || {}).length === 0)
+check('0.3 工具 34 / METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） / client 69（task-110 media-read +1；v0.15.11 E13 assets-import +1）（M4 批1+批2 +10 已批准）/ 无新依赖', toolCount === 35 && methods.size === 72 && clientCalls.size === 72 && Object.keys(pkg.dependencies || {}).length === 0)
 
 group('[1] 单元：renderStyleCue 五维/场景/部分维度/空值')
 const cueFull = vp.renderStyleCue({ style: STYLE })
@@ -180,8 +180,8 @@ const afterTree = await sha256(JSON.stringify((await fs.readdir(projectPath, { r
 check('6.2 planEpisode 只读（不写盘/不新增文件）', beforeTree === afterTree)
 
 group('[7] AC-S6 契约 / 清理')
-check('7.1 工具 34 / METHODS 69（task-110 media-read +1） / client 69（task-110 media-read +1）（M4 批1+批2 已批准）', toolCount === 34 && methods.size === 69 && clientCalls.size === 69)
-check('7.2 无新 route（METHODS 未含 style/scene 相关新方法）', ![...methods].some((name) => /^(styles?|scenes?)(-|$)/i.test(name)), JSON.stringify([...methods].filter((name) => /style|scene/i.test(name))))
+check('7.1 工具 34 / METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） / client 69（task-110 media-read +1；v0.15.11 E13 assets-import +1）（M4 批1+批2 已批准）', toolCount === 35 && methods.size === 72 && clientCalls.size === 72)
+check('7.2 无新 route（仅已批准 style-save；无 scene/style 其他新方法）', [...methods].filter((name) => /^(styles?|scenes?)(-|$)/i.test(name)).every((name) => name === 'style-save'), JSON.stringify([...methods].filter((name) => /style|scene/i.test(name))))
 check('7.3 无新依赖', Object.keys(pkg.dependencies || {}).length === 0)
 await fs.rm(projectRoot, { recursive: true, force: true })
 check('7.4 临时工作区已清理', !(await fileExists(projectRoot)))

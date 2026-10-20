@@ -60,7 +60,9 @@ console.log('\n[1] 常量与无项目状态卡')
 check('MAX_CONTEXT_CHARS = 8000', MAX_CONTEXT_CHARS === 8000, String(MAX_CONTEXT_CHARS))
 check('块标题 = 短剧上下文', CONTEXT_BLOCK_TITLE === '短剧上下文', String(CONTEXT_BLOCK_TITLE))
 const emptyCard = buildDramaContextCard({})
-check('无项目卡含标题/未确定提示', emptyCard.startsWith(`## ${CONTEXT_BLOCK_TITLE}`) && emptyCard.includes('尚未确定'), emptyCard.slice(0, 120))
+// v0.16.0 A-S1：无项目文案中性化（不催促建项、不点名建项工具）。删旧增新：原 1 条 → 2 条更强断言。
+check('无项目卡含标题/中性未创建提示（A-S1：未打开/未创建，不暗示主动建项）', emptyCard.startsWith(`## ${CONTEXT_BLOCK_TITLE}`) && emptyCard.includes('未打开/未创建'), emptyCard.slice(0, 160))
+check('无项目卡不点名建项工具且提示需用户明确说明（A-S1：无 drama_create_project）', !emptyCard.includes('drama_create_project') && emptyCard.includes('如用户需要新建，请明确说明'), emptyCard.slice(0, 200))
 check('无项目卡 ≤8K', emptyCard.length <= MAX_CONTEXT_CHARS, String(emptyCard.length))
 
 /* ------------------------------------------------------------------ [2] */

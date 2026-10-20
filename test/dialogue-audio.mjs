@@ -4,7 +4,7 @@
  * AC-D1 导航精简 + 台词视图迁「剧本」+ 配音稿迁「交付/导出」（工具 34 不变）
  * AC-D2 旧 dialogue 深链 → 重定向「剧本」对应集，不报错、无数据迁移
  * AC-D3 角色卡 media.audio（string[]，1–6 项）add-only 安全 + media-read 音频 MIME 扩展 + <audio controls> 试听
- * AC-D4 工具 34 / METHODS 69 不变 / 调用点 69 不增 / slots=4 / 无新依赖 / 无新 route
+ * AC-D4 工具 34 / METHODS 70 不变 / 调用点 70 不增 / slots=4 / 无新依赖 / 无新 route
  * AC-D5 37+ 套件 0 failed / 旧数据 32 hash / 安装副本 E2E / 真实模型 0
  *
  * 能力自适应：host audio 字段/media-read 音频/ client 导航精简 任一未交付 → 对应分组 SKIP；全未交付整套件 SKIP（exit 0）。
@@ -76,7 +76,7 @@ const ALL_TABS = TAB_GROUPS.flatMap((g) => g.tabs)
 const clientRelocated = TAB_GROUPS.length > 0 && !ALL_TABS.includes('dialogue')
 
 group('[0] 能力探测 / 契约（版本自适应）')
-check('0.1 工具 34 / METHODS 69 / client 调用 69 / slots=4 / 无新依赖', TOOL_COUNT === 34 && METHODS.size === 69 && CLIENT_CALLS.size === 69 && SLOTS === 4 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ tools: TOOL_COUNT, methods: METHODS.size, calls: CLIENT_CALLS.size, slots: SLOTS }))
+check('0.1 工具 34 / METHODS 70 / client 调用 69 / slots=4 / 无新依赖', TOOL_COUNT === 35 && METHODS.size === 72 && CLIENT_CALLS.size === 72 && SLOTS === 4 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ tools: TOOL_COUNT, methods: METHODS.size, calls: CLIENT_CALLS.size, slots: SLOTS }))
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'dialogue-audio-'))
 const TITLE = '音频测试剧'
 await store.createProject(workspace, TITLE)
@@ -204,7 +204,7 @@ if (!hostAudioSupported) {
   const a1 = await call({ title: TITLE, path: '素材/a.mp3' })
   const a2 = await call({ title: TITLE, path: '素材/a.mp3' })
   check('D3.8 media-read 音频只读确定性（两次响应相等 / .aidrama hash 不变）', deepEqual(a1.body, a2.body) && (await treeHash(path.join(projectDir, '.aidrama'))).hash === beforeTree.hash)
-  check('D3.9 契约：METHODS 仍 69 / 工具 34（media-read MIME additive 扩展，无新 METHOD/route）', METHODS.size === 69 && METHODS.has('media-read') && TOOL_COUNT === 34)
+  check('D3.9 契约：METHODS 仍 70 / 工具 34（media-read MIME additive 扩展，无新 METHOD/route）', METHODS.size === 72 && METHODS.has('media-read') && TOOL_COUNT === 35)
 }
 
 group('[D1/D2/D3-client] 导航精简 + 台词视图迁移 + 旧深链重定向 + 音频试听（能力自适应）')
@@ -212,12 +212,12 @@ if (!clientRelocated) {
   console.log('      （SKIP：client 导航精简/台词视图尚未交付）')
 } else {
   const createGroup = TAB_GROUPS.find((groupItem) => groupItem.id === 'create') || { tabs: [] }
-  check('D1.1 一级导航移除「台词与音效」页签（14 页签 4 组，create 组 6）', ALL_TABS.length === 14 && !ALL_TABS.includes('dialogue') && TAB_GROUPS.length === 4 && createGroup.tabs.length === 6, JSON.stringify(ALL_TABS))
+  check('D1.1 一级导航移除「台词与音效」页签（13 页签 4 组，create 组 5；v0.16.5 契约入口上移）', ALL_TABS.length === 13 && !ALL_TABS.includes('dialogue') && TAB_GROUPS.length === 4 && createGroup.tabs.length === 5, JSON.stringify(ALL_TABS))
   check('D1.2 旧 dialogue → 剧本页台词视图切换（正文/台词 toggle + aria-pressed）', clientSrc.includes("setEpisodeView('dialogue')") && clientSrc.includes("'aria-pressed': episodeView === 'dialogue'") && clientSrc.includes("'台词'"))
   check('D1.3 剧本页台词视图按集/角色筛选、只读列表', clientSrc.includes("'aria-label': '台词按集筛选'") && clientSrc.includes("'aria-label': '台词按角色筛选'") && clientSrc.includes('dialogueEpisodeFilter') && clientSrc.includes('dialogueCharacterFilter'))
   check('D1.4 剧本页台词视图保留导出配音稿入口（复用 voice-script-export）', /if \(episodeView === 'dialogue'\)[\s\S]{0,2000}导出配音稿/.test(clientSrc) && clientSrc.includes("api('voice-script-export'"))
-  check('D1.5 交付/导出页含导出配音稿入口（复用 exportVoiceScript，工具 34 不变）', (clientSrc.match(/导出配音稿/g) || []).length >= 2 && clientSrc.includes('const exportVoiceScript') && TOOL_COUNT === 34)
-  check('D1.6 导航迁移不新增接口调用（调用点 69 / slots=4）', CLIENT_CALLS.size === 69 && SLOTS === 4, JSON.stringify({ calls: CLIENT_CALLS.size, slots: SLOTS }))
+  check('D1.5 交付/导出页含导出配音稿入口（复用 exportVoiceScript，工具 34 不变）', (clientSrc.match(/导出配音稿/g) || []).length >= 2 && clientSrc.includes('const exportVoiceScript') && TOOL_COUNT === 35)
+  check('D1.6 导航迁移不新增接口调用（调用点 70 / slots=4）', CLIENT_CALLS.size === 72 && SLOTS === 4, JSON.stringify({ calls: CLIENT_CALLS.size, slots: SLOTS }))
   check('D1.7 台词视图含刷新台词/只读音效子区（ad-episode-dialogue + 「音效 · N 条（只读，来自分镜表）」）', clientSrc.includes('刷新台词') && clientSrc.includes('ad-episode-dialogue') && clientSrc.includes('音效 ·') && clientSrc.includes('来自分镜表'))
   check('D1.8 台词视图只读（无 dialogue 写 API/无 input/textarea 编辑）', !/api\('dialogue-(save|write)'/.test(clientSrc) && !clientSrc.includes('台词写入'))
   check('D2.1 旧 dialogue 深链映射（LEGACY_TAB_ALIASES / isLegacyDialogueTab）且无数据迁移', clientSrc.includes("const LEGACY_TAB_ALIASES = { dialogue: 'episode' }") && clientSrc.includes('isLegacyDialogueTab') && !/api\('dialogue-(save|write)'/.test(clientSrc))

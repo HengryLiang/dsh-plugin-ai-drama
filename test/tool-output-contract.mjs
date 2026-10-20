@@ -257,7 +257,7 @@ check('配额降级：degraded=true + degradeReason=scan-quota-exhausted + scanM
 /* ------------------------------------------------------------------ [3] 34 工具失败态真实返回 */
 group('[3] 34 个工具的失败态真实返回 → 各自 output.schema 校验（防 D-10/D-13 类契约漂移）')
 const allDefs = makeDefs(tempRoot)
-check(`工具面 ${allDefs.length}（expected 34）`, allDefs.length === 34, String(allDefs.length))
+check(`工具面 ${allDefs.length}（expected 34）`, allDefs.length === 35, String(allDefs.length))
 const failureViolations = []
 for (const def of allDefs) {
   let result
@@ -298,7 +298,7 @@ for (const [name, output] of Object.entries(TOOL_OUTPUTS)) {
   if (!text || !String(text).trim()) schemaProblems.push(`${name}: render 返回空文本`)
 }
 check('34 工具 output.schema/render 规范（object 根/required ok/render 非空）', schemaProblems.length === 0, JSON.stringify(schemaProblems).slice(0, 500))
-check('METHODS 仍 = 69（task-110 media-read +1）', METHODS.length === 69, String(METHODS.length))
+check('METHODS 仍 = 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）', METHODS.length === 72, String(METHODS.length))
 
 
 /* ------------------------------------------------------------------ [5] P3-F：meta.promptVersion 三路径契约（model/deterministic/agent-mediated + 落盘） */
@@ -403,6 +403,18 @@ const longCharacters = [{ name: '林越', role: '主角', personality: ['冷静'
 const persona = auditMod.buildPersonaCards(longCharacters)
 const personaLines = String(persona).split('\n')
 check('persona 卡压缩（单卡 ≤2000 字，不整卡全文）', personaLines.every((line) => line.length <= auditMod.PERSONA_CARD_MAX_CHARS), JSON.stringify(personaLines.map((line) => line.length)))
+
+/* 反馈 #5（2026-10-20）：drama_resolve_draft 的 result 需同时接受对象与数组。
+   - 对象型草稿（contract/file/batch-artifact）→ result 是对象；
+   - 数组型草稿（outline/characters/storyboard）→ result 是数组（store.save* 返回归一数组）。
+   旧 schema 只声明 object，导致采纳成功后宿主仍报 `value.result must be an object`。 */
+const resolveDraftSchema = TOOL_OUTPUTS.drama_resolve_draft && TOOL_OUTPUTS.drama_resolve_draft.schema
+const resolveDraftResult = resolveDraftSchema && resolveDraftSchema.properties && resolveDraftSchema.properties.result
+const resultBranches = resolveDraftResult && Array.isArray(resolveDraftResult.oneOf) ? resolveDraftResult.oneOf : []
+const resultAllowsObject = resultBranches.some((branch) => branch && branch.type === 'object')
+const resultAllowsArray = resultBranches.some((branch) => branch && branch.type === 'array')
+check('drama_resolve_draft.result 同时允许对象与数组（oneOf；修复采纳数组型草稿的误报错）', resultAllowsObject && resultAllowsArray, JSON.stringify(resultBranches))
+check('drama_resolve_draft.result 非 required 字段（旧调用/批量调用无 result 时不报错）', !(Array.isArray(resolveDraftSchema.required) && resolveDraftSchema.required.includes('result')), JSON.stringify(resolveDraftSchema.required))
 
 await fs.rm(tempRoot, { recursive: true, force: true })
 console.log(`\n结果：${passed} passed, ${failed} failed`)

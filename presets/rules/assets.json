@@ -74,11 +74,23 @@
       "message": "variant 一致性：{卡ID} 的 variantOf {原因}；变体编号（_01–_99）必须挂到已存在的同类型基础资产 ID",
       "rules": [{ "type": "variantConsistency", "action": "warn" }],
       "lifecycle": { "addedIn": "v0.11.0", "retireCandidate": "AST-02" }
+    },
+    {
+      "id": "AST-07",
+      "name": "资产审核未完成",
+      "category": "criteria",
+      "severityDefault": "warn",
+      "inputs": ["assets[].review.status"],
+      "skipIfMissing": true,
+      "code": "asset-review-incomplete",
+      "message": "资产审核未完成：{n} 张卡未定稿（{卡ID 列表}）；请提交/通过/定稿后再交付（WARN 不阻断）",
+      "rules": [{ "type": "reviewIncomplete", "action": "warn" }],
+      "lifecycle": { "addedIn": "v0.16.9", "retireCandidate": "AST-01" }
     }
   ],
   "severity": {
     "fail": [],
-    "warn": ["AST-01", "AST-02", "AST-03", "AST-04", "AST-05", "AST-06"]
+    "warn": ["AST-01", "AST-02", "AST-03", "AST-04", "AST-05", "AST-06", "AST-07"]
   },
   "lexicons": {}
 }

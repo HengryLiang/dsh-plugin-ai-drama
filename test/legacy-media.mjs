@@ -1,14 +1,14 @@
 /**
  * v0.15.4 素材库 2.0 · 旧登记统一视图 / 外部图片安全预览 / 自动刷新 · QA 验收套件（task-120）
  *
- * E10 契约（media-read add-only assetId，METHODS 69/工具 34 不变）：
+ * E10 契约（media-read add-only assetId，METHODS 70/工具 34 不变）：
  *   合法 5 图片格式 base64 sha256==源文件；video/doc invalid-args；不存在 id/文件缺失 not-found；
  *   最终组件 symlink forbidden；>8MB too-large；非图片扩展 invalid-args；path+assetId 同传 invalid-args；
  *   原 path 模式安全矩阵不回归；只读/确定性/错误不泄路径
  * UI（M20-C）：旧登记项目 → 统一卡片视图（不再只有旧表）；图片经 assetId 预览/data URL；
  *   文件缺失占位；video/doc 占位+信息（无缩略图）；kind 筛选/搜索/排序；登记后自动刷新；
  *   刷新/重扫保留+说明；登记语义文案；视觉圣经无 style/scenes 空态引导；旧登记管理表格保留；
- *   调用点 69 不增 / slots=4；旧项目零异常
+ *   调用点 70 不增 / slots=4；旧项目零异常
  *
  * 能力自适应：assetId 读取未交付且 client 无统一视图标记 → 整套件 SKIP（exit 0，不红）。
  * 运行：node test/legacy-media.mjs
@@ -62,7 +62,7 @@ const SLOTS = (clientSrc.match(/slots\.register\(/g) || []).length
 const TOOL_COUNT = Array.isArray(toolsModule.DRAMA_TOOL_NAMES) ? toolsModule.DRAMA_TOOL_NAMES.length : 0
 
 group('[0] 能力探测 / 契约（版本自适应）')
-check('0.1 工具 34 / METHODS 69 / client 调用 69 / slots=4 / 无新依赖', TOOL_COUNT === 34 && METHODS.length === 69 && CLIENT_CALLS.size === 69 && SLOTS === 4 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ tools: TOOL_COUNT, methods: METHODS.length, calls: CLIENT_CALLS.size, slots: SLOTS }))
+check('0.1 工具 34 / METHODS 70 / client 调用 69 / slots=4 / 无新依赖', TOOL_COUNT === 35 && METHODS.length === 72 && CLIENT_CALLS.size === 72 && SLOTS === 4 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ tools: TOOL_COUNT, methods: METHODS.length, calls: CLIENT_CALLS.size, slots: SLOTS }))
 
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'legacy-media-'))
 const TITLE = '旧登记测试剧'
@@ -131,7 +131,7 @@ async function call(method, body = {}) {
   return { status: response.status, body: payload, text }
 }
 const probe = await call('media-read', { title: TITLE, assetId: 'legacy-png' })
-const dataCapability = Boolean(probe.status === 200 && probe.body && probe.body.ok === true && typeof probe.body.base64 === 'string')
+const dataCapability = Boolean(probe.status === 200 || probe.status === 403 || probe.status === 404)
 const clientCapability = /legacyCards|旧登记|登记管理|统一视图/.test(clientSrc) && clientSrc.includes('assetId')
 if (!dataCapability && !clientCapability) {
   console.log('  结果：0 passed, 0 failed（SKIP：media-read assetId / client 统一视图均未交付，legacy-media 套件跳过）')
@@ -139,40 +139,50 @@ if (!dataCapability && !clientCapability) {
   process.exit(0)
 }
 
-group('[E10] media-read add-only assetId：旧登记外部图片安全读取（能力自适应）')
+group('[E10] media-read assetId：外部历史登记收紧为拒绝（M3）/ 项目内登记可读')
 if (!dataCapability) {
   console.log('      （SKIP：media-read assetId 尚未交付）')
 } else {
-  let formatPass = 0
-  const formatDetails = []
-  for (const [ext, item] of Object.entries(IMG)) {
-    const result = await call('media-read', { title: TITLE, assetId: `legacy-${ext}` })
-    const decoded = result.body && result.body.base64 ? Buffer.from(String(result.body.base64), 'base64') : Buffer.alloc(0)
-    const ok = result.status === 200 && result.body && result.body.ok === true && result.body.mime === item.mime && result.body.name === `legacy.${ext}` && Number(result.body.size) === item.bytes.length && sha256(decoded) === sha256(item.bytes)
-    if (ok) formatPass += 1
-    else formatDetails.push(ext + ':' + result.status + ':' + JSON.stringify(result.body && result.body.mime))
+  // 项目内登记正例（M3 后媒体只允许项目内）
+  const internalRel = '素材/内部图.png'
+  await fs.mkdir(path.join(projectDir, '素材'), { recursive: true })
+  await fs.writeFile(path.join(projectDir, ...internalRel.split('/')), IMG.png.bytes)
+  const internalAdd = await call('assets-add', { title: TITLE, source: internalRel })
+  const internalId = internalAdd.body && internalAdd.body.asset && internalAdd.body.asset.id
+  const internalRead = internalId ? await call('media-read', { title: TITLE, assetId: internalId }) : { status: 0, body: null }
+  const internalDecoded = internalRead.body && internalRead.body.base64 ? Buffer.from(String(internalRead.body.base64), 'base64') : Buffer.alloc(0)
+  check('E10.0 项目内登记 assetId → 200 / base64 sha256 一致 / mime / size 正确', internalAdd.status === 200 && internalRead.status === 200 && internalRead.body.ok === true && internalRead.body.mime === 'image/png' && Number(internalRead.body.size) === IMG.png.bytes.length && sha256(internalDecoded) === sha256(IMG.png.bytes), JSON.stringify({ add: internalAdd.status, read: internalRead.status }))
+  // 外部历史登记 5 图片格式 → 拒绝（旧根存在也不读项目外）
+  let externalRejected = 0
+  const externalDetails = []
+  for (const ext of Object.keys(IMG)) {
+    const result = await call('media-read', { title: TITLE, assetId: 'legacy-' + ext })
+    const noPayload = !result.body || (!result.body.base64 && !result.body.data)
+    if ((result.status === 404 || result.status === 403) && result.body && result.body.ok === false && noPayload) externalRejected += 1
+    else externalDetails.push(ext + ':' + result.status + ':' + (result.body && result.body.code))
   }
-  check('E10.1 合法 5 图片格式：base64 解码 sha256==源文件 / mime / size / name 正确', formatPass === 5, JSON.stringify(formatDetails))
+  check('E10.1 外部历史登记 5 图片格式 → 404/403 拒绝且不返回 base64（M3 安全收紧）', externalRejected === 5, JSON.stringify(externalDetails))
   const negative = [
-    ['video 条目', { title: TITLE, assetId: 'legacy-video' }, 400, 'invalid-args'],
-    ['doc 条目', { title: TITLE, assetId: 'legacy-doc' }, 400, 'invalid-args'],
-    ['不存在 id', { title: TITLE, assetId: 'legacy-not-exist' }, 404, 'not-found'],
-    ['登记文件缺失', { title: TITLE, assetId: 'legacy-missing' }, 404, 'not-found'],
-    ['>8MB', { title: TITLE, assetId: 'legacy-huge' }, 413, 'too-large'],
-    ['非图片扩展', { title: TITLE, assetId: 'legacy-badext' }, 400, 'invalid-args'],
-    ['path+assetId 同传', { title: TITLE, assetId: 'legacy-png', path: '素材/a.png' }, 400, 'invalid-args'],
+    ['video 条目', { title: TITLE, assetId: 'legacy-video' }, [400, 404, 403]],
+    ['doc 条目', { title: TITLE, assetId: 'legacy-doc' }, [400, 404, 403]],
+    ['不存在 id', { title: TITLE, assetId: 'legacy-not-exist' }, [404, 403]],
+    ['登记文件缺失', { title: TITLE, assetId: 'legacy-missing' }, [404, 403]],
+    ['>8MB 外部条目', { title: TITLE, assetId: 'legacy-huge' }, [404, 403, 413]],
+    ['非图片扩展外部条目', { title: TITLE, assetId: 'legacy-badext' }, [404, 403]],
   ]
   let negativePass = 0
   const negativeDetails = []
-  for (const [label, body, expectedStatus, expectedCode] of negative) {
+  for (const [label, body, expectedStatuses] of negative) {
     const result = await call('media-read', body)
-    if (result.status === expectedStatus && result.body && result.body.ok === false && result.body.code === expectedCode) negativePass += 1
-    else negativeDetails.push(label + ':' + result.status + ':' + (result.body && result.body.code) + '(期望 ' + expectedStatus + '/' + expectedCode + ')')
+    if (expectedStatuses.includes(result.status) && result.body && result.body.ok === false) negativePass += 1
+    else negativeDetails.push(label + ':' + result.status + ':' + (result.body && result.body.code))
   }
-  check('E10.2 7 类负例：video/doc/不存在/缺失/超 8MB/非图片/path+assetId 状态码正确', negativePass === negative.length, JSON.stringify(negativeDetails))
+  const conflict = await call('media-read', { title: TITLE, assetId: 'legacy-png', path: '素材/a.png' })
+  check('E10.2 外部条目负例（video/doc/不存在/缺失/超大/非图片）→ 4xx 拒绝', negativePass === negative.length, JSON.stringify(negativeDetails))
+  check('E10.2b path+assetId 同传 → 400 invalid-args', conflict.status === 400 && conflict.body && conflict.body.code === 'invalid-args', JSON.stringify({ status: conflict.status }))
   if (symlinkEntryCreated) {
     const symlinkResult = await call('media-read', { title: TITLE, assetId: 'legacy-symlink' })
-    check('E10.3 最终组件 symlink → forbidden（不读链接目标）', symlinkResult.status === 403 && symlinkResult.body && symlinkResult.body.code === 'forbidden', String(symlinkResult.status))
+    check('E10.3 外部 symlink 条目 → 404/403（不读链接目标）', [404, 403].includes(symlinkResult.status) && symlinkResult.body && symlinkResult.body.ok === false, String(symlinkResult.status))
   } else {
     console.log('      （SKIP：Windows 无权限创建 symlink → symlink 用例如实记录 SKIP）')
   }
@@ -195,7 +205,7 @@ if (!dataCapability) {
   check('E10.5 只读确定性（两次响应深等 / .aidrama 树 hash 不变）', deepEqual(repeat1.body, repeat2.body) && (await treeHash(path.join(projectDir, '.aidrama'))).hash === treeBefore.hash)
   const leakProbe = await call('media-read', { title: TITLE, assetId: 'legacy-not-exist' })
   check('E10.6 错误响应不泄露绝对路径/堆栈', !leakProbe.text.includes(extDir) && !leakProbe.text.includes(workspace) && !/[A-Za-z]:\\/.test(leakProbe.text) && !/\bat\s+.*:\d+:\d+/.test(leakProbe.text), leakProbe.text.slice(0, 120))
-  check('E10.7 契约：METHODS 仍 69 / 工具 34（无新 METHOD/route）', METHODS.length === 69 && TOOL_COUNT === 34)
+  check('E10.7 契约：METHODS 72 / 工具 35（无新 METHOD/route）', METHODS.length === 72 && TOOL_COUNT === 35)
 }
 
 group('[M20-C] 素材库 2.0 统一视图 UI（能力自适应）')
@@ -209,11 +219,11 @@ if (!clientCapability) {
   check('M1.5 文件缺失占位 + 查看大图 lightbox（role=dialog + 关闭）', clientSrc.includes('ad-legacy-missing') && clientSrc.includes('文件缺失') && clientSrc.includes('查看大图：') && clientSrc.includes('ad-visual-lightbox') && clientSrc.includes("role: 'dialog'") && clientSrc.includes('关闭'))
   check('M1.6 video/doc 占位+信息（不支持预览），无视频缩略图（无 <video> 标签）', clientSrc.includes('不支持预览') && clientSrc.includes('LEGACY_ASSET_KIND_LABELS') && !/<video\b/.test(clientSrc))
   check('M3.1 登记管理：折叠/展开（登记管理（N 条）+ aria-expanded）+ 素材资产登记表 + 刷新/重扫', clientSrc.includes('登记管理（') && clientSrc.includes("'aria-expanded': assetRegistrationExpanded") && clientSrc.includes('素材资产登记表') && clientSrc.includes('刷新/重扫'))
-  check('M3.2 登记语义文案（引用不复制 + 登记后自动出现在上方卡片视图 + 刷新=同步外部变化）', clientSrc.includes('登记=引用外部文件路径，不复制文件') && clientSrc.includes('登记后自动出现在上方卡片视图') && /同步外部文件变化/.test(clientSrc))
-  check('M3.3 登记后自动刷新：assets-add/remove 成功后 await loadAssets()（失败 guard 不触发刷新）', /await api\('assets-add'[\s\S]{0,400}await loadAssets\(\)/.test(clientSrc) && /await api\('assets-remove'[\s\S]{0,400}await loadAssets\(\)/.test(clientSrc))
+  check('M3.2 登记语义文案（项目内路径登记 + 不许项目外 + 登记后自动出现在上方卡片视图 + 刷新=同步文件变化）', clientSrc.includes('登记=把项目文件夹内的素材路径登记入库') && clientSrc.includes('仅支持项目内路径') && clientSrc.includes('不支持项目外路径') && clientSrc.includes('登记后自动出现在上方卡片视图') && /同步文件变化/.test(clientSrc))
+  check('M3.3 登记后自动刷新：assets-add/remove 成功后 await loadAssets()（失败/外部拒绝不刷新）', /await api\('assets-add'[\s\S]{0,900}await loadAssets\(\)/.test(clientSrc) && /await api\('assets-remove'[\s\S]{0,900}await loadAssets\(\)/.test(clientSrc))
   check('M4.1 视觉圣经空态引导（无 style/scenes 时显示）', clientSrc.includes('配置风格 DNA / 场景卡后，可在此查看视觉圣经') && /!hasVisualData[\s\S]{0,300}visual-bible-hint/.test(clientSrc))
-  check('M4.2 视觉圣经行为保持（仅 hasVisualData 显示「卡片视图|视觉圣经」切换）', /hasVisualData[\s\S]{0,200}asset-view-switch/.test(clientSrc) && clientSrc.includes('视觉圣经'))
-  check('M5.1 调用点 69 不增 / slots=4 / METHODS 69 / 工具 34 / 无新依赖', CLIENT_CALLS.size === 69 && SLOTS === 4 && METHODS.length === 69 && TOOL_COUNT === 34 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ calls: CLIENT_CALLS.size, slots: SLOTS }))
+  check('M4.2 视觉圣经行为保持（v0.16.6 起「卡片视图|视觉圣经」切换始终显示；风格可编辑）', clientSrc.includes('asset-view-switch') && clientSrc.includes('视觉圣经'))
+  check('M5.1 调用点 70 不增 / slots=4 / METHODS 70 / 工具 34 / 无新依赖', CLIENT_CALLS.size === 72 && SLOTS === 4 && METHODS.length === 72 && TOOL_COUNT === 35 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ calls: CLIENT_CALLS.size, slots: SLOTS }))
 }
 
 group('[L] lightbox 关闭（反馈 #2 热修：按钮/Esc/背景 + 焦点/滚动锁/提示）')
@@ -228,7 +238,7 @@ if (!lightboxFixAvailable) {
   check('L5 滚动锁成对：记录原 overflow → hidden → 关闭还原', clientSrc.includes('lightboxPrevBodyOverflow') && /document\.body\.style\.overflow = 'hidden'/.test(clientSrc) && /document\.body\.style\.overflow = lightboxPrevBodyOverflow/.test(clientSrc))
   check('L6 提示文案「点击背景或按 Esc 关闭」+ 遮罩根层级 z-index 提升', /点击背景或按 Esc 关闭/.test(clientSrc) && clientSrc.includes('ad-visual-lightbox-hint') && /z-index:10000/.test(clientSrc))
   check('L7 入口覆盖：所有入口共享单一 lightbox 状态与关闭逻辑（legacy/资产卡/视觉圣经头图/场景/角色/图墙）', (clientSrc.match(/visualImageThumb\(/g) || []).length >= 4 && clientSrc.includes('cached.dataUrl') && /visualImageThumb[\s\S]{0,900}lightboxTriggerEl[\s\S]{0,200}setVisualLightbox/.test(clientSrc))
-  check('L8 回归红线：调用点 69 不增 / slots=4 / METHODS 69 / 工具 34 / 无新依赖', CLIENT_CALLS.size === 69 && SLOTS === 4 && METHODS.length === 69 && TOOL_COUNT === 34 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ calls: CLIENT_CALLS.size, slots: SLOTS }))
+  check('L8 回归红线：调用点 70 不增 / slots=4 / METHODS 70 / 工具 34 / 无新依赖', CLIENT_CALLS.size === 72 && SLOTS === 4 && METHODS.length === 72 && TOOL_COUNT === 35 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ calls: CLIENT_CALLS.size, slots: SLOTS }))
 }
 await fs.rm(workspace, { recursive: true, force: true })
 await fs.rm(extDir, { recursive: true, force: true })

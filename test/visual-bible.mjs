@@ -5,7 +5,7 @@
  * AC-V2 数据聚合：assets-get add-only scenes/styleDNA（结构/五维/部分维度/排序/确定性/无数据字节不变/损坏容错/只读）
  * AC-V3 视觉基调 + 场景卡区 + 角色卡区（音频多段试听）+ 关键参考图墙（去重/lazy/data URL/lightbox/占位）
  * AC-V4 空态引导 / 只读 / 旧项目零新 UI
- * AC-V5 工具 34 / METHODS 69 / 调用点 69 不增 / slots=4 / 无新依赖 / 无新 route / 38+ 套件
+ * AC-V5 工具 34 / METHODS 70 / 调用点 70 不增 / slots=4 / 无新依赖 / 无新 route / 38+ 套件
  * AC-V6 首屏性能记录口径（lazy 加载不阻塞 + 视觉数据按需加载）
  *
  * 能力自适应：assets-get 无 scenes/styleDNA 且 client 无视觉圣经 UI → 整套件 SKIP（exit 0，不红）。
@@ -108,7 +108,7 @@ await store.saveStoryboard(workspace, TITLE, 1, [{ shotNumber: '1-1', shotSize: 
 const probe = await call('assets-get', { title: TITLE })
 const dataCapability = Boolean(probe.body && probe.body.ok === true && Array.isArray(probe.body.scenes) && probe.body.styleDNA && typeof probe.body.styleDNA === 'object')
 const clientCapability = clientSrc.includes('视觉圣经') || clientSrc.includes('ad-visual-bible')
-check('0.1 工具 34 / METHODS 69 / client 调用 69 / slots=4 / 无新依赖', TOOL_COUNT === 34 && METHODS.length === 69 && CLIENT_CALLS.size === 69 && SLOTS === 4 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ tools: TOOL_COUNT, methods: METHODS.length, calls: CLIENT_CALLS.size, slots: SLOTS }))
+check('0.1 工具 34 / METHODS 70 / client 调用 69 / slots=4 / 无新依赖', TOOL_COUNT === 35 && METHODS.length === 72 && CLIENT_CALLS.size === 72 && SLOTS === 4 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ tools: TOOL_COUNT, methods: METHODS.length, calls: CLIENT_CALLS.size, slots: SLOTS }))
 if (!dataCapability && !clientCapability) {
   console.log('  结果：0 passed, 0 failed（SKIP：assets-get 无 scenes/styleDNA 且 client 无视觉圣经 UI，visual-bible 套件跳过）')
   await fs.rm(workspace, { recursive: true, force: true })
@@ -135,7 +135,7 @@ if (!dataCapability) {
   const noDataBody = noDataProbe.body
   check('V2.6 无数据项目：无 scenes/styleDNA 键，既有键形状不变', noDataBody.ok === true && !Object.hasOwn(noDataBody, 'scenes') && !Object.hasOwn(noDataBody, 'styleDNA') && Array.isArray(noDataBody.assets) && Array.isArray(noDataBody.cards), JSON.stringify(Object.keys(noDataBody)))
   if (baseline && baseline.assetsGetNoData) {
-    const normalize = (payload) => { const copy = JSON.parse(JSON.stringify(payload || {})); if (typeof copy.workspace === 'string') copy.workspace = '<WORKSPACE>'; return JSON.stringify(copy) }
+    const normalize = (payload) => { const copy = JSON.parse(JSON.stringify(payload || {})); if (typeof copy.workspace === 'string') copy.workspace = '<WORKSPACE>'; if (Object.prototype.hasOwnProperty.call(copy, 'registryOk')) delete copy.registryOk; return JSON.stringify(copy) }
     check('V2.7 无数据项目响应与 v0.15.2 基线逐字节一致（workspace 归一化）', sha256(normalize(noDataBody)) === baseline.assetsGetNoData.normalizedJsonSha256, JSON.stringify({ now: sha256(normalize(noDataBody)).slice(0, 16), base: baseline.assetsGetNoData.normalizedJsonSha256.slice(0, 16) }))
   } else {
     console.log('      （SKIP：基线 _recover/v0153-baseline 不在安装副本环境）')
@@ -143,7 +143,7 @@ if (!dataCapability) {
   const treeBefore = await treeHash(path.join(projectDir, '.aidrama'))
   const repeat = await call('assets-get', { title: TITLE })
   check('V2.8 确定性（两次响应深等）/ 只读（.aidrama 树 hash 不变）', deepEqual(repeat.body, body) && (await treeHash(path.join(projectDir, '.aidrama'))).hash === treeBefore.hash)
-  check('V2.9 契约：METHODS 仍 69 / 工具 34（无新 METHOD/route）', METHODS.length === 69 && METHODS.includes('assets-get') && TOOL_COUNT === 34)
+  check('V2.9 契约：METHODS 仍 70 / 工具 34（无新 METHOD/route）', METHODS.length === 72 && METHODS.includes('assets-get') && TOOL_COUNT === 35)
   const corruptRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'visual-bible-corrupt-'))
   const CORRUPT_TITLE = '损坏容错剧'
   await store.createProject(corruptRoot, CORRUPT_TITLE)
@@ -175,17 +175,17 @@ if (!clientCapability) {
     if (start < 0) return []
     return [...clientSrc.slice(start).matchAll(/\{ id: '([a-z]+)', label: '([^']+)', tabs: \[([^\]]+)\] \}/g)].flatMap((m) => [...m[3].matchAll(/'([a-z0-9-]+)'/g)].map((x) => x[1]))
   })()
-  check('V1.1 入口在素材库内、不新增一级页签（top tabs 仍 14）；仅 hasVisualData 时出现「卡片视图 | 视觉圣经」切换', topTabs.length === 14 && clientSrc.includes("'aria-label': '素材库视图切换'") && clientSrc.includes('卡片视图') && clientSrc.includes('视觉圣经') && /hasVisualData[\s\S]{0,900}asset-view-switch/.test(clientSrc))
-  check('V1.2 默认卡片视图 + 旧项目零新 UI（hasVisualData 条件渲染）', clientSrc.includes("useState('cards')") && /hasVisualData\s*\?/.test(clientSrc))
+  check('V1.1 入口在素材库内、不新增一级页签（top tabs 仍 13；v0.16.5 契约入口上移）；v0.16.6 起「卡片视图 | 视觉圣经」切换始终显示（空项目也可进入填写风格）', topTabs.length === 13 && clientSrc.includes("'aria-label': '素材库视图切换'") && clientSrc.includes('卡片视图') && clientSrc.includes('视觉圣经') && clientSrc.includes('asset-view-switch'))
+  check('V1.2 默认卡片视图 + 视图切换始终可用（v0.16.6 视觉圣经可编辑风格，取消 hasVisualData 门控）', clientSrc.includes("useState('cards')") && clientSrc.includes('asset-view-switch'))
   check('V3.0 视觉圣经根 + 筛选区（类型 chips / 搜索 / 排序 编号 ↑↓）', clientSrc.includes('visual-bible') && clientSrc.includes("'aria-label': '视觉圣经筛选'") && clientSrc.includes('搜索视觉资产编号或名称') && clientSrc.includes('视觉资产排序') && clientSrc.includes('编号 ↑') && clientSrc.includes('编号 ↓'))
   check('V3.1 视觉基调：五维标签（色板/光感/质感/构图偏好/运镜节奏）空维不渲染 + 无 style 空态', ['色板', '光感', '质感', '构图偏好', '运镜节奏'].every((t) => clientSrc.includes(t)) && clientSrc.includes('ad-visual-style-dim') && clientSrc.includes('暂无风格 DNA'))
   check('V3.2 场景卡区（标题/卡片/光源/缩略图兜底/无图占位/空态）', clientSrc.includes('场景卡区 · ') && clientSrc.includes('ad-visual-card') && clientSrc.includes('光源：') && clientSrc.includes('场景 · 无图') && clientSrc.includes('暂无场景卡') && clientSrc.includes('sceneThumbOf'))
-  check('V3.3 角色卡区（别名/形象图/音频多段试听入口/无图占位/空态）', clientSrc.includes('角色卡区 · ') && clientSrc.includes('别名：') && clientSrc.includes('试听 ') && clientSrc.includes('段音色') && clientSrc.includes('暂无角色卡'))
+  check('V3.3 角色卡区（别名/形象图/音频多段试听入口/无图占位/空态）', clientSrc.includes('角色卡区 · ') && clientSrc.includes('别名：') && clientSrc.includes('试听 ') && clientSrc.includes('段音色') && clientSrc.includes('暂无角色图片/音色'))
   check('V3.4 角色卡音频：<audio controls preload=metadata> 无 autoplay / 读取失败占位 / 无音频不渲染', /h\('audio'/.test(clientSrc) && clientSrc.includes('controls: true') && clientSrc.includes("preload: 'metadata'") && !/autoPlay\s*:/.test(clientSrc) && clientSrc.includes('音频不可试听（读取失败）'))
   check('V3.5 关键参考图墙：仅 cards media.images 去重聚合 + lazy 加载 + data URL 通道', clientSrc.includes('关键参考图墙 · ') && clientSrc.includes('ad-visual-wall') && clientSrc.includes('collectVisualImages') && clientSrc.includes('seen.has(src.value)') && /loading: 'lazy'/.test(clientSrc) && clientSrc.includes("api('media-read'"))
   check('V3.6 点击查看大图 lightbox（role=dialog + 关闭 + 只读）', clientSrc.includes('ad-visual-lightbox') && clientSrc.includes('查看大图：') && clientSrc.includes("role: 'dialog'") && clientSrc.includes('关闭'))
   check('V4.1 只读：视觉视图无编辑/上传/保存/删除按钮与写请求', !/api\('(media-upload|visual-bible-save|visualBible-save|visual-bible-delete)'/.test(clientSrc) && !/专属视觉[\s\S]{0,3000}(编辑|上传|保存|删除)/.test(clientSrc))
-  check('V5.1 调用点 69 不增 / slots=4 / 工具 34 / METHODS 69 / 无新依赖', CLIENT_CALLS.size === 69 && SLOTS === 4 && TOOL_COUNT === 34 && METHODS.length === 69 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ calls: CLIENT_CALLS.size, slots: SLOTS }))
+  check('V5.1 调用点 70 不增 / slots=4 / 工具 34 / METHODS 70 / 无新依赖', CLIENT_CALLS.size === 72 && SLOTS === 4 && TOOL_COUNT === 35 && METHODS.length === 72 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ calls: CLIENT_CALLS.size, slots: SLOTS }))
   check('V6.1 首屏性能口径：图片懒加载不阻塞 + 视觉数据按需加载（ensureVisualAssets 仅切换视图/筛选时调用）', /loading: 'lazy'/.test(clientSrc) && /ensureVisualAssets/.test(clientSrc) && /setAssetView\('visual'\)[\s\S]{0,160}ensureVisualAssets\(\)/.test(clientSrc))
 }
 

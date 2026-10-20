@@ -70,7 +70,9 @@ check('not-found ← 无内容可定稿', r.ok === false && r.code === 'not-foun
 r = await run('drama_save_outline', { title: '契约测试剧', rows: 'oops' })
 check('invalid-args ← 总纲不是数组', r.ok === false && r.code === 'invalid-args', JSON.stringify({ code: r.code, reason: r.reason }))
 
-r = await run('drama_add_asset', { title: '契约测试剧', source: path.join(root, 'no-such-asset-xyz.png') })
+// v0.15.8（task-125）：登记路径必须项目内 → 缺失文件用项目内相对路径测试 not-found
+const projectDir = path.join(root, 'AI短剧', '契约测试剧')
+r = await run('drama_add_asset', { title: '契约测试剧', source: path.join('素材', 'no-such-asset-xyz.png') })
 check('not-found ← 素材文件不存在', r.ok === false && r.code === 'not-found', JSON.stringify({ code: r.code, reason: r.reason }))
 
 r = await run('drama_budget', { title: '契约测试剧', action: 'set', limitPoints: 0 })
@@ -81,7 +83,9 @@ check('budget-exceeded ← 预算闸门拦截', r.ok === false && r.code === 'bu
 r = await run('drama_canvas_status', { title: '契约测试剧', backend: 'libtv' })
 check('upstream-unavailable ← 后端不可用', r.ok === false && r.code === 'upstream-unavailable', JSON.stringify({ code: r.code, reason: r.reason }))
 
-const assetFile = path.join(root, 'asset.png')
+// v0.15.8（task-125）：项目外登记被拒 → fixture 改为项目内素材路径（项目内相对/绝对均可）
+const assetFile = path.join(projectDir, '素材', 'asset.png')
+await fs.mkdir(path.dirname(assetFile), { recursive: true })
 await fs.writeFile(assetFile, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
 r = await run('drama_add_asset', { title: '契约测试剧', source: assetFile })
 check('素材首次登记成功', r.ok === true, JSON.stringify(r).slice(0, 100))
@@ -131,7 +135,7 @@ for (const def of defs) {
   if (!okShape || !failShape) executed.push(`${def.name}: ${threw ? 'throw ' + threw : JSON.stringify(result).slice(0, 80)}`)
 }
 check('34/34 空参数 execute 不抛异常且满足失败契约', executed.length === 0, executed.join(' | '))
-check('空参数下成功/失败均可判定', defs.length === 34, String(defs.length))
+check('空参数下成功/失败均可判定', defs.length === 35, String(defs.length))
 
 await fs.rm(root, { recursive: true, force: true })
 console.log(`\n结果：${passed} passed, ${failed} failed`)

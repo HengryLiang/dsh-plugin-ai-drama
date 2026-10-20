@@ -471,8 +471,8 @@ if (GATE) {
   // AC-S5 口径（Lead 2026-10-18 校准，实测校准原则）：3 次连续复跑 median(RSS 增量) ≤50MB 且 max ≤55MB；
   // 单次运行时以 max 上限 55MB 作硬门禁（median 由 3 次复跑在证据层汇总计算）。
   gateCheck('AC-S5', `100 集加载后 RSS 增量 ${rssDeltaMB.toFixed(1)}MB ≤ 55MB（单次 max 上限；3 次 median≤50/max≤55 口径）`, rssDeltaMB <= 55, `${rssDeltaMB.toFixed(2)}MB（before=${(RSS_BEFORE_SEARCH / 1048576).toFixed(1)}MB, after=${(rssAfter / 1048576).toFixed(1)}MB）`)
-  gateCheck('AC-S6', 'METHODS 仍 = 69（task-110 media-read +1）', METHODS.length === 69, String(METHODS.length))
-  gateCheck('AC-S6', '生产工具面仍 34', defs.length === 34, String(defs.length))
+  gateCheck('AC-S6', 'METHODS 仍 = 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）', METHODS.length === 72, String(METHODS.length))
+  gateCheck('AC-S6', '生产工具面仍 34', defs.length === 35, String(defs.length))
   gateCheck('AC-S6', '无新增外部依赖', !pkgGate.dependencies || Object.keys(pkgGate.dependencies).length === 0, JSON.stringify(pkgGate.dependencies || {}))
   gateCheck('AC-S7', '旧项目兼容：无索引时检索不报错（懒构建/回退）', noErrors, JSON.stringify({ indexDirBefore, indexDirAfter }))
   gateCheck('AC-S7b', '索引懒构建：.aidrama/index/retrieval-index.json 存在且 schemaVersion=1', indexExists && indexSchemaVersion === 1, JSON.stringify({ indexExists, indexSchemaVersion, rebuilt: indexRebuilt }))

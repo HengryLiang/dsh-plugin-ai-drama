@@ -41,3 +41,8 @@ user-invocable: true
 ## 交付
 
 `drama_save_draft`（`kind: "episode"`，`order` 为集数，`content` 为剧本正文）写入草稿区。
+
+## 写入稳健性（2026-10-20 补充）
+
+- 剧本正文用**一个长字符串 + `\n` 换行转义**，不要手写多层嵌套 JSON 对象。
+- 一次只交一集；若模型层报 `tool input is invalid JSON`，先查是否已落盘（草稿区/审计），再拆小重发。

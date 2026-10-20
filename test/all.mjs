@@ -51,6 +51,18 @@ const suites = [
   ['v0.15.2 台词音效重定位（迭代2）', 'dialogue-audio.mjs'],
   ['v0.15.3 视觉圣经专区（迭代3）', 'visual-bible.mjs'],
   ['v0.15.4 素材库2.0 旧登记统一视图', 'legacy-media.mjs'],
+  ['v0.15.8 登记仅项目内（EXT）', 'ext-registration.mjs'],
+  ['v0.15.9 扫描素材目录（D2C）', 'material-scan.mjs'],
+  ['v0.15.10 写路径安全审计（C-5）', 'path-audit.mjs'],
+  ['v0.15.11 一键导入素材（E13）', 'assets-import.mjs'],
+  ['v0.16.1 产物入库安全硬化（C-6）', 'intake-hardening.mjs'],
+  ['v0.16.4 视觉圣经图墙分组（C-1）', 'visual-bible-grouping.mjs'],
+  ['v0.16.7 跨项目资产复用（C-2）', 'cross-project-copy.mjs'],
+  ['v0.16.8 跨对象复制（I5-1）', 'cross-object-copy.mjs'],
+  ['v0.16.3 八大基本设定（C1 / E14）', 'contract-world.mjs'],
+  ['v0.16.6 C2 视觉圣经定向/冻结（E15+H-7）', 'style-direction.mjs'],
+  ['v0.16.9 资产多轮审核（C3 / E16+H-8）', 'asset-review.mjs'],
+  ['v0.16.10 写路径加固+数据可靠性（M2+M3）', 'm2m3-data-safety.mjs'],
   ['Harness 兼容性（preset 变量/peer 范围）', 'preset-vars.mjs'],
 ]
 /** 显式 skip 理由（登记在此处，验收证据引用同一份清单）。 */

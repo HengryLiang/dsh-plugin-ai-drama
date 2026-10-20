@@ -7,7 +7,7 @@
  *   - 去重：重复 URL 去重且顺序保留；thumbnail 缺省不写（读回无键）
  *   - 确定性：两独立项目同输入 cards.json 字节一致；按 id 排序、无时间戳
  *   - 旧项目：无 cards → getAssetCards 返回 []、不建文件/不报错；legacy .aidrama/assets.json 零改动
- *   - 契约：工具 34 / METHODS 69（task-110 media-read +1） / 无新 route / 无新依赖
+ *   - 契约：工具 34 / METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） / 无新 route / 无新依赖
  *
  * 版本自适应：保存含 media 的资产卡后回读不到 media → 当前工件尚无该能力（≤v0.15.0）→ 整套件 SKIP（exit 0）。
  * 运行：node test/asset-media.mjs
@@ -92,7 +92,7 @@ if (!capabilityDetected) {
   process.exit(0)
 }
 check('0.1 资产卡 media 能力已生效（写入/回读 media.images）', capabilityDetected)
-check('0.2 工具 34 / METHODS 69（task-110 media-read +1） / client 调用 68 / slots=4 / 无新依赖', TOOL_COUNT === 34 && METHODS.size === 69 && CLIENT_CALLS.size === 69 && SLOTS === 4 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ tools: TOOL_COUNT, methods: METHODS.size, calls: CLIENT_CALLS.size, slots: SLOTS }))
+check('0.2 工具 34 / METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） / client 调用 68 / slots=4 / 无新依赖', TOOL_COUNT === 35 && METHODS.size === 72 && CLIENT_CALLS.size === 72 && SLOTS === 4 && Object.keys(pkg.dependencies || {}).length === 0, JSON.stringify({ tools: TOOL_COUNT, methods: METHODS.size, calls: CLIENT_CALLS.size, slots: SLOTS }))
 
 group('[1] media add-only 写入/回读（images/thumbnail/顺序）')
 const readCard = (id) => store.getAssetCards(workspace, TITLE).then((cards) => cards.find((card) => card.id === id) || null)
@@ -264,7 +264,7 @@ if (!MEDIA_READ_AVAILABLE) {
   check('2b.9 确定性：两次响应严格相等', JSON.stringify(repeat1.body) === JSON.stringify(repeat2.body))
   check('2b.10 只读：.aidrama 树 hash 不变', (await treeHash(path.join(projectDir, '.aidrama'))).hash === mediaRootHashBefore.hash)
   // E. 契约
-  check('2b.11 METHODS=69 含 media-read / 工具 34（H 类契约 task-110 批准）', METHODS.size === 69 && METHODS.has('media-read') && TOOL_COUNT === 34, String(METHODS.size))
+  check('2b.11 METHODS=69 含 media-read / 工具 34（H 类契约 task-110 批准）', METHODS.size === 72 && METHODS.has('media-read') && TOOL_COUNT === 35, String(METHODS.size))
   await fs.rm(OUTSIDE_DIR, { recursive: true, force: true })
 }
 
@@ -342,8 +342,8 @@ if (hasBaseline) {
 }
 
 group('[4] 契约 / 清理')
-check('4.1 工具 34 / METHODS 69（task-110 media-read +1） / client 调用 68 / slots=4 不变', TOOL_COUNT === 34 && METHODS.size === 69 && CLIENT_CALLS.size === 69 && SLOTS === 4)
-check('4.2 无新 route：METHODS=69 且 asset/media 路由仅既有 3 条 + 已批准 media-read', METHODS.size === 69 && JSON.stringify([...METHODS].filter((name) => /asset|media/i.test(name)).sort()) === JSON.stringify(['assets-add', 'assets-get', 'assets-remove', 'media-read']), JSON.stringify([...METHODS].filter((name) => /asset|media/i.test(name)).sort()))
+check('4.1 工具 34 / METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） / client 调用 68 / slots=4 不变', TOOL_COUNT === 35 && METHODS.size === 72 && CLIENT_CALLS.size === 72 && SLOTS === 4)
+check('4.2 无新 route：METHODS=70 且 asset/media 路由仅既有 3 条 + 已批准 media-read/assets-import', METHODS.size === 72 && JSON.stringify([...METHODS].filter((name) => /asset|media/i.test(name)).sort()) === JSON.stringify(['asset-save', 'assets-add', 'assets-get', 'assets-import', 'assets-remove', 'media-read']), JSON.stringify([...METHODS].filter((name) => /asset|media/i.test(name)).sort()))
 check('4.3 无新依赖', Object.keys(pkg.dependencies || {}).length === 0)
 await fs.rm(workspace, { recursive: true, force: true })
 await fs.rm(ROOT2, { recursive: true, force: true })

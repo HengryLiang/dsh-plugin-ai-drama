@@ -135,25 +135,25 @@ check('isMainAgent(子)=false（origin=subagent 回退判定）', isMainAgent(su
 check('非短剧模式 → mode=none', dramaToolGovernanceFor(plainAgent, {}).mode === 'none')
 const govMain = dramaToolGovernanceFor(mainAgent, {})
 check('主 Agent → mode=register', govMain.mode === 'register' && govMain.reason === 'main-agent', JSON.stringify(govMain).slice(0, 120))
-check('主 Agent names = 34 个 drama_*', govMain.names.length === 34 && govMain.names.every((n) => DRAMA_TOOL_NAMES.includes(n)), String(govMain.names.length))
+check('主 Agent names = 34 个 drama_*', govMain.names.length === 35 && govMain.names.every((n) => DRAMA_TOOL_NAMES.includes(n)), String(govMain.names.length))
 const govSub = dramaToolGovernanceFor(subAgent, {})
 check('子 Agent → mode=restrict（fail-closed）', govSub.mode === 'restrict' && govSub.reason === 'subagent-tool-governance', JSON.stringify(govSub).slice(0, 120))
 check('子 Agent 不注册任何工具名', govSub.names.length === 0, String(govSub.names.length))
-check('子 Agent deny 覆盖全部 34 个 drama_*', govSub.deny.length === 34 && DRAMA_TOOL_NAMES.every((n) => govSub.deny.includes(n)))
+check('子 Agent deny 覆盖全部 34 个 drama_*', govSub.deny.length === 35 && DRAMA_TOOL_NAMES.every((n) => govSub.deny.includes(n)))
 const govMainTest = dramaToolGovernanceFor(mainAgent, { DSH_AI_DRAMA_TEST_TOOLS: '1' })
 const govSubTest = dramaToolGovernanceFor(subAgent, { DSH_AI_DRAMA_TEST_TOOLS: '1' })
-check('测试开关开：主 Agent names=36', govMainTest.names.length === 36, String(govMainTest.names.length))
-check('测试开关开：子 Agent deny=36（测试工具也屏蔽）', govSubTest.deny.length === 36, String(govSubTest.deny.length))
+check('测试开关开：主 Agent names=37', govMainTest.names.length === 37, String(govMainTest.names.length))
+check('测试开关开：子 Agent deny=37（测试工具也屏蔽）', govSubTest.deny.length === 37, String(govSubTest.deny.length))
 check('dramaTestToolsEnabled 默认 false', dramaTestToolsEnabled({}) === false && dramaTestToolsEnabled({ DSH_AI_DRAMA_TEST_TOOLS: '0' }) === false)
 check('dramaTestToolsEnabled=1 时 true', dramaTestToolsEnabled({ DSH_AI_DRAMA_TEST_TOOLS: '1' }) === true)
 
 /* ------------------------------------------------------------------ [2] */
 group('[2] 工具面：生产 34 / 测试开关 36，且全部带 output 契约')
 const defsProd = createToolDefs({ rootOf: () => workspace, backendOf: () => null })
-check('默认 createToolDefs = 34', defsProd.length === 34, String(defsProd.length))
+check('默认 createToolDefs = 34', defsProd.length === 35, String(defsProd.length))
 check('默认名单与 DRAMA_TOOL_NAMES 一致', defsProd.every((d) => DRAMA_TOOL_NAMES.includes(d.name)) && defsProd.length === DRAMA_TOOL_NAMES.length)
 const defsTest = createToolDefs({ rootOf: () => workspace, backendOf: () => null }, { testTools: true })
-check('testTools:true = 36', defsTest.length === 36, String(defsTest.length))
+check('testTools:true = 37', defsTest.length === 37, String(defsTest.length))
 check('测试工具进入工具面', DRAMA_TEST_TOOL_NAMES.every((n) => defsTest.some((d) => d.name === n)), DRAMA_TEST_TOOL_NAMES.join(','))
 check('测试工具也带 output.schema/render', defsTest.filter((d) => DRAMA_TEST_TOOL_NAMES.includes(d.name)).every((d) => d.output && d.output.schema && typeof d.output.render === 'function'))
 const testEcho = await defsTest.find((d) => d.name === 'drama_test_echo').execute({ message: 'ping' }, {})
@@ -165,10 +165,10 @@ group('[3] 挂载 harness：主 Agent 注册 34 / 子 Agent 0 注册 + restrict(
   const h = makeHarness()
   h.state.agents = [h.makeAgent('a-main'), h.makeAgent('a-sub', { subagent: true })]
   apply(h.ctx, { root: workspace })
-  check('主 Agent 注册 34 个工具', h.registered.length === 34, String(h.registered.length))
-  check('子 Agent 未额外注册（总数仍 34，全部来自主 Agent）', h.registered.length === 34 && h.registered.every((t) => DRAMA_TOOL_NAMES.includes(t.name)), String(h.registered.length))
+  check('主 Agent 注册 34 个工具', h.registered.length === 35, String(h.registered.length))
+  check('子 Agent 未额外注册（总数仍 34，全部来自主 Agent）', h.registered.length === 35 && h.registered.every((t) => DRAMA_TOOL_NAMES.includes(t.name)), String(h.registered.length))
   check('子 Agent 触发 1 次 restrict', h.restrictCalls.length === 1, JSON.stringify(h.restrictCalls.map((c) => c.deny && c.deny.length)))
-  check('restrict deny 覆盖 34 个工具', h.restrictCalls[0] && Array.isArray(h.restrictCalls[0].deny) && h.restrictCalls[0].deny.length === 34)
+  check('restrict deny 覆盖 34 个工具', h.restrictCalls[0] && Array.isArray(h.restrictCalls[0].deny) && h.restrictCalls[0].deny.length === 35)
   check('挂载过程无告警（正常路径）', h.warnings.length === 0, h.warnings.join(' | '))
   const diag = await callRoute(h, 'agents-status', {})
   check('agents-status 报告 restrictedAgents 含子 Agent', Array.isArray(diag.body.attach.restrictedAgents) && diag.body.attach.restrictedAgents.includes('a-sub'), JSON.stringify(diag.body.attach.restrictedAgents))
@@ -210,7 +210,7 @@ group('[5] 测试工具环境开关：DSH_AI_DRAMA_TEST_TOOLS=1 才注册 36')
   const prev = process.env.DSH_AI_DRAMA_TEST_TOOLS
   delete process.env.DSH_AI_DRAMA_TEST_TOOLS
   apply(h0.ctx, { root: workspace })
-  check('env 未设：注册 34', h0.registered.length === 34, String(h0.registered.length))
+  check('env 未设：注册 34', h0.registered.length === 35, String(h0.registered.length))
 
   const h1 = makeHarness()
   h1.state.agents = [h1.makeAgent('a-main')]
@@ -221,7 +221,7 @@ group('[5] 测试工具环境开关：DSH_AI_DRAMA_TEST_TOOLS=1 才注册 36')
     if (prev === undefined) delete process.env.DSH_AI_DRAMA_TEST_TOOLS
     else process.env.DSH_AI_DRAMA_TEST_TOOLS = prev
   }
-  check('env=1：注册 36（含测试工具）', h1.registered.length === 36, String(h1.registered.length))
+  check('env=1：注册 37（含测试工具）', h1.registered.length === 37, String(h1.registered.length))
   check('env=1：测试工具带 output', h1.registered.filter((t) => DRAMA_TEST_TOOL_NAMES.includes(t.name)).every((t) => t.output && typeof t.output.render === 'function'))
   const diag = await callRoute(h1, 'agents-status', {})
   check('agents-status 报告 testToolsEnabled=true', diag.body.attach.testToolsEnabled === true, JSON.stringify({ testToolsEnabled: diag.body.attach.testToolsEnabled }))

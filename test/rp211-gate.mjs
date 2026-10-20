@@ -4,7 +4,7 @@
  * 来源：task-47 / P2-好用阶段-规划与需求挖掘机制-v1.md §18.6
  * 夹具：10 缺陷类 × 2 例 = 20 缺陷样例 + 10 正常样例（误报基准）；离线 fake llm 录制回放。
  * 通过线（固化）：类召回 10/10、逐例 100%、定位集+场 100%、证据可核对 100%、
- *              建议可执行 100%、正常样例误报 0/10、稳定性两次一致；红线：工具 34/METHODS 69（task-110 media-read +1）/旧数据 hash。
+ *              建议可执行 100%、正常样例误报 0/10、稳定性两次一致；红线：工具 34/METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）/旧数据 hash。
  *
  * 运行：node test/rp211-gate.mjs
  */
@@ -267,9 +267,9 @@ check(`人工抽检条目数 = ceil(20% × ${allFindings.length}) = ${spotCount}
 
 group('[5] 红线（工具面 / METHODS / 旧数据 hash）')
 const defsForCount = toolsMod.createToolDefs({ rootOf: () => workspace, backendOf: () => null })
-check('工具面仍 = 34', defsForCount.length === 34, String(defsForCount.length))
+check('工具面仍 = 34', defsForCount.length === 35, String(defsForCount.length))
 const { METHODS } = await import(pathToFileURL(path.join(PLUGIN_ROOT, 'index.js')).href)
-check('METHODS 仍 = 69（task-110 media-read +1）', METHODS.length === 69, String(METHODS.length))
+check('METHODS 仍 = 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）', METHODS.length === 72, String(METHODS.length))
 let oldDataOk = true
 let oldDataDetail = 'SKIP（基线快照缺失）'
 try {

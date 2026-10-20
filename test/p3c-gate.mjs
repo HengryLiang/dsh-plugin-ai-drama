@@ -13,7 +13,7 @@
  *   D. 正常样例 high 误报 =0（严格）；若 >0 且 DSH_P3C_ALLOW_NORMAL_HIGH_CAVEAT=1 → 记 WARN（caveat，需证据文档说明）
  *   E. R-P2-11 回放并列：R-P2-11 基准集回放 pass、自然内容 live smoke 基线 pass
  *   F. 版本间不退化：对比上一版自然基线（类召回/定位/证据不退化）
- *   G. 红线：工具 34 / METHODS 69（task-110 media-read +1） / 无新依赖 / 旧数据 hash 不变（证据 JSON）
+ *   G. 红线：工具 34 / METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） / 无新依赖 / 旧数据 hash 不变（证据 JSON）
  * 输出（通过/失败均写）：证据/P3-C-门禁-v0.9.0-2026-10-18.json
  */
 import fs from 'node:fs/promises'
@@ -149,9 +149,9 @@ const pkg = JSON.parse(await fs.readFile(path.join(pluginRoot, 'package.json'), 
 check('无新增外部依赖', !pkg.dependencies || Object.keys(pkg.dependencies).length === 0, JSON.stringify(pkg.dependencies || {}))
 const toolsMod = await import(pathToFileURL(path.join(pluginRoot, 'lib', 'tools.js')).href)
 const defs = toolsMod.createToolDefs({ rootOf: () => pluginRoot, backendOf: () => null })
-check('生产工具面 =34', defs.length === 34, String(defs.length))
+check('生产工具面 =34', defs.length === 35, String(defs.length))
 const { METHODS } = await import(pathToFileURL(path.join(pluginRoot, 'index.js')).href)
-check('METHODS =69（task-110 media-read +1）', METHODS.length === 69, String(METHODS.length))
+check('METHODS =69（task-110 media-read +1；v0.15.11 E13 assets-import +1）', METHODS.length === 72, String(METHODS.length))
 check('旧数据 32 文件 hash 不变', Boolean(oldData && oldData.pass === true), JSON.stringify(oldData && { pass: oldData.pass, files: oldData.baselineFiles }))
 
 /* 汇总与证据 */

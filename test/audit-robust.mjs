@@ -6,7 +6,7 @@
  * 修复口径（task-32）：
  *   ① 容错解析：去 ```json 围栏 → 修复字符串内未转义控制字符 → 去尾逗号 → 再失败向模型**重试一次**（附“仅输出合法 JSON”修复提示）→ 仍失败才降级；
  *   ② 降级报告保留 attempted provider/model/modelSource（非空/非 none）+ 可读 degradeReason；
- *   ③ 保持：工具 34 / METHODS 69（task-110 media-read +1） / 零新增 route / 预算与默认行为不变。
+ *   ③ 保持：工具 34 / METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） / 零新增 route / 预算与默认行为不变。
  *
  * 用例（fake llm，5 类模型输出）：
  *   [1] 正常 JSON → 解析成功（findings/meta 正常、单次调用）
@@ -15,7 +15,7 @@
  *   [4] 尾逗号 → 解析成功（去尾逗号）
  *   [5] 完全非 JSON → **重试一次后** degraded:true，且 meta 保留 attempted model/provider/modelSource（非空/非 none）+ degradeReason 可读
  *   [6] P2-6 增强 client 静态：timeoutMs 透传 + 审读标注 modelSource/modelFallback/degradeReason（未交付则 SKIP 该组）
- *   [7] 工程红线：工具 34 / METHODS 69（task-110 media-read +1） / slots=4（已批准终值）/ client 调用点 69（task-110 media-read +1）（M4 批1+批2 +10，已批准）/ 无新依赖 / 旧数据 32 文件 hash 不变
+ *   [7] 工程红线：工具 34 / METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） / slots=4（已批准终值）/ client 调用点 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）（M4 批1+批2 +10，已批准）/ 无新依赖 / 旧数据 32 文件 hash 不变
  *
  * 兼容策略：D-12 修复未落地（源码未出现 attempted/repair/tolerant 标记）时显式 SKIP；落地后自动生效。
  * 运行：node test/audit-robust.mjs
@@ -307,13 +307,13 @@ if (missingEnhancement.length > 0) {
 }
 
 /* ------------------------------------------------------------------ [7] */
-group('[7] 工程红线：工具 34 / METHODS 69（task-110 media-read +1） / slots=4（已批准终值）/ 调用点 69（task-110 media-read +1）（M4 批1+批2 +10 已批准）/ 无新依赖 / 旧数据 hash')
+group('[7] 工程红线：工具 34 / METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） / slots=4（已批准终值）/ 调用点 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）（M4 批1+批2 +10 已批准）/ 无新依赖 / 旧数据 hash')
 const defs = toolsMod.createToolDefs({ rootOf: () => workspace, backendOf: () => null })
-check('工具面仍 34', defs.length === 34, String(defs.length))
-check('METHODS 仍 = 69（task-110 media-read +1）', METHODS.length === 69, String(METHODS.length))
+check('工具面仍 34', defs.length === 35, String(defs.length))
+check('METHODS 仍 = 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）', METHODS.length === 72, String(METHODS.length))
 check('client slots.register = 4（v0.12.1 已批准终值）', (clientSrc.match(/slots\.register\(/g) || []).length === 4)
 const clientCalls = new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1]))
-check('client 去重调用点 = 69（task-110 media-read +1）（M4 批1+批2 +10，已批准登记）', clientCalls.size === 69, String(clientCalls.size))
+check('client 去重调用点 = 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）（M4 批1+批2 +10，已批准登记）', clientCalls.size === 72, String(clientCalls.size))
 const pkg = JSON.parse(await fs.readFile(path.join(pluginRoot, 'package.json'), 'utf8'))
 check('无新增外部依赖', !pkg.dependencies || Object.keys(pkg.dependencies).length === 0, JSON.stringify(pkg.dependencies || {}))
 const BASELINE_CANDIDATES = [

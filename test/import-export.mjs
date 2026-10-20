@@ -5,7 +5,7 @@
  * AC-25-2 无标记 MD 导入/旧项目导出行为与 v0.11.3 字节一致（基线 _recover/v0114-baseline/）
  * AC-25-3 导出 VCS/Markdown add-only 资产引用区 + 场景/风格注记（仅被引用且存在时）；JSON add-only；CSV 列序不变
  * AC-25-4 往返无损（导入→导出→再导入信息不丢）
- * AC-25-5 工具 34 / METHODS 69（task-110 media-read +1） / 无新 route / 无新依赖 / 旧数据 32 hash / all.mjs 36 套件 / 真实模型 0
+ * AC-25-5 工具 34 / METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） / 无新 route / 无新依赖 / 旧数据 32 hash / all.mjs 36 套件 / 真实模型 0
  *
  * 版本自适应：能力探测不到 2-5 行为 → 整套件 SKIP（exit 0，不红）。
  * 基线：`_recover/v0114-baseline/`（v0.11.3 现态；安装副本无该目录时字节断言 SKIP 注明）。
@@ -128,7 +128,7 @@ if (!capabilityDetected) {
 }
 check('0.1 2-5 API 已生效（parseInteropSections/buildInteropView/renderInteropMarkdown）', hasInteropApi)
 check('0.2 2-5 行为生效（导入 WARN 或导出资产引用区）', assetWarningDetected || exportBlockDetected, JSON.stringify({ assetWarningDetected, exportBlockDetected }))
-check('0.3 工具 34 / METHODS 69（task-110 media-read +1） / client 69（task-110 media-read +1）（M4 批1+批2 +10 已批准）/ 无新依赖', TOOL_COUNT === 34 && METHODS.size === 69 && CLIENT_CALLS.size === 69 && Object.keys(pkg.dependencies || {}).length === 0)
+check('0.3 工具 34 / METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） / client 69（task-110 media-read +1；v0.15.11 E13 assets-import +1）（M4 批1+批2 +10 已批准）/ 无新依赖', TOOL_COUNT === 35 && METHODS.size === 72 && CLIENT_CALLS.size === 72 && Object.keys(pkg.dependencies || {}).length === 0)
 check('0.4 TOOL_OUTPUTS.drama_import_script add-only 扩展（assetRefs/sceneHints/styleHints/interopSections）', /drama_import_script[\s\S]{0,4000}assetRefs/.test(toolsSrc) && /drama_import_script[\s\S]{0,4000}sceneHints/.test(toolsSrc) && /drama_import_script[\s\S]{0,4000}styleHints/.test(toolsSrc) && /drama_import_script[\s\S]{0,4000}interopSections/.test(toolsSrc))
 
 group('[1] AC-25-1 导入占位符/hints 匹配（WARN 不丢原文 / 不阻断 / 不自动创建）')
@@ -246,8 +246,8 @@ check('4.2 再导入 hints 与首次一致（幂等/无信息丢失）', deepEqu
 check('4.3 导出只读：style.json hash 不变', sha256(await fs.readFile(path.join(importRoot, 'AI短剧', I_TITLE, '.aidrama', 'style.json'))) === beforeStyleHash)
 
 group('[5] AC-25-5 契约 / 红线 / 清理')
-check('5.1 工具 34 / METHODS 69（task-110 media-read +1） / client 69（task-110 media-read +1）（M4 批1+批2 已批准）', TOOL_COUNT === 34 && METHODS.size === 69 && CLIENT_CALLS.size === 69)
-check('5.2 无新 route（既有 import/export 4 条不变，METHODS 69（task-110 media-read +1））', METHODS.size === 69 && JSON.stringify([...METHODS].filter((name) => /import|export/i.test(name)).sort()) === JSON.stringify(['export-project', 'import-apply', 'import-preview', 'voice-script-export']), JSON.stringify([...METHODS].filter((name) => /import|export/i.test(name))))
+check('5.1 工具 34 / METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） / client 69（task-110 media-read +1；v0.15.11 E13 assets-import +1）（M4 批1+批2 已批准）', TOOL_COUNT === 35 && METHODS.size === 72 && CLIENT_CALLS.size === 72)
+check('5.2 无新 route（既有 import/export 4 条不变，METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1））', METHODS.size === 72 && JSON.stringify([...METHODS].filter((name) => /import|export/i.test(name)).sort()) === JSON.stringify(['assets-import', 'export-project', 'import-apply', 'import-preview', 'voice-script-export']), JSON.stringify([...METHODS].filter((name) => /import|export/i.test(name))))
 check('5.3 无新依赖', Object.keys(pkg.dependencies || {}).length === 0)
 await fs.rm(importRoot, { recursive: true, force: true })
 await fs.rm(oldRoot, { recursive: true, force: true })

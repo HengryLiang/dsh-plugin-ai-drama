@@ -33,3 +33,9 @@ user-invocable: true
 
 `drama_save_draft`（`kind: "storyboard"`，`order` 为集数，`content` 为镜头数组的 JSON 字符串）写入草稿区，
 然后 `drama_check_consistency` 自检（重点看镜号重复与时长越界）。
+
+## 写入稳健性（2026-10-20 补充）
+
+- 镜头数组大时**分批提交**（每批建议 ≤10 镜），不要与人物/大纲等其他大参数并行写入。
+- 采纳分镜草稿成功后若宿主报 `value.result must be an object`，那是输出校验误报（v0.15.8 已修），数据已落盘，**不要重复采纳**。
+- 模型层报 `tool input is invalid JSON` 时先查审计/进度判断是否已落盘，未落盘再拆小重发。

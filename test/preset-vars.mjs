@@ -63,7 +63,16 @@ const peerRange = pkg.peerDependencies && pkg.peerDependencies['@deepseek-ai/dsh
 check('C7 声明 @deepseek-ai/dsh-skill-filesystem peer 依赖', typeof peerRange === 'string', String(peerRange))
 check('C8 peer 依赖为允许升级的范围（非单一预发布锁定）', typeof peerRange === 'string' && /[<>=^~*]/.test(peerRange) && !/^\d+\.\d+\.\d+-[0-9A-Za-z.-]+$/.test(peerRange), String(peerRange))
 check('C9 peer 范围覆盖 0.2.1-rc.2（当前用户 Harness 版本）', typeof peerRange === 'string' && /(>=|>)0\.2\.0-rc\.2/.test(peerRange) && !/<0\.2\.1/.test(peerRange), String(peerRange))
-check('C10 包版本已升到兼容修复版本（>=0.15.6）', /^0\.15\.(6|[7-9]|[1-9][0-9])/.test(pkg.version), pkg.version)
+// v0.16.0 QA 同步（测试侧）：原 C10 用 `^0\.15\.(6|[7-9]|[1-9][0-9])` 只支持 0.15.x，v0.16.0 安装态会误报；
+// 改为语义化版本数值比较（>=0.15.6，等价且更强），并保留 C7-C9 peer 范围断言。
+const c10Parts = String(pkg.version).split(/[.-]/).map((x) => Number(x))
+const c10AtLeast = (major, minor, patch) => {
+  const [a, b, c] = c10Parts
+  if (a !== major) return a > major
+  if (b !== minor) return b > minor
+  return c >= patch
+}
+check('C10 包版本已升到兼容修复版本（>=0.15.6）', c10AtLeast(0, 15, 6), pkg.version)
 
 const summary = {
   suite: 'harness-compat(preset-vars)',

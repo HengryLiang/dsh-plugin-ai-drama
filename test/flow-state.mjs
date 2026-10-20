@@ -158,8 +158,12 @@ check('E6：doc-save 非法 JSON → 400', badJson.status === 400 && badJson.bod
 const goodSave = await call('doc-save', { title: TITLE, path: FLOW_PATH, text: JSON.stringify(state0, null, 2), expectedHash: hash0 })
 check('E6：doc-save 合法 JSON + 匹配 hash → 200', goodSave.status === 200 && goodSave.body?.ok === true, JSON.stringify({ status: goodSave.status, body: goodSave.body }).slice(0, 200))
 const newHash = goodSave.body?.hash
+// v0.16.0 A-H1（加强，FS-09）：expectedHash 冲突必须仍 409 且**不写盘**（文件 sha256 前后不变）
+const flowFileHashBefore = sha256(await fs.readFile(flowFile, 'utf8'))
 const staleSave = await call('doc-save', { title: TITLE, path: FLOW_PATH, text: JSON.stringify(state0, null, 2), expectedHash: hash0 })
+const flowFileHashAfter = sha256(await fs.readFile(flowFile, 'utf8'))
 check('E6：doc-save stale expectedHash → 409 + code conflict + currentHash', staleSave.status === 409 && staleSave.body?.code === 'conflict' && staleSave.body?.ok === false && typeof staleSave.body?.currentHash === 'string' && staleSave.body.currentHash === newHash, JSON.stringify({ status: staleSave.status, code: staleSave.body?.code, currentHash: staleSave.body?.currentHash }).slice(0, 200))
+check('AC-A2/A-H1：expectedHash 冲突不写盘（文件 sha256 前后不变，数据安全链保留）', staleSave.status === 409 && flowFileHashBefore === flowFileHashAfter, JSON.stringify({ status: staleSave.status, unchanged: flowFileHashBefore === flowFileHashAfter }))
 
 /* ------------------------------------------------------------------ [2] */
 group('[2] Q4 + AC-F2：面板写内容 → 宿主同步 flow-state；确认动作（宽松模式）')
@@ -181,34 +185,43 @@ check('Q4：面板内容写路由映射存在（ROUTE_FLOW_STEPS）', /ROUTE_FLO
 check('AC-F3：工具侧强制门禁接线存在（assertStepAllowed/FLOW_TOOL_STRICT_STEPS）', /assertStepAllowed|FLOW_TOOL_STRICT_STEPS/.test(flowSrc))
 
 /* ------------------------------------------------------------------ [3] */
-group('[3] AC-F3：强制模式（strictMode）越步阻止 / 默认宽松（Q1 裁定）')
-// 项目级 strictMode:true → 确认 characters（outline 尚未 confirmed 的前置）应被阻止
+group('[3] A-H1（v0.16.0）：严格流程门禁整体停用 —— strictMode 不再阻塞写入/工具；字段保留（行为反转）')
+// 项目级 strictMode:true → 越步确认应放行（历史 strict 项目解封；Lead 已批 A-H1）
 const strictState = await saveFlowState((s) => ({ ...s, strictMode: true, steps: { ...s.steps, characters: 'not_started' } }))
-check('Q1：项目级 strictMode 可写入（默认 false → true）', strictState.status === 200 && strictState.body?.ok === true, JSON.stringify(strictState.body).slice(0, 160))
+check('Q1：项目级 strictMode 可写入（默认 false → true；历史字段保留）', strictState.status === 200 && strictState.body?.ok === true, JSON.stringify(strictState.body).slice(0, 160))
 const blockedConfirm = await saveFlowState((s) => ({ ...s, steps: { ...s.steps, outline: 'in_progress', characters: 'confirmed' } }))
-check('AC-F3：强制模式下越步确认（outline 未 confirmed 时确认 characters）→ 409 conflict 被阻止', blockedConfirm.status === 409 && blockedConfirm.body?.code === 'conflict', JSON.stringify({ status: blockedConfirm.status, code: blockedConfirm.body?.code, error: blockedConfirm.body?.error }).slice(0, 220))
+check('[AC-A2] A-H1：项目级 strict=true 越步确认 → 200/ok（不再 409 conflict）', blockedConfirm.status === 200 && blockedConfirm.body?.ok === true, JSON.stringify({ status: blockedConfirm.status, code: blockedConfirm.body?.code }).slice(0, 200))
+const strictAfterConfirm = await readFlowDoc()
+check('[AC-A2] A-H1：越步确认未被门禁拦截且落盘（characters 非 not_started；strictMode 字段保留 true）', ['confirmed', 'stale'].includes(statusOf(strictAfterConfirm.state, 'characters')) && strictAfterConfirm.state?.strictMode === true, JSON.stringify({ characters: statusOf(strictAfterConfirm.state, 'characters'), strictMode: strictAfterConfirm.state?.strictMode }).slice(0, 200))
 const looseState = await saveFlowState((s) => ({ ...s, strictMode: false }))
-check('Q1：切回宽松模式成功', looseState.status === 200 && looseState.body?.ok === true, JSON.stringify(looseState.body).slice(0, 120))
+check('Q1：切回宽松模式成功（strictMode 字段可写）', looseState.status === 200 && looseState.body?.ok === true, JSON.stringify(looseState.body).slice(0, 120))
 const allowedConfirm = await saveFlowState((s) => ({ ...s, steps: { ...s.steps, characters: 'confirmed' } }))
-check('AC-F3：宽松模式下同一写操作放行（只提示不阻止）', allowedConfirm.status === 200 && allowedConfirm.body?.ok === true, JSON.stringify({ status: allowedConfirm.status, body: allowedConfirm.body }).slice(0, 200))
-// settings 级强制门禁（host 口径：settings.strictMode 默认 false；strictMode=true 时内容写越步 → 409 conflict）
+check('Q1：宽松模式下写操作放行', allowedConfirm.status === 200 && allowedConfirm.body?.ok === true, JSON.stringify({ status: allowedConfirm.status, body: allowedConfirm.body }).slice(0, 200))
+// settings 级 strictMode（A-H1 后仅数据字段；不再拦截内容写/工具）
 const STRICT2 = '设置强控样剧'
 await call('create-project', { title: STRICT2 })
 const settingsDefault = await call('settings-get', {})
 check('Q1：settings.strictMode 默认 false（宽松）', (settingsDefault.body?.settings || {}).strictMode === false, JSON.stringify(settingsDefault.body?.settings || {}).slice(0, 160))
 const enableStrict = await call('settings-save', { settings: { strictMode: true } })
-check('Q1：settings.strictMode 可开启（payload {settings:{strictMode:true}}）', enableStrict.status === 200 && enableStrict.body?.settings?.strictMode === true, JSON.stringify(enableStrict.body).slice(0, 160))
+check('Q1：settings.strictMode 可开启（payload {settings:{strictMode:true}}；字段保留可读）', enableStrict.status === 200 && enableStrict.body?.settings?.strictMode === true, JSON.stringify(enableStrict.body).slice(0, 160))
 const gatedRoute = await call('characters-save', { title: STRICT2, characters: [{ name: '甲', role: '主角' }] })
-check('AC-F3：settings.strictMode 开启时未确认大纲即写人物（面板路由）→ 409 conflict + 需先确认', gatedRoute.status === 409 && gatedRoute.body?.code === 'conflict' && /需先确认/.test(String(gatedRoute.body?.error || '')), JSON.stringify({ status: gatedRoute.status, code: gatedRoute.body?.code, error: gatedRoute.body?.error }).slice(0, 220))
+check('[AC-A2] A-H1：settings.strictMode=true 时面板写人物 → 200/ok（不再 409）', gatedRoute.status === 200 && gatedRoute.body?.ok === true, JSON.stringify({ status: gatedRoute.status, code: gatedRoute.body?.code }).slice(0, 200))
+const gatedCharsRead = await call('characters-get', { title: STRICT2 })
+check('[AC-A2] A-H1：面板写入落盘可回读（甲）', JSON.stringify(gatedCharsRead.body || {}).includes('甲'), JSON.stringify(gatedCharsRead.body).slice(0, 160))
 const gatedTool = await (async () => {
   const d = toolsMod.createToolDefs({ rootOf: () => workspace, backendOf: () => null }).find((x) => x.name === 'drama_save_characters')
   return d.execute({ title: STRICT2, characters: [{ name: '甲', role: '主角' }] }, { agent: { id: 'qa-strict', session: { header: { cwd: workspace } }, ctx: { get: () => undefined } }, callId: 'strict-tool' })
 })()
-check('AC-F3：settings.strictMode 开启时内容写工具（Agent 工具）→ 失败码 conflict + 需先确认', gatedTool && gatedTool.ok === false && (gatedTool.code === 'conflict' || gatedTool.code === 'permission') && /需先确认/.test(String(gatedTool.reason || gatedTool.error || '')), JSON.stringify(gatedTool).slice(0, 220))
+check('[AC-A2] A-H1：settings.strictMode=true 时内容写工具 → ok:true（不再 conflict/需先确认）', gatedTool && gatedTool.ok === true && !/需先确认|强制模式/.test(JSON.stringify(gatedTool)), JSON.stringify(gatedTool).slice(0, 240))
 const disableStrict = await call('settings-save', { settings: { strictMode: false } })
 check('Q1：settings.strictMode 可关闭回宽松', disableStrict.status === 200 && disableStrict.body?.settings?.strictMode === false, JSON.stringify(disableStrict.body).slice(0, 160))
 const ungatedRoute = await call('characters-save', { title: STRICT2, characters: [{ name: '甲', role: '主角' }] })
-check('AC-F3：宽松模式同一内容写放行', ungatedRoute.status === 200 && ungatedRoute.body?.ok === true, JSON.stringify({ status: ungatedRoute.status, body: ungatedRoute.body }).slice(0, 200))
+check('AC-F3 旧语义：宽松模式同一内容写放行', ungatedRoute.status === 200 && ungatedRoute.body?.ok === true, JSON.stringify({ status: ungatedRoute.status, body: ungatedRoute.body }).slice(0, 200))
+// A-H1 实现方式行为断言（FS-01 增强：导出函数保留但恒放行/恒 false）
+const strictProbe = await flowMod.isStrictFlowMode(workspace, TITLE)
+check('[AC-A2] A-H1：isStrictFlowMode 恒 false（历史 strict 项目也不再判强制）', strictProbe === false, String(strictProbe))
+const allowedProbe = await flowMod.assertStepAllowed(workspace, TITLE, 'characters')
+check('[AC-A2] A-H1：assertStepAllowed 恒放行 {allowed:true,strict:false}（不再抛 conflict）', allowedProbe && allowedProbe.allowed === true && allowedProbe.strict === false, JSON.stringify(allowedProbe))
 
 /* ------------------------------------------------------------------ [4] */
 group('[4] AC-F4 / Q3：上游变更 → 下游已确认步骤 stale，文件不删')
@@ -281,7 +294,7 @@ const progressSteps = progress.body?.progress?.steps || (Array.isArray(progress.
 check('AC-F8：progress-get 形状不变（progress.steps 6 步数组）', progress.status === 200 && Array.isArray(progressSteps) && progressSteps.length === 6 && STEP_KEYS.every((k) => progressSteps.some((s) => s.key === k)), JSON.stringify(progress.body).slice(0, 240))
 const statusRes = await call('status', {})
 check('AC-F8：status 形状不变（200 + workspace/projectCount）', statusRes.status === 200 && typeof statusRes.body?.workspace === 'string' && typeof statusRes.body?.projectCount === 'number', JSON.stringify(statusRes.body).slice(0, 160))
-check('E6：METHODS 仍 = 69（task-110 media-read +1）（零新增 route）', METHODS.length === 69, String(METHODS.length))
+check('E6：METHODS 仍 = 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）（零新增 route）', METHODS.length === 72, String(METHODS.length))
 check('AC-F8：client slots.register = 4（v0.12.1 已批准终值）', (clientSrc.match(/slots\.register\(/g) || []).length === 4)
 // 旧数据 hash 不变（复用 P2-1 基线快照，跨 P2-2 期间不变）
 const BASELINE_CANDIDATES = [
@@ -335,19 +348,22 @@ if (!baselineText) {
 }
 
 /* ------------------------------------------------------------------ [8] */
-group('[8] client 侧静态契约（Q5 步骤条 / AC-F2 确认 / AC-F4 stale / AC-F5 回退 / AC-F6 恢复 / Q1 strictMode）')
+group('[8] client 侧静态契约（v0.16.0 A-C1：流程 UI 已移除；只读 progress-get 保留；字段/通用语义保留）')
 const clientHasFlow = /flow[-_ ]?state/i.test(clientSrc) || /步骤条|stepBar|flowSteps/.test(clientSrc) || /strictMode/.test(clientSrc)
 if (!clientHasFlow) {
   console.log('      （SKIP：client 半（task-23）尚未接入 flow-state；交付后本组断言自动生效）')
 } else {
-  check('Q5：client 含步骤条（6 步展示）', /步骤条|stepBar|flowSteps/.test(clientSrc))
+  // A-C1 删旧增新：原「client 含步骤条/待重做提示/回退确认」3 条 → 反向缺失断言（更强）；E6 读写 → 只读保留断言
+  check('[A-C1] client 已移除流程步骤条/主进度（步骤条/stepBar/flowSteps 0 出现）', !/步骤条|stepBar|flowSteps/.test(clientSrc))
   check('Q5：client 未引入图形库（无 d3/echarts/cytoscape/reactflow 依赖）', !/from\s+['"](d3|echarts|cytoscape|reactflow)/i.test(clientSrc))
   check('AC-F2：client 有确认动作与禁用逻辑（确认 + disabled）', /确认/.test(clientSrc) && /disabled/.test(clientSrc))
-  check('AC-F4：client 有 stale「待重做/上游已变更」提示文案', /待重做|上游已变更/.test(clientSrc))
-  check('AC-F5：client 有回退/二次确认语义', /回退/.test(clientSrc) && /二次确认|确认回退|确认要回退/.test(clientSrc))
-  check('AC-F6：client 有恢复提示（上次停在/下一步）', /上次停在|下一步/.test(clientSrc))
-  check('Q1：client 使用 strictMode（强制门禁开关）', /strictMode|强制/.test(clientSrc))
-  check('E6：client 经 doc-read/doc-save 读写 flow-state（不新增 route）', /flow-state\.json/.test(clientSrc) && /doc-(read|save)/.test(clientSrc))
+  check('[A-C1] client 已移除 stale「待重做/上游已变更」提示文案（0 出现）', !/待重做|上游已变更/.test(clientSrc))
+  check('[A-C1] client 已移除流程回退/确认回退 UI（rollbackFlowTo/确认回退 0 出现；C3 审核对话框「二次确认」文案属新功能保留，不误判）', !/rollbackFlowTo/.test(clientSrc) && !/确认回退/.test(clientSrc))
+  check('AC-F6：client 保留通用「下一步」引导（失败码/卡片语义，非流程进度）', /下一步/.test(clientSrc) && /ad-err-next|下一步：/.test(clientSrc))
+  check('Q1：client 仅保留 strictMode 数据字段（无强制/宽松模式 UI）', /strictMode/.test(clientSrc) && !/强制模式|宽松模式/.test(clientSrc))
+  check('[A-C1] client 不再读写 .aidrama/flow-state.json（flow 读写函数 0 出现；去进度）', !/flow-state\.json/.test(clientSrc) && !/loadFlow|persistFlow|confirmFlowStep|rollbackFlowTo/.test(clientSrc))
+  check('[A-C1/E6] client 的 progress-get 仅 1 处只读调用（openProject 内部；METHOD 保留）', (clientSrc.match(/api\('progress-get'/g) || []).length === 1, String((clientSrc.match(/api\('progress-get'/g) || []).length))
+  check('[红线] client 唯一调用点 70（v0.15.11 基线不增）/ slots.register 4', new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1])).size === 72 && (clientSrc.match(/slots\.register\(/g) || []).length === 4)
 }
 
 await fs.rm(workspace, { recursive: true, force: true })

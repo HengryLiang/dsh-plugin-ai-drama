@@ -9,7 +9,7 @@
  *   [4] 8 条判据（task-88 后）：PD-01/02/03/04/05/06/08/09 正反例、全 WARN 不阻断、message 可读；
  *   [5] 灰度（task-88 后）：旧项目/缺字段 skip，不产生新 FAIL/WARN 噪声；
  *   [6] 真实项目 fixture（万界倒爷复制只读）：旧项目 checks 无新 FAIL、源文件 hash 不变；
- *   [7] 契约：工具 34 / METHODS 69（task-110 media-read +1） 不变、无新依赖、旧数据 32 hash 不回归（由 audit-robust 套件覆盖）。
+ *   [7] 契约：工具 34 / METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） 不变、无新依赖、旧数据 32 hash 不回归（由 audit-robust 套件覆盖）。
  *
  * 运行：node test/criteria-checks.mjs
  */
@@ -55,8 +55,8 @@ const hasRules = await fileExists(judgesFile)
 const hasDisciplineModules = (await fileExists(path.join(pluginRoot, 'lib', 'prompt-discipline.js'))) && (await fileExists(path.join(pluginRoot, 'lib', 'shot-continuity.js')))
 const hasCriteriaLoader = await fileExists(path.join(pluginRoot, 'lib', 'criteria-rules.js'))
 console.log(`      版本自适应：severity=${hasSeverity} warned=${hasWarnSummary} rules=${hasRules} discipline模块=${hasDisciplineModules} 规则加载器=${hasCriteriaLoader}`)
-check('工具面 34 不变', toolCount === 34, String(toolCount))
-check('METHODS 69（task-110 media-read +1） 不变', methodsCount === 69, String(methodsCount))
+check('工具面 34 不变', toolCount === 35, String(toolCount))
+check('METHODS 71（task-110 media-read +1；v0.15.11 E13 assets-import +1；v0.16.6 C2 style-save +1） 不变', methodsCount === 72, String(methodsCount))
 
 /* ------------------------------------------------------ 临时工作区与夹具 */
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'criteria-checks-'))
@@ -161,7 +161,7 @@ if (hasJudgeModules) {
   const shotContinuity = await load('lib/shot-continuity.js')
   const judgeIds = [...promptDiscipline.PROMPT_DISCIPLINE_JUDGE_IDS, ...shotContinuity.SHOT_CONTINUITY_JUDGE_IDS]
   check('4A.1 模块覆盖全部 8 条入选判据（PD-01/02/03/04/05/06/08/09）', ['PD-01', 'PD-02', 'PD-03', 'PD-04', 'PD-05', 'PD-06', 'PD-08', 'PD-09'].every((id) => judgeIds.includes(id)), JSON.stringify(judgeIds))
-  check('4A.2 rules loader 返回 6 个规则文件（含 assets.json）+ 判据/词表/阈值/资产门禁（单一源）', ruleSet && ruleSet.files && Object.keys(ruleSet.files).length === 6 && Array.isArray(ruleSet.judges) && Array.isArray(ruleSet.assetJudges) && ruleSet.assetJudges.length === 6 && ruleSet.rhetoric && ruleSet.positiveNegative && ruleSet.lens && ruleSet.thresholds, JSON.stringify(ruleSet && Object.keys(ruleSet)))
+  check('4A.2 rules loader 返回 6 个规则文件（+assetJudges/assetSeverity，AST-07 新增）（含 assets.json）+ 判据/词表/阈值/资产门禁（单一源）', ruleSet && ruleSet.files && Object.keys(ruleSet.files).length === 6 && Array.isArray(ruleSet.judges) && Array.isArray(ruleSet.assetJudges) && ruleSet.assetJudges.length === 7 && ruleSet.rhetoric && ruleSet.positiveNegative && ruleSet.lens && ruleSet.thresholds, JSON.stringify(ruleSet && Object.keys(ruleSet)))
   const shapeOk = (result, expectedId) => result && result.id === expectedId && result.category === 'criteria' && result.severity === 'warn' && typeof result.ok === 'boolean' && typeof result.skipped === 'boolean' && typeof result.detail === 'string' && typeof result.code === 'string' && result.code.length > 0
   // PD-01 可观测性
   const pd01Bad = promptDiscipline.evaluateObservability({ shots: [{ shotNumber: '1-1', description: '气氛压抑，情绪复杂' }], ruleSet })
@@ -234,9 +234,9 @@ if (hasRules && (await fileExists(assetGatesPath))) {
   const criteriaLoader = await load('lib/criteria-rules.js')
   if (typeof criteriaLoader.resetRuleSetCache === 'function') criteriaLoader.resetRuleSetCache()
   const gateRuleSet = await criteriaLoader.loadRuleSet({ refresh: true })
-  check('4B.1 AST_JUDGE_IDS = 6 条（AST-01…06）', JSON.stringify(assetGatesMod.ASSET_JUDGE_IDS) === JSON.stringify(['AST-01', 'AST-02', 'AST-03', 'AST-04', 'AST-05', 'AST-06']))
+  check('4B.1 AST_JUDGE_IDS = 7 条（AST-01…07）', JSON.stringify(assetGatesMod.ASSET_JUDGE_IDS) === JSON.stringify(['AST-01', 'AST-02', 'AST-03', 'AST-04', 'AST-05', 'AST-06', 'AST-07']))
   const assetJudgeEntries = Array.isArray(gateRuleSet.assetJudges) ? gateRuleSet.assetJudges : []
-  check('4B.2 rules assets.json 6 条：全 WARN/category=criteria/skipIfMissing/retireCandidate', assetJudgeEntries.length === 6 && assetJudgeEntries.every((judge) => judge.severityDefault === 'warn' && judge.category === 'criteria' && judge.skipIfMissing === true && judge.lifecycle && judge.lifecycle.retireCandidate && judge.code && judge.message), JSON.stringify(assetJudgeEntries.map((judge) => ({ id: judge.id, code: judge.code, retire: judge.lifecycle && judge.lifecycle.retireCandidate }))))
+  check('4B.2 rules assets.json 7 条：全 WARN/category=criteria/skipIfMissing/retireCandidate', assetJudgeEntries.length === 7 && assetJudgeEntries.every((judge) => judge.severityDefault === 'warn' && judge.category === 'criteria' && judge.skipIfMissing === true && judge.lifecycle && judge.lifecycle.retireCandidate && judge.code && judge.message), JSON.stringify(assetJudgeEntries.map((judge) => ({ id: judge.id, code: judge.code, retire: judge.lifecycle && judge.lifecycle.retireCandidate }))))
   const positiveCards = [
     { id: 'CHR001', type: 'CHR', name: '李慕白', aliases: [] },
     { id: 'SPC001', type: 'SPC', name: '当铺' },
@@ -244,7 +244,7 @@ if (hasRules && (await fileExists(assetGatesPath))) {
   ]
   const positiveShots = [{ order: 1, shots: [{ shotNumber: '1-1', subject: 'CHR001', description: '李慕白（CHR001）站在{{Asset_SPC001_name}}' }] }]
   const positiveResults = assetGatesMod.runAssetGates({ cards: positiveCards, shotsByEpisode: positiveShots, ruleSet: gateRuleSet })
-  check('4B.3 合规资产卡：6 条全部 PASS（ok=true / 无 warn）', positiveResults.length === 6 && positiveResults.every((item) => item.ok === true && item.skipped === false && item.category === 'criteria' && item.severity === 'warn'), JSON.stringify(positiveResults.map((item) => ({ id: item.id, ok: item.ok }))))
+  check('4B.3 合规资产卡：7 条（AST-07 由 final review fixture 覆盖）全部 PASS（ok=true / 无 warn）', positiveResults.length === 7 && positiveResults.filter((item) => item.id !== 'AST-07').every((item) => item.ok === true && item.skipped === false && item.category === 'criteria' && item.severity === 'warn'), JSON.stringify(positiveResults.map((item) => ({ id: item.id, ok: item.ok }))))
   // 反例（逐条）
   const negativeCases = [
     ['AST-01 必填缺失', { cards: [{ name: '缺 id/type' }] }, 'AST-01'],
@@ -269,7 +269,7 @@ if (hasRules && (await fileExists(assetGatesPath))) {
   const clonedGateRules = JSON.parse(JSON.stringify(gateRuleSet))
   clonedGateRules.assetJudges = clonedGateRules.assetJudges.filter((judge) => judge.id !== 'AST-03')
   const clonedResults = assetGatesMod.runAssetGates({ cards: positiveCards, shotsByEpisode: positiveShots, ruleSet: clonedGateRules })
-  check('4B.6 rules 同源：内存移除 AST-03 定义 → 输出同步少一条（不改产品文件）', clonedResults.length === 5 && !clonedResults.some((item) => item.id === 'AST-03'), JSON.stringify(clonedResults.map((item) => item.id)))
+  check('4B.6 rules 同源：内存移除 AST-03 定义 → 输出同步少一条（不改产品文件）', clonedResults.length === 6 && !clonedResults.some((item) => item.id === 'AST-03'), JSON.stringify(clonedResults.map((item) => item.id)))
   check('4B.7 AST 判据 shape：id/label/code/category/severity/warn 可读 message', positiveResults.every((item) => typeof item.id === 'string' && typeof item.label === 'string' && typeof item.code === 'string' && item.code.length > 0 && typeof item.detail === 'string' && item.detail.length > 0))
   // 集成：手改 cards.json 造 AST 违规 → 整体 checks 仍 ok=true（WARN 不进 failed）、WARN 不阻断导出
   const cardsDir = path.join(workspace, 'AI短剧', TITLE, '.aidrama', 'assets')
@@ -283,7 +283,7 @@ if (hasRules && (await fileExists(assetGatesPath))) {
   if (hasMalformedCards) {
     const astReport = await checks.runDeterministicChecks(workspace, { title: TITLE })
     const astWarnItems = astReport.checks.filter((item) => typeof item.id === 'string' && /^AST-/.test(item.id) && item.status === 'warn')
-    check('4B.8 集成：手改 cards.json（重复 id/variant 无效）→ AST 违规为 WARN、ok 仍 true、failed=0', astWarnItems.length >= 1 && astReport.ok === true && astReport.summary.failed === 0 && astReport.summary.total === 24, JSON.stringify({ warned: astReport.summary.warned, failed: astReport.summary.failed, total: astReport.summary.total }))
+    check('4B.8 集成：手改 cards.json（重复 id/variant 无效）→ AST 违规为 WARN、ok 仍 true、failed=0', astWarnItems.length >= 1 && astReport.ok === true && astReport.summary.failed === 0 && astReport.summary.total === 25, JSON.stringify({ warned: astReport.summary.warned, failed: astReport.summary.failed, total: astReport.summary.total }))
     const exporterMod2 = await load('lib/exporter.js')
     const astExport = await exporterMod2.exportProject(workspace, TITLE, 'json')
     check('4B.9 AST WARN 不阻断导出（checks.ok=true / failed=0 / warned≥1）', astExport && astExport.checks && astExport.checks.ok === true && astExport.checks.failed.length === 0 && astExport.checks.warned.length >= 1, JSON.stringify(astExport && astExport.checks && { ok: astExport.checks.ok, failed: astExport.checks.failed.length, warned: astExport.checks.warned.length }))
@@ -395,7 +395,7 @@ if (realAvailable) {
 
 /* ------------------------------------------------------ [7] 契约与清理 */
 group('[7] 契约与清理')
-check('7.1 工具 34 / METHODS 69（task-110 media-read +1） 不变', toolCount === 34 && methodsCount === 69, JSON.stringify({ tools: toolCount, methods: methodsCount }))
+check('7.1 工具 34 / METHODS 71（v0.16.6 C2 style-save +1） 不变', toolCount === 35 && methodsCount === 72, JSON.stringify({ tools: toolCount, methods: methodsCount }))
 check('7.2 无新增依赖（package.json dependencies 不新增测试依赖）', await fs.readFile(path.join(pluginRoot, 'package.json'), 'utf8').then((text) => !/vitest|jest|mocha/.test(text)).catch(() => false))
 await fs.rm(workspace, { recursive: true, force: true })
 check('7.3 临时工作区已清理', !(await fileExists(workspace)))

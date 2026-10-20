@@ -305,7 +305,7 @@ window.__ModuleLoader__.load({
     /* ------------------------------------------------------ 设置对象归一化（C-2） */
 
     // H-2 冻结口径：设置只增字段；旧宿主响应缺字段时用这里的默认值渲染（降级）。
-    // P2-2（Q1）：strictMode = 创作流程强制门禁开关（默认 false 宽松；宿主 settings 校验并生效）。
+    // v0.16.0 A-C1：历史字段保留（设置默认值仍透传；相关 UI 已随去线性进度移除，旧数据零改动）。
     const DEFAULT_SETTINGS = {
       defaultPlatform: '',
       defaultEpisodeDurationSec: [60, 180],
@@ -701,109 +701,9 @@ window.__ModuleLoader__.load({
       })
     }
 
-    // 创作流水线（数据源 `progress-get`）：项目→大纲→人物→剧本→分镜→导出
-    const PIPELINE_FALLBACK = [
-      ['project', '项目已建'], ['outline', '大纲就绪'], ['characters', '人物就绪'],
-      ['episode_script', '剧本就绪'], ['storyboard', '分镜就绪'], ['exported', '已导出'],
-    ]
-
-    function pipelineSteps(progress) {
-      if (progress && Array.isArray(progress.steps) && progress.steps.length) return progress.steps
-      return PIPELINE_FALLBACK.map(([key, label]) => ({ key, label, done: false }))
-    }
-
-    function renderPipelineBar(progress, onRefresh) {
-      const steps = pipelineSteps(progress)
-      const current = progress ? progress.stage : ''
-      const facts = (progress && progress.facts) || {}
-      return h('div', { className: 'ad-pipe', key: 'pipeline', role: 'group', 'aria-label': '创作流水线' },
-        h('div', { className: 'ad-pipe-inner' },
-          steps.map((step, i) =>
-            h('div', {
-              key: step.key,
-              className: 'ad-pipe-step',
-              'data-on': step.key === current ? '1' : '0',
-              'data-done': step.done ? '1' : '0',
-              title: `${step.label}${step.done ? '（已完成）' : '（未完成）'}`,
-            },
-            (step.done ? '✓ ' : '') + step.label,
-            i < steps.length - 1 ? h('span', { className: 'ad-pipe-sep' }, '→') : null))),
-        h('span', { className: 'ad-sub' },
-          `大纲 ${facts.outlineCount || 0} · 人物 ${facts.characterCount || 0} · 剧本 ${facts.episodeCount || 0} · 分镜 ${facts.storyboardCount || 0} · 导出 ${facts.exportCount || 0}` +
-          (facts.openMemoryCount ? ` · 未回收伏笔 ${facts.openMemoryCount}` : '')),
-        onRefresh ? h('button', { className: 'ad-btn ad-sm', onClick: onRefresh }, icon('refresh'), '刷新进度') : null,
-      )
-    }
-
-    /* ------------------------------------ P2-2 创作流程状态机（6 步 / 三态） */
-
-    // 与 progress-get 六步对齐：project → outline → characters → episode_script → storyboard → exported
-    // 持久化：<项目>/.aidrama/flow-state.json（宿主经 doc-read/doc-save 特例读写，零新增 route）
-    const FLOW_STEPS = [
-      ['project', '项目', '已建项目'],
-      ['outline', '大纲', '写好总纲'],
-      ['characters', '人物', '人物设定卡'],
-      ['episode_script', '剧本', '分集剧本'],
-      ['storyboard', '分镜', '分镜表'],
-      ['exported', '导出', '导出交付物'],
-    ]
-    const FLOW_STATE_PATH = '.aidrama/flow-state.json'
-    const FLOW_STATUS_LABELS = {
-      not_started: '未开始',
-      in_progress: '进行中',
-      confirmed: '已确认',
-      stale: '待重做',
-      blocked: '未解锁',
-    }
-    const FLOW_TAB_STEP = {
-      contract: 'project',
-      outline: 'outline',
-      characters: 'characters',
-      episode: 'episode_script',
-      storyboard: 'storyboard',
-      check: 'exported',
-    }
-    // v0.15.0（task-39 / M6-2）：流程步骤→页签反向映射（与 FLOW_TAB_STEP 严格互逆；测试断言）
-    const FLOW_STEP_TAB = {
-      project: 'contract',
-      outline: 'outline',
-      characters: 'characters',
-      episode_script: 'episode',
-      storyboard: 'storyboard',
-      exported: 'check',
-    }
-    const NEXT_STEP_TAB_LABELS = {
-      contract: '剧集契约',
-      outline: '总纲',
-      characters: '人物',
-      episode: '剧本',
-      storyboard: '分镜',
-      generate: '生成',
-      check: '检查 / 导出',
-    }
-    // ≤560 窄窗短文案（≤8 字；aria-label/title 仍用全名）
-    const NEXT_STEP_SHORT_LABELS = {
-      project: '契约',
-      outline: '大纲',
-      characters: '人物',
-      episode_script: '剧本',
-      storyboard: '分镜',
-      exported: '导出',
-    }
-
-    // v0.12.0（task-7）：唯一主进度（P2-2 流程状态机）内嵌的 facts 计数映射（流程步骤 → progress.facts）
-    const FLOW_FACT_KEYS = {
-      project: null,
-      outline: 'outlineCount',
-      characters: 'characterCount',
-      episode_script: 'episodeCount',
-      storyboard: 'storyboardCount',
-      exported: 'exportCount',
-    }
-
     // v0.12.0（task-7）：15 页签 4 组（创作 / 资料 / 交付 / 高级）——键不重不漏，草稿计数在渲染时拼
     const TAB_GROUPS = [
-      { id: 'create', label: '创作', tabs: ['contract', 'outline', 'characters', 'world', 'episode', 'storyboard'] },
+      { id: 'create', label: '创作', tabs: ['world', 'outline', 'characters', 'episode', 'storyboard'] },
       { id: 'assets', label: '资料', tabs: ['assets', 'memory', 'drafts', 'ledger'] },
       { id: 'deliver', label: '交付', tabs: ['generate', 'check'] },
       { id: 'advanced', label: '高级', tabs: ['tree', 'toolcards'] },
@@ -827,135 +727,6 @@ window.__ModuleLoader__.load({
     }
     function isLegacyDialogueTab(key) {
       return String(key == null ? '' : key) === 'dialogue'
-    }
-
-    function emptyFlowSteps() {
-      const steps = {}
-      for (const [key] of FLOW_STEPS) steps[key] = 'not_started'
-      return steps
-    }
-
-    /** 容错归一化 flow-state（steps 值兼容字符串；缺失/非法值按 not_started）。 */
-    function normalizeFlowState(raw) {
-      const value = raw && typeof raw === 'object' ? raw : {}
-      const steps = emptyFlowSteps()
-      const inputSteps = value.steps && typeof value.steps === 'object' ? value.steps : {}
-      for (const [key] of FLOW_STEPS) {
-        const entry = inputSteps[key]
-        const status = typeof entry === 'string' ? entry : entry && typeof entry === 'object' ? String(entry.status || '') : ''
-        if (Object.prototype.hasOwnProperty.call(FLOW_STATUS_LABELS, status) && status !== 'blocked') {
-          steps[key] = status
-        }
-      }
-      const history = Array.isArray(value.history) ? value.history.slice(-100) : []
-      return {
-        version: Number(value.version) || 1,
-        strictMode: value.strictMode === true,
-        steps,
-        updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : '',
-        history,
-      }
-    }
-
-    /** AC-F7 降级：旧项目无 flow-state 时按 progress 内容推断（只读展示，宿主就绪后由宿主覆盖）。
-     *  与宿主 inferFlowState 对齐：project 恒 confirmed；从达到的最高步向下全部 confirmed，其余 not_started。 */
-    function inferFlowStateFromProgress(progress) {
-      const facts = (progress && progress.facts) || {}
-      const achieved = [
-        true,
-        (facts.outlineCount || 0) > 0,
-        (facts.characterCount || 0) > 0,
-        (facts.episodeCount || 0) > 0,
-        (facts.storyboardCount || 0) > 0,
-        (facts.exportCount || 0) > 0,
-      ]
-      let maxLevel = 0
-      for (let i = 0; i < achieved.length; i += 1) if (achieved[i]) maxLevel = i
-      const steps = emptyFlowSteps()
-      for (let i = 0; i < FLOW_STEPS.length; i += 1) {
-        steps[FLOW_STEPS[i][0]] = i <= maxLevel ? 'confirmed' : 'not_started'
-      }
-      steps.project = 'confirmed'
-      return normalizeFlowState({ version: 1, strictMode: false, steps, updatedAt: new Date().toISOString(), history: [] })
-    }
-
-    function flowStepIndex(key) {
-      return FLOW_STEPS.findIndex(([stepKey]) => stepKey === key)
-    }
-
-    function flowStepLabel(key) {
-      const hit = FLOW_STEPS.find(([stepKey]) => stepKey === key)
-      return hit ? hit[1] : String(key || '')
-    }
-
-    function flowStepAction(key) {
-      const hit = FLOW_STEPS.find(([stepKey]) => stepKey === key)
-      return hit ? hit[2] : ''
-    }
-
-    /* v0.15.0（task-39 / M6-2）：下一步建议器（纯函数：只读 flowState/已加载内存状态；0 新 api / 无副作用）
-     * 输入：state（flowState 或 null）、options = { loading, available, tab, data:{contract,rows,characters,world,episodeText,shots} }
-     * 输出：{ key, label, shortLabel, hint, tone, chipLabel, tab, disabled, ariaLabel, alt? } */
-    function nextStepTarget(state, options) {
-      const opts = options || {}
-      const loading = opts.loading === true
-      const available = opts.available !== false
-      const data = opts.data || null
-      const mk = (key, label, shortLabel, hint, tone, chipLabel, tab, disabled, ariaLabel, alt) => ({ key, label, shortLabel, hint, tone, chipLabel, tab, disabled, ariaLabel, alt: alt || null })
-      if (loading) {
-        return mk('loading', '下一步：…', '下一步', '正在读取流程状态…', 'neutral', '', null, true, '下一步：正在读取流程状态')
-      }
-      const emptyOrUnavailable = !available || !state || !state.steps
-      if (emptyOrUnavailable) {
-        // 规范 §1.2-B：flowState null/不可用时用已加载内存数据分支（不得总是回落到契约）
-        const d = data || {}
-        if (!d.contract) return mk('fallback-contract', '去完善契约', '完善契约', '先完成剧集契约', 'neutral', '未开始', 'contract', false, '去完善契约（跳转到剧集契约页签）')
-        if (!Array.isArray(d.rows) || d.rows.length === 0) return mk('fallback-outline', '编写总纲', '写总纲', '总纲为空，先写总纲', 'neutral', '未开始', 'outline', false, '编写总纲（跳转到总纲页签）')
-        if (!Array.isArray(d.characters) || d.characters.length === 0) {
-          return mk('fallback-characters', '补人物', '补人物', '人物列表为空，先补人物设定', 'neutral', '未开始', 'characters', false, '补人物（跳转到人物页签）', (!Array.isArray(d.world) || d.world.length === 0) ? { label: '补世界观', tab: 'world', ariaLabel: '补世界观（跳转到世界观页签）' } : null)
-        }
-        if (!d.episodeText) return mk('fallback-episode', '去剧本页', '去剧本', '还没有剧本正文，先去剧本页', 'neutral', '未开始', 'episode', false, '去剧本页（跳转到剧本页签）')
-        if (!Array.isArray(d.shots) || d.shots.length === 0) return mk('fallback-storyboard', '拆分镜', '拆分镜', '还没有分镜表，先拆分镜', 'neutral', '未开始', 'storyboard', false, '拆分镜（跳转到分镜页签）')
-        return mk('fallback-generate', '去生成', '去生成', '已具备生成条件，去生成页', 'neutral', '未开始', 'generate', false, '去生成（跳转到生成页签）')
-      }
-      const current = flowCurrentKey(state)
-      const status = state.steps[current] || 'not_started'
-      const label = flowStepLabel(current)
-      const shortStep = NEXT_STEP_SHORT_LABELS[current] || label
-      const tab = FLOW_STEP_TAB[current] || ''
-      const tabLabel = NEXT_STEP_TAB_LABELS[tab] || tab || ''
-      const action = flowStepAction(current)
-      // 全确认（current=exported confirmed）：按规范 §1.2 → 「导出交付物」/check；当前页签==check 由渲染层同页隐藏
-      if (current === 'exported' && status === 'confirmed') {
-        return mk('all-confirmed', '导出交付物', '去导出', '全部创作步骤已确认', 'success', '全部已确认', 'check', false, '导出交付物（跳转到检查 / 导出页签）')
-      }
-      if (status === 'blocked') {
-        return mk('blocked-' + current, '下一步：' + label, '下一步：' + shortStep, '前序步骤未完成，暂未解锁', 'neutral', '未解锁', null, true, '下一步：' + label + '（未解锁：前序步骤未完成）')
-      }
-      if (status === 'stale') {
-        return mk('stale-' + current, '重做：' + label, '重做：' + shortStep, '上游已变更，建议重做', 'warn', '待重做', tab, false, '重做：' + label + (tabLabel ? '（跳转到' + tabLabel + '页签）' : ''))
-      }
-      if (status === 'in_progress') {
-        return mk('progress-' + current, '继续：' + label, '继续：' + shortStep, action || '', 'neutral', '进行中', tab, false, '继续：' + label + (tabLabel ? '（跳转到' + tabLabel + '页签）' : ''))
-      }
-      return mk('next-' + current, '下一步：' + label, '下一步：' + shortStep, action || '', 'neutral', '未开始', tab, false, '下一步：' + label + (tabLabel ? '（跳转到' + tabLabel + '页签）' : ''))
-    }
-
-    /** 当前步 = 第一个未确认的步骤；全部确认时停在导出。 */
-    function flowCurrentKey(state) {
-      if (!state || !state.steps) return 'project'
-      for (const [key] of FLOW_STEPS) {
-        const status = state.steps[key] || 'not_started'
-        if (status !== 'confirmed') return key
-      }
-      return 'exported'
-    }
-
-    function flowRecoveryText(state) {
-      if (!state) return '流程未开始（尚无 flow-state）'
-      const current = flowCurrentKey(state)
-      const status = state.steps[current] || 'not_started'
-      return `上次停在：${flowStepLabel(current)}（${FLOW_STATUS_LABELS[status] || status}） / 下一步：${flowStepAction(current)}`
     }
 
     /* ------------------------------- P2-3 AI 审读（展示 / 跳转 / 裁决 / 降级） */
@@ -1273,12 +1044,6 @@ body{
 .ad-scene-line{font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-word;max-height:140px;overflow:auto}
 .ad-check{width:14px;height:14px;cursor:pointer;accent-color:var(--ad-brand);flex:none}
 .ad-node-ops{display:flex;align-items:center;gap:4px;margin-left:auto}
-.ad-pipe{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 18px 6px;flex:none;border-bottom:1px solid var(--ad-border)}
-.ad-pipe-inner{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
-.ad-pipe-step{display:flex;align-items:center;gap:4px;font-size:12px;padding:3px 8px;border-radius:999px;border:1px solid var(--ad-border);color:var(--ad-label-secondary);white-space:nowrap}
-.ad-pipe-step[data-on="1"]{border-color:var(--ad-brand);color:var(--ad-brand);font-weight:600}
-.ad-pipe-step[data-done="1"]{border-color:var(--ad-success);color:var(--ad-success)}
-.ad-pipe-sep{color:var(--ad-label-secondary);font-size:12px;margin-left:4px}
 .ad-toolcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;margin-top:8px}
 .ad-toolcard{display:flex;flex-direction:column;gap:2px}
 .ad-toolcard[data-tone="warn"]{border-color:var(--ad-warning-border)}
@@ -1301,17 +1066,8 @@ body{
 .ad-doc-conflict{margin:8px 12px;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.8;background:var(--ad-warning-bg);color:var(--ad-warn);border:1px solid var(--ad-warning-border)}
 .ad-doc-note{margin:8px 12px;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.8;background:var(--ad-subtle-bg);color:var(--ad-label-secondary)}
 .ad-doc-err{margin:8px 12px;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.8;background:var(--ad-error-bg);color:var(--ad-error);border:1px solid var(--ad-error-border)}
-.ad-flow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:8px 18px 6px;flex:none;border-bottom:1px solid var(--ad-border)}
-.ad-flow-step{display:flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;border:1px solid var(--ad-border);background:transparent;color:var(--ad-label-secondary);font-size:12px;cursor:pointer;white-space:nowrap}
-.ad-flow-step[data-state="confirmed"]{border-color:var(--ad-success);color:var(--ad-success)}
-.ad-flow-step[data-state="current"]{border-color:var(--ad-brand);color:var(--ad-brand);font-weight:600}
-.ad-flow-step[data-state="stale"]{border-color:var(--ad-warning-border);color:var(--ad-warn);background:var(--ad-warning-bg)}
-.ad-flow-step[data-state="pending"]{opacity:.72}
 .ad-flow-hint{font-size:12px;color:var(--ad-label-secondary)}
 .ad-flow-stale{margin:0 0 10px;padding:7px 10px;border-radius:8px;font-size:12px;line-height:1.8;background:var(--ad-warning-bg);color:var(--ad-warn);border:1px solid var(--ad-warning-border)}
-.ad-flow-detail{margin:8px 0 10px;padding:10px 12px;border:1px solid var(--ad-border);border-radius:10px;font-size:12px;line-height:1.8;display:flex;flex-direction:column;gap:6px}
-.ad-flow-mode{font-size:12px;margin-left:auto}
-.ad-flow-msg{font-size:12px;color:var(--ad-warn)}
 .ad-err-box{margin:0 0 12px;padding:10px 12px;border-radius:10px;border:1px solid var(--ad-error-border);background:var(--ad-error-bg);display:flex;flex-direction:column;gap:4px}
 .ad-err-head{font-size:12px;font-weight:600;color:var(--ad-error)}
 .ad-err-next{font-size:12px;line-height:1.8;color:var(--ad-warn)}
@@ -1371,7 +1127,6 @@ body{
 .ad-field > .ad-input{max-width:480px}
 .ad-field > .ad-input[type="number"]{max-width:120px}
 .ad-select{max-width:220px}
-.ad-flow-sep{color:var(--ad-label-secondary);font-size:12px;flex:none}
 @media (max-width:900px){
   .ad-tab-groups{display:none}
   .ad-tabs-more{display:block}
@@ -1510,24 +1265,15 @@ body{
 .ad-head{background:var(--ad-bg-base);border-bottom:1px solid var(--ad-divider);padding:11px 18px;gap:10px}
 .ad-head .ad-title{font-size:16px;font-weight:600}
 .ad-head .ad-sub{font-size:12px;color:var(--ad-label-secondary)}
-/* 2) 唯一主进度：胶片进度条（不新增第二条） */
-.ad-flow{background:var(--ad-subtle-bg);border:1px solid var(--ad-border);border-radius:12px;padding:10px 14px;margin:0 0 12px;flex-wrap:wrap;gap:6px}
-.ad-flow-step{border-radius:8px;padding:5px 12px;border:1px solid var(--ad-border);background:var(--ad-bg-base);font-size:12px;transition:background 160ms ease,border-color 160ms ease,color 160ms ease}
-.ad-flow-step[data-state="current"]{border-color:var(--ad-brand);color:var(--ad-brand);font-weight:600;background:var(--ad-bg-base)}
-.ad-flow-step[data-state="confirmed"]{border-color:var(--ad-success);color:var(--ad-success)}
-.ad-flow-step[data-state="stale"]{border-color:var(--ad-warning-border);background:var(--ad-warning-bg);color:var(--ad-warn)}
-.ad-flow-step[data-state="pending"]{opacity:.72}
-.ad-flow-sep{font-size:12px;color:var(--ad-label-secondary);margin:0 2px}
 .ad-flow-hint{font-size:12px;color:var(--ad-label-secondary);margin-left:4px}
-.ad-flow-detail{border:1px solid var(--ad-border);border-radius:10px;background:var(--ad-bg-base);padding:10px 12px}
-/* 3) 页签组（4 组 15 页签；roving tabindex/aria 不动） */
+/* 2) 页签组（4 组 15 页签；roving tabindex/aria 不动） */
 .ad-tabs{border-bottom:1px solid var(--ad-divider);gap:8px;margin:2px 0 12px}
 .ad-tab{padding:8px 12px;border-radius:8px 8px 0 0;opacity:.72;transition:background 160ms ease,opacity 160ms ease}
 .ad-tab:hover{background:var(--ad-hover-bg);opacity:1}
 .ad-tab[data-on="1"]{opacity:1;font-weight:600;color:var(--ad-label-primary);border-bottom:2px solid var(--ad-brand)}
 .ad-tab-group{gap:4px}
 .ad-tab-group-label{font-size:12px;color:var(--ad-label-secondary)}
-/* 4) 分区卡（契约/总览/人物/世界观/剧本/分镜/审读等页内区块） */
+/* 3) 分区卡（契约/总览/人物/世界观/剧本/分镜/审读等页内区块） */
 .ad-sec{font-size:14px;font-weight:600;margin:14px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--ad-divider)}
 .ad-sec:first-child{margin-top:0}
 .ad-box{background:var(--ad-subtle-bg);border:1px solid var(--ad-border);border-radius:12px;padding:14px 16px;box-shadow:0 1px 2px var(--ad-border)}
@@ -1540,14 +1286,14 @@ body{
 .ad-review-finding[data-severity="error"]{border-left-color:var(--ad-error)}
 .ad-review-finding[data-severity="warn"]{border-left-color:var(--ad-warn)}
 .ad-review-finding[data-severity="info"]{border-left-color:var(--ad-brand)}
-/* 5) 表格：表头层次 / 行 hover / 分隔线 / 粘性表头（滚动容器内） */
+/* 4) 表格：表头层次 / 行 hover / 分隔线 / 粘性表头（滚动容器内） */
 .ad-table th,.ad-table td{border-color:var(--ad-divider);padding:5px 8px}
 .ad-table th{background:var(--ad-subtle-bg);font-weight:600}
 .ad-table thead th{position:sticky;top:0;z-index:1}
 .ad-table tbody tr:hover{background:var(--ad-hover-bg)}
 .ad-table caption{font-size:12px;color:var(--ad-label-secondary)}
 .ad-table-empty{padding:18px 8px;font-size:12px;color:var(--ad-label-secondary)}
-/* 6) 设置页：分组卡 / 表单对齐 / sticky footer / 诊断折叠 */
+/* 5) 设置页：分组卡 / 表单对齐 / sticky footer / 诊断折叠 */
 .ad-settings-page{gap:14px;padding-bottom:72px}
 .ad-form-group{background:var(--ad-subtle-bg);border:1px solid var(--ad-border);border-radius:12px;padding:14px 16px;margin-bottom:14px;box-shadow:0 1px 2px var(--ad-border)}
 .ad-form-group:last-of-type{margin-bottom:0}
@@ -1570,21 +1316,17 @@ body{
 .ad-settings-diag-body > .ad-sec:first-child{margin-top:4px}
 .ad-settings-diag-rows{display:flex;flex-direction:column;gap:4px}
 @media (max-width:900px){
-  .ad-flow{padding:8px 12px}
   .ad-settings-footer{padding:10px 12px}
   .ad-settings-page{padding-bottom:84px}
   .ad-table th,.ad-table td{padding:4px 6px}
 }
 @media (max-width:560px){
-  .ad-flow-step{padding:4px 10px}
   .ad-settings-footer{justify-content:flex-start}
   .ad-section-card,.ad-form-group{padding:12px}
 }
-@media (prefers-reduced-motion: reduce){.ad-flow-step,.ad-tab{transition:none}}
+@media (prefers-reduced-motion: reduce){.ad-tab{transition:none}}
 /* enhanced：仅支持混色时叠加（base 已保证降级可见） */
 @supports (color: color-mix(in srgb, red 1%, blue)){
-  .ad-flow-step[data-state="current"]{background:color-mix(in srgb,var(--ad-brand) 10%,var(--ad-bg-base));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ad-brand) 35%,transparent)}
-  .ad-flow-step[data-state="confirmed"]{background:color-mix(in srgb,var(--ad-success) 8%,var(--ad-bg-base))}
   .ad-tab[data-on="1"]{background:color-mix(in srgb,var(--ad-brand) 6%,transparent)}
   .ad-box,.ad-toolcard,.ad-review-finding,.ad-form-group{box-shadow:0 1px 2px color-mix(in srgb,var(--ad-label-primary) 8%,transparent),0 4px 12px color-mix(in srgb,var(--ad-label-primary) 5%,transparent)}
   .ad-input:focus,.ad-select:focus,.ad-area:focus{outline:2px solid color-mix(in srgb,var(--ad-brand) 60%,transparent)}
@@ -1662,21 +1404,7 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
 @media (max-width:560px){
   .ad-tabs-agent .ad-agent-label{display:none}
   .ad-agent-instr .ad-area{max-height:160px}
-}/* v0.15.0（task-39 / M6-2）：页头「下一步」CTA（纯追加；0 hex / 0 新 token / 业务 dsw=0） */
-.ad-next-step{display:inline-flex;align-items:center;gap:10px;flex:none;min-width:0}
-.ad-next-cta{display:inline-flex;align-items:center;gap:6px}
-.ad-next-cta>span{white-space:nowrap}
-.ad-next-label{max-width:160px;overflow:hidden;text-overflow:ellipsis}
-.ad-next-label-short{display:none}
-.ad-next-cta[aria-disabled="true"]{opacity:.5;cursor:default}
-.ad-next-alt{display:inline-flex;align-items:center;padding:0;border:0;background:transparent;color:var(--ad-label-secondary);font-size:12px;cursor:pointer;white-space:nowrap}
-.ad-next-alt:hover{color:var(--ad-label-primary);text-decoration:underline}
-.ad-next-hint{font-size:12px;color:var(--ad-label-secondary);max-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ad-next-chip{font-size:12px;line-height:1.4;padding:2px 8px;border-radius:999px;background:var(--ad-subtle-bg);color:var(--ad-label-secondary);border:1px solid var(--ad-border);white-space:nowrap}
-.ad-next-chip[data-tone="warn"]{background:var(--ad-warning-bg);color:var(--ad-warn);border-color:var(--ad-warning-border)}
-.ad-next-chip[data-tone="success"]{background:var(--ad-subtle-bg);color:var(--ad-success);border-color:var(--ad-border)}
-@media (max-width:900px){.ad-next-hint{display:none}}
-@media (max-width:560px){.ad-next-label{display:none}.ad-next-label-short{display:inline}.ad-next-chip{display:none}.ad-next-alt{display:none}.ad-next-cta>span{max-width:none}}
+}
 .ad-asset-toolbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:10px}
 .ad-asset-chip{padding:3px 10px;border-radius:999px;border:1px solid var(--ad-border);background:var(--ad-bg-base);color:var(--ad-label-secondary);font-size:12px;cursor:pointer}
 .ad-asset-chip[aria-pressed='true']{background:var(--ad-brand);border-color:var(--ad-brand);color:var(--ad-on-brand)}
@@ -1687,6 +1415,8 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
 .ad-asset-thumb img{width:100%;height:100%;object-fit:cover;display:block}
 .ad-asset-placeholder{display:flex;align-items:center;justify-content:center;width:100%;height:96px;border-radius:8px;background:var(--ad-subtle-bg);color:var(--ad-label-secondary);font-size:12px;text-align:center;padding:4px;box-sizing:border-box}
 .ad-asset-badge{align-self:flex-start;padding:1px 8px;border-radius:999px;background:var(--ad-subtle-bg);color:var(--ad-label-secondary);font-size:12px}
+.ad-asset-badge-warn{background:var(--ad-warning-bg);color:var(--ad-warn);border:1px solid var(--ad-warning-border)}
+.ad-legacy-warn{color:var(--ad-warn)}
 .ad-asset-card-meta{display:flex;flex-direction:column;gap:2px}
 .ad-asset-card-id{font-size:12px;color:var(--ad-label-secondary)}
 .ad-asset-card-name{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1726,6 +1456,16 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
 .ad-visual-empty{padding:10px;border-radius:8px;background:var(--ad-subtle-bg);color:var(--ad-label-secondary);font-size:12px}
 .ad-visual-wall{display:flex;flex-wrap:wrap;gap:8px}
 .ad-visual-wall .ad-visual-thumb{width:108px;height:108px;flex:0 0 auto}
+.ad-visual-groups{display:flex;flex-direction:column;gap:8px}
+.ad-visual-group{border:1px solid var(--ad-border);border-radius:10px;overflow:hidden;background:var(--ad-bg-base)}
+.ad-visual-group-head{display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;border:none;background:var(--ad-subtle-bg);color:var(--ad-label-primary);font-size:13px;font-weight:600;line-height:1.8;cursor:pointer;text-align:left}
+.ad-visual-group-title{flex:none}
+.ad-visual-group-count{color:var(--ad-label-secondary);font-weight:400}
+.ad-visual-group-symbol{margin-left:auto;flex:none;color:var(--ad-label-secondary)}
+.ad-visual-wall-group{padding:8px 10px;border:none;border-radius:0}
+.ad-visual-guidance{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.ad-visual-guidance-text{line-height:1.8}
+.ad-visual-guidance-actions{display:flex;flex-wrap:wrap;gap:8px}
 .ad-visual-lightbox{position:fixed;inset:0;z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:72px 16px 24px;background:color-mix(in srgb, var(--ad-label-primary) 55%, transparent);overflow:auto}
 .ad-visual-lightbox-close{position:fixed;top:16px;right:16px;z-index:2;min-width:96px;min-height:40px;box-shadow:0 2px 10px rgba(0,0,0,.35)}
 .ad-visual-lightbox-hint{position:relative;z-index:1;color:var(--ad-bg-base);font-size:12px;line-height:18px;opacity:.9;text-align:center;flex:0 0 auto}
@@ -1744,11 +1484,117 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
 .ad-legacy-note{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .ad-registration{margin-top:12px;padding-top:10px;border-top:1px dashed var(--ad-divider)}
 .ad-registration-body{margin-top:8px}
+.ad-scan-toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px;padding-top:10px;border-top:1px dashed var(--ad-divider)}
+.ad-scan-panel{margin-top:8px;padding:10px;border:1px solid var(--ad-border);border-radius:10px;background:var(--ad-bg-base)}
+.ad-scan-selectall{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--ad-label-secondary);cursor:pointer}
+.ad-scan-list{max-height:300px;overflow:auto;border:1px solid var(--ad-border);border-radius:8px;padding:4px 6px;background:var(--ad-subtle-bg);margin-bottom:8px}
+.ad-scan-row{display:flex;align-items:center;gap:8px;padding:3px 2px;font-size:12px;line-height:1.8;cursor:pointer;min-width:0}
+.ad-scan-path{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:Consolas,Menlo,monospace}
+.ad-scan-size{flex:none;color:var(--ad-label-secondary)}
+.ad-scan-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.ad-warn-inline{font-size:12px;line-height:1.8;color:var(--ad-warn)}
+.ad-registry-warning{margin:0 0 10px;padding:10px 12px;border:1px solid var(--ad-warning-border);border-radius:10px;background:var(--ad-warning-bg);color:var(--ad-warn);font-size:12px;line-height:1.8}
+.ad-registry-warning-title{font-weight:600}
+.ad-registry-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.ad-registry-notice{margin:0 0 10px;padding:8px 10px;border-radius:8px;background:var(--ad-subtle-bg);color:var(--ad-success);font-size:12px;line-height:1.8}
+.ad-scan-progress{margin-top:6px;font-size:12px;color:var(--ad-label-secondary)}
+.ad-scan-summary{margin-top:8px;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.8;background:var(--ad-subtle-bg)}
+.ad-scan-fail-list{margin-top:4px;max-height:140px;overflow:auto}
+.ad-scan-fail-item{color:var(--ad-warn);overflow-wrap:anywhere}
+.ad-import-panel{margin-top:8px;padding:10px;border:1px solid var(--ad-border);border-radius:10px;background:var(--ad-bg-base)}
+.ad-import-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+.ad-import-category{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ad-label-secondary)}
+.ad-import-drop{margin-bottom:8px;padding:14px 10px;border:1px dashed var(--ad-border);border-radius:8px;background:var(--ad-subtle-bg);font-size:12px;line-height:1.8;color:var(--ad-label-secondary);text-align:center}
+.ad-import-list{max-height:220px;overflow:auto;border:1px solid var(--ad-border);border-radius:8px;padding:4px 6px;background:var(--ad-subtle-bg);margin-bottom:8px}
+.ad-import-row{display:flex;align-items:center;gap:8px;padding:3px 2px;font-size:12px;line-height:1.8;min-width:0}
+.ad-import-row-bad .ad-import-name,.ad-import-row-bad .ad-import-status{color:var(--ad-warn)}
+.ad-import-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:Consolas,Menlo,monospace}
+.ad-import-size{flex:none;color:var(--ad-label-secondary)}
+.ad-import-status{flex:none;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ad-label-secondary)}
+.ad-import-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.ad-import-progress{margin-top:6px;font-size:12px;color:var(--ad-label-secondary)}
+.ad-import-summary{margin-top:8px;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.8;background:var(--ad-subtle-bg)}
+.ad-cross-import-panel{margin-top:8px}
+.ad-cross-import-toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+.ad-cross-import-toolbar .ad-input{max-width:240px}
+.ad-cross-import-list{display:flex;flex-direction:column;gap:4px;max-height:260px;overflow:auto;padding:6px;border:1px solid var(--ad-border);border-radius:8px;background:var(--ad-bg-base)}
+.ad-cross-import-row{display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:6px;font-size:12px;line-height:1.8}
+.ad-cross-import-row:hover{background:var(--ad-subtle-bg)}
+.ad-cross-import-id{flex:none;font-family:Consolas,Menlo,monospace;color:var(--ad-label-secondary)}
+.ad-cross-import-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ad-cross-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.ad-cross-tab{padding:3px 10px;border:1px solid var(--ad-border);border-radius:999px;background:var(--ad-bg-base);color:var(--ad-label-primary);font-size:12px;line-height:1.8;cursor:pointer}
+.ad-cross-tab[aria-pressed="true"]{border-color:var(--ad-brand);color:var(--ad-brand)}
+.ad-cross-switches{display:flex;flex-wrap:wrap;gap:12px;margin:8px 0;font-size:12px;line-height:1.8}
+.ad-cross-switch{display:flex;align-items:center;gap:6px;cursor:pointer}
+.ad-cross-conflict{margin:6px 0;padding:6px 8px;border-radius:6px;background:var(--ad-subtle-bg);color:var(--ad-label-secondary);font-size:12px;line-height:1.8}
+.ad-cross-warning{margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--ad-subtle-bg);color:var(--ad-warn);font-size:12px;line-height:1.8}
+.ad-cross-style-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:6px;margin:8px 0}
+.ad-cross-style-dim{display:flex;gap:8px;padding:4px 6px;border:1px solid var(--ad-border);border-radius:6px;font-size:12px;line-height:1.8}
+.ad-cross-idmap{margin-top:4px;color:var(--ad-label-secondary);font-size:12px;line-height:1.8;font-family:Consolas,Menlo,monospace}
+.ad-cross-import-empty{padding:10px;border-radius:8px;background:var(--ad-subtle-bg);color:var(--ad-label-secondary);font-size:12px}
+.ad-artifact-file{display:inline-flex;align-items:center;gap:6px;max-width:320px;padding:2px 8px;border:1px solid var(--ad-border);border-radius:999px;background:var(--ad-subtle-bg);font-size:12px;line-height:1.8}
+.ad-artifact-file-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:Consolas,Menlo,monospace}
+.ad-artifact-file-size{flex:none;color:var(--ad-label-secondary)}
+.ad-artifact-category{margin-top:2px}
 .ad-asset-fields{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px 14px;margin:0}
 
 .ad-asset-field{display:flex;gap:6px;font-size:12px;line-height:1.7;min-width:0}
 .ad-asset-field-label{color:var(--ad-label-secondary);flex-shrink:0}
 .ad-asset-field-value{color:var(--ad-label-primary);overflow-wrap:anywhere}
+
+/* v0.16.2（C1-C）：契约页「八大设定（可选）」折叠组（默认收起；token-only，0 hex / 0 新 token） */
+.ad-contract-world-summary{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--ad-label-primary);cursor:pointer;padding:2px 0;list-style:none}
+.ad-contract-world-summary::-webkit-details-marker{display:none}
+.ad-contract-world-summary::before{content:"▸";color:var(--ad-label-secondary);font-size:12px;line-height:1}
+.ad-contract-world[open] .ad-contract-world-summary::before{content:"▾"}
+.ad-contract-world-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:10px 14px;margin-top:10px}
+.ad-contract-world .ad-area{width:100%}
+.ad-contract-world .ad-count[data-over="1"]{color:var(--ad-warn)}/* v0.16.5（task-45）：剧集契约页头入口 + 契约页底部操作卡（token-only；0 hex / 0 新 token） */
+.ad-head-entry[data-on="1"]{background:var(--ad-subtle-bg);border-color:var(--ad-brand);color:var(--ad-label-primary);font-weight:600}
+.ad-head-entry-short{display:none}
+.ad-contract-footer{margin-top:14px}
+@media (max-width:900px){.ad-head-entry-full{display:none}.ad-head-entry-short{display:inline}}/* v0.16.6（C2-C / E15+H-7）：视觉圣经风格定向/冻结编辑区（token-only；0 hex / 0 新 token） */
+.ad-style-status{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--ad-label-secondary);margin:2px 0 10px}
+.ad-style-status .ad-style-state{font-size:13px;font-weight:600;color:var(--ad-label-primary)}
+.ad-style-badge{padding:2px 8px;border-radius:999px;border:1px solid var(--ad-border);background:var(--ad-subtle-bg);color:var(--ad-label-secondary)}
+.ad-style-frozen{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 10px;padding:8px 10px;border:1px solid var(--ad-warning-border);border-radius:8px;background:var(--ad-warning-bg);color:var(--ad-warn);font-size:12px}
+.ad-style-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px 14px}
+.ad-style-field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.ad-style-field .ad-area{width:100%;box-sizing:border-box}
+.ad-style-count{font-size:12px;color:var(--ad-label-secondary);font-weight:400}
+.ad-style-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+/* v0.16.9（C3-C / E16+H-8）：资产/场景卡多轮审核工作台（token-only；0 hex / 0 新 token） */
+.ad-review{display:flex;flex-direction:column;gap:10px}
+.ad-review-kind{display:flex;gap:8px;flex-wrap:wrap}
+.ad-review-filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.ad-review-body{display:grid;grid-template-columns:minmax(240px,320px) minmax(0,1fr);gap:12px;align-items:start}
+.ad-review-list{display:flex;flex-direction:column;gap:6px;max-height:560px;overflow:auto;border:1px solid var(--ad-border);border-radius:10px;padding:8px;background:var(--ad-subtle-bg)}
+.ad-review-item{display:flex;flex-direction:column;gap:2px;text-align:left;padding:6px 8px;border-radius:8px;border:1px solid transparent;background:transparent;color:inherit;cursor:pointer;font:inherit}
+.ad-review-item:hover{border-color:var(--ad-border)}
+.ad-review-item[aria-pressed="true"]{border-color:var(--ad-brand);background:var(--ad-bg-base)}
+.ad-review-item-title{display:flex;align-items:center;gap:6px;font-weight:600;font-size:13px;color:var(--ad-label-primary);flex-wrap:wrap}
+.ad-review-item-meta{font-size:12px;color:var(--ad-label-secondary);overflow-wrap:anywhere}
+.ad-review-badge{font-size:12px;padding:1px 8px;border-radius:999px;border:1px solid var(--ad-border);color:var(--ad-label-secondary);background:var(--ad-bg-base);white-space:nowrap}
+.ad-review-badge[data-status="pending"]{color:var(--ad-warn);border-color:var(--ad-warning-border);background:var(--ad-warning-bg)}
+.ad-review-badge[data-status="rejected"]{color:var(--ad-error);border-color:var(--ad-error-border);background:var(--ad-error-bg)}
+.ad-review-badge[data-status="approved"]{color:var(--ad-brand);border-color:var(--ad-brand)}
+.ad-review-badge[data-status="final"]{color:var(--ad-label-primary);border-color:var(--ad-label-primary);font-weight:600}
+.ad-review-detail{display:flex;flex-direction:column;gap:8px;min-width:0}
+.ad-review-detail-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--ad-label-secondary)}
+.ad-review-detail-head strong{color:var(--ad-label-primary)}
+.ad-review-frozen{padding:7px 10px;border-radius:8px;border:1px solid var(--ad-warning-border);background:var(--ad-warning-bg);color:var(--ad-warn);font-size:12px;line-height:1.8}
+.ad-review-prompt{display:flex;flex-direction:column;gap:4px}
+.ad-review-prompt .ad-area{width:100%;min-height:96px}
+.ad-review-counter{font-size:12px;color:var(--ad-label-secondary)}
+.ad-review-counter[data-over="1"]{color:var(--ad-error)}
+.ad-review-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.ad-review-rounds{display:flex;flex-direction:column;gap:6px}
+.ad-review-round{border:1px solid var(--ad-border);border-radius:8px;padding:6px 8px;font-size:12px;color:var(--ad-label-secondary);display:flex;flex-direction:column;gap:2px}
+.ad-review-round-head{display:flex;gap:8px;flex-wrap:wrap;color:var(--ad-label-primary);font-weight:600}
+.ad-review-round-reason{color:var(--ad-warn)}
+.ad-review-round-prompt{overflow-wrap:anywhere}
+@media (max-width:900px){.ad-review-body{grid-template-columns:1fr}.ad-review-list{max-height:240px}}
 `
 
     function Styles() {
@@ -1919,6 +1765,7 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           prompts: item.prompts && typeof item.prompts === 'object' && !Array.isArray(item.prompts) ? item.prompts : {},
           history: Array.isArray(item.history) ? item.history : [],
           media: normalizeAssetMedia(item.media),
+          review: normalizeAssetReview(item.review),
         })
       }
       return cards
@@ -1977,6 +1824,118 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
     ]
     const VISUAL_STYLE_TEXT_MAX = 300
 
+    /* ---------------- v0.16.6（C2-C / E15+H-7）：视觉圣经定向/冻结（style-save 写入口） ---------------- */
+    const STYLE_DIRECTION_LABELS = { draft: '草稿', directed: '已定向（可微调）', frozen: '已冻结' }
+    const STYLE_REASON_MIN = 10
+    const STYLE_REASON_MAX = 300
+    function styleDraftOf(raw) {
+      const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
+      const draft = {}
+      for (const [key] of STYLE_DIMENSION_ORDER) draft[key] = typeof source[key] === 'string' ? source[key].slice(0, VISUAL_STYLE_TEXT_MAX) : ''
+      return draft
+    }
+    function normalizeStyleDirection(raw) {
+      const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
+      const status = source.status === 'directed' || source.status === 'frozen' ? source.status : 'draft'
+      const revision = Number.isInteger(source.revision) && source.revision > 0 ? source.revision : 1
+      const textOf = (value) => (typeof value === 'string' ? value : '')
+      return {
+        status,
+        revision,
+        directedAt: textOf(source.directedAt),
+        frozenAt: textOf(source.frozenAt),
+        freezeNote: textOf(source.freezeNote),
+        unfreezeCount: Number.isInteger(source.unfreezeCount) && source.unfreezeCount >= 0 ? source.unfreezeCount : 0,
+        hash: textOf(source.hash),
+      }
+    }
+    function styleMomentText(iso) {
+      const text = String(iso || '')
+      if (!text) return ''
+      const date = new Date(text)
+      if (!date || Number.isNaN(date.getTime())) return text.slice(0, 19)
+      const pad = (value) => (value < 10 ? '0' + String(value) : String(value))
+      return String(date.getFullYear()) + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes())
+    }
+
+    /* ---------------- v0.16.9（C3-C / E16+H-8）：资产/场景卡多轮审核（asset-save 写入口） ---------------- */
+    const ASSET_REVIEW_STATUS_ORDER = ['draft', 'pending', 'rejected', 'approved', 'final']
+    const ASSET_REVIEW_STATUS_LABELS = { draft: '草稿', pending: '待审', rejected: '已驳回', approved: '已通过', final: '已定稿' }
+    const ASSET_REVIEW_KIND_LABELS = { asset: '资产卡', scene: '场景卡' }
+    const ASSET_REVIEW_PROMPT_MAX = 2000
+    const ASSET_REVIEW_REASON_MIN = 4
+    const ASSET_REVIEW_REASON_MAX = 300
+    const ASSET_REVIEW_ACTION_NOTICES = {
+      saveDraft: '提示词草稿已保存',
+      submit: '已提交审核',
+      approve: '审核已通过',
+      reject: '已驳回：请修改提示词后重新提交',
+      finalize: '已定稿并锁定（写操作将被拒绝，需重打开）',
+      reopen: '已重打开：可继续修改并重新提交',
+    }
+
+    /** 防御式归一卡内 add-only `review`（缺失 → null；旧卡不出现 review）。 */
+    function normalizeAssetReview(raw) {
+      const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null
+      if (!source) return null
+      const intOf = (value, fallback) => {
+        const number = Number(value)
+        return Number.isInteger(number) && number >= 0 ? number : fallback
+      }
+      const textOf = (value) => (typeof value === 'string' ? value : '')
+      const rounds = (Array.isArray(source.rounds) ? source.rounds : [])
+        .filter((round) => round && typeof round === 'object')
+        .map((round) => ({
+          round: intOf(round.round, 0),
+          prompt: textOf(round.prompt).slice(0, ASSET_REVIEW_PROMPT_MAX),
+          promptVersion: intOf(round.promptVersion, 0),
+          status: ASSET_REVIEW_STATUS_ORDER.includes(String(round.status)) ? String(round.status) : 'pending',
+          submittedAt: textOf(round.submittedAt),
+          reviewer: textOf(round.reviewer),
+          reviewedAt: textOf(round.reviewedAt),
+          reason: textOf(round.reason).slice(0, ASSET_REVIEW_REASON_MAX),
+        }))
+        .slice(-20)
+      return {
+        schemaVersion: intOf(source.schemaVersion, 1),
+        status: ASSET_REVIEW_STATUS_ORDER.includes(String(source.status)) ? String(source.status) : 'draft',
+        revision: intOf(source.revision, 0),
+        roundCount: intOf(source.roundCount, 0),
+        round: intOf(source.round, rounds.length),
+        promptVersion: intOf(source.promptVersion, 0),
+        currentPrompt: textOf(source.currentPrompt).slice(0, ASSET_REVIEW_PROMPT_MAX),
+        rounds,
+        approvedAt: textOf(source.approvedAt),
+        approvedBy: textOf(source.approvedBy),
+        finalizedAt: textOf(source.finalizedAt),
+        finalizedBy: textOf(source.finalizedBy),
+        finalPrompt: textOf(source.finalPrompt).slice(0, ASSET_REVIEW_PROMPT_MAX),
+        reopenCount: intOf(source.reopenCount, 0),
+      }
+    }
+
+    /** 提示词校验（trim 后 1–2000 字；返回错误文案或空串）。 */
+    function assetReviewPromptIssue(prompt) {
+      const text = String(prompt == null ? '' : prompt).trim()
+      if (text.length < 1) return '提示词不能为空（1–2000 字，trim 后计）'
+      if (text.length > ASSET_REVIEW_PROMPT_MAX) return `提示词最多 ${ASSET_REVIEW_PROMPT_MAX} 字（当前 ${text.length} 字）`
+      return ''
+    }
+
+    /** 驳回/重打开原因校验（trim 后 4–300 字；返回错误文案或空串）。 */
+    function assetReviewReasonIssue(reason) {
+      const text = String(reason == null ? '' : reason).trim()
+      if (text.length < ASSET_REVIEW_REASON_MIN) return `原因至少 ${ASSET_REVIEW_REASON_MIN} 字（当前 ${text.length} 字）`
+      if (text.length > ASSET_REVIEW_REASON_MAX) return `原因最多 ${ASSET_REVIEW_REASON_MAX} 字（当前 ${text.length} 字）`
+      return ''
+    }
+
+    /** 审核状态徽标文案。 */
+    function assetReviewStatusLabel(review) {
+      if (!review) return '草稿'
+      return ASSET_REVIEW_STATUS_LABELS[review.status] || review.status
+    }
+
     /** 归一 styleDNA（只保留五维非空字符串；无有效维返回 null → 视觉基调空态）。 */
     function normalizeVisualStyle(raw) {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
@@ -2011,6 +1970,7 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           lighting: text(item.lighting, 300),
           description: text(item.description, 300),
           assetRefs: Array.isArray(item.assetRefs) ? item.assetRefs.map((ref) => String(ref).trim()).filter(Boolean) : [],
+          review: normalizeAssetReview(item.review),
         })
       }
       return scenes.sort((a, b) => String(a.id).localeCompare(String(b.id), 'en'))
@@ -2031,6 +1991,25 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         }
       }
       return entries
+    }
+
+        /* ---------------- v0.16.4（task-141 / C1-C）：视觉圣经图墙按资产类型分组 helper ---------------- */
+    const VISUAL_WALL_GROUPS = [
+      { key: 'scene', label: '场景', types: ['SPC'] },
+      { key: 'char', label: '角色', types: ['CHR'] },
+      { key: 'prop', label: '道具', types: ['PRP'] },
+      { key: 'other', label: '其他', types: null },
+    ]
+    function visualWallGroupOf(type) {
+      const normalized = String(type || '').toUpperCase()
+      for (const group of VISUAL_WALL_GROUPS) {
+        if (group.types && group.types.includes(normalized)) return group.key
+      }
+      return 'other'
+    }
+    function visualWallGroupLabel(key) {
+      const group = VISUAL_WALL_GROUPS.find((item) => item.key === key)
+      return group ? group.label : '其他'
     }
 
     /** 场景缩略图兜底：同 id 的 SPC 资产卡 media.thumbnail || media.images[0]（场景卡 schema 无 media）。 */
@@ -2101,6 +2080,416 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
     // v0.15.5（task-121）：lightbox 关闭热修 —— 触发元素与 body overflow 原值（关闭时恢复焦点/滚动）
     let lightboxTriggerEl = null
     let lightboxPrevBodyOverflow = ''
+
+    /* ---------------- v0.15.8（task-126 / EXT-C1）：素材登记仅项目内 helper ---------------- */
+    const OUTSIDE_PROJECT_HINT = '素材必须位于项目文件夹内（仅支持项目内路径）：请先把文件放入项目「素材/」目录再登记'
+    const OUTSIDE_PROJECT_MESSAGE_PATTERN = /项目文件夹内|项目目录|外部路径|素材必须位于|项目外|仅支持项目内/
+    function normalizeProjectPath(value) {
+      const text = String(value == null ? '' : value).trim().replace(/\\/g, '/')
+      if (!text) return ''
+      const driveMatch = /^([A-Za-z]):(?:\/|$)/.exec(text)
+      const isUnc = text.startsWith('//')
+      if (!driveMatch && !isUnc) return ''
+      const stack = []
+      const rest = driveMatch ? text.slice(driveMatch[0].length) : text.slice(2)
+      for (const part of rest.split('/')) {
+        if (!part || part === '.') continue
+        if (part === '..') { stack.pop(); continue }
+        stack.push(part)
+      }
+      const joined = stack.join('/')
+      if (driveMatch) return driveMatch[1].toUpperCase() + ':' + (joined ? '/' + joined : '')
+      return '//' + joined
+    }
+    function resolveProjectInternalPath(source, projectRoot) {
+      const root = normalizeProjectPath(projectRoot)
+      if (!root) return ''
+      const text = String(source == null ? '' : source).trim().replace(/\\/g, '/')
+      if (!text) return ''
+      if (text.startsWith('//?/') || text.startsWith('//./')) return '' // 设备路径：无法归属项目内
+      let candidate = ''
+      if (/^[A-Za-z]:\//.test(text) || text.startsWith('//')) candidate = text
+      else if (text.startsWith('/')) {
+        const drive = /^([A-Za-z]):/.exec(root)
+        if (drive) candidate = drive[1] + ':' + text
+      } else candidate = root + '/' + text
+      return normalizeProjectPath(candidate)
+    }
+    function isProjectExternalSource(source, projectRoot) {
+      const root = normalizeProjectPath(projectRoot)
+      if (!root) return false // 项目根未知 → 降级不标记（宁可不标，不误伤项目内绝对路径）
+      const resolved = resolveProjectInternalPath(source, projectRoot)
+      if (!resolved) return true // 设备路径/异常路径 → 视为项目外
+      const target = resolved.toLowerCase()
+      const boundary = root.toLowerCase()
+      return !(target === boundary || target.startsWith(boundary + '/'))
+    }
+    // 错误文案里如夹带项目外绝对路径（如宿主「找不到文件：G:\...」）→ 隐藏，避免泄漏到 DOM
+    function hideProjectExternalPaths(text, projectRoot) {
+      return String(text == null ? '' : text).replace(/(?:[A-Za-z]:[\\/]|\/\/)[^\s'"，。；、）)]+/g, (token) => {
+        const trimmed = token.replace(/[，。；、）)]+$/, '')
+        return isProjectExternalSource(trimmed, projectRoot) ? '（外部路径已隐藏）' : token
+      })
+    }
+
+    /* ---------------- v0.15.9（task-129 / D2C-C）：扫描素材目录 / 批量登记 helper ---------------- */
+    const SCAN_KIND_ORDER = ['image', 'video', 'audio', 'doc', 'other']
+    const SCAN_BATCH_WARN_THRESHOLD = 50
+    function scanBasename(value) {
+      const parts = String(value == null ? '' : value).split('/').filter(Boolean)
+      return parts.length ? parts[parts.length - 1] : ''
+    }
+    function normalizeScanFiles(raw) {
+      const files = []
+      const seen = new Set()
+      for (const item of Array.isArray(raw) ? raw : []) {
+        if (!item || typeof item !== 'object') continue
+        // 安全：只接受项目内相对路径（正斜杠），拒绝绝对路径/盘符/.. 段
+        const rel = String(item.path == null ? '' : item.path).trim().replace(/\\/g, '/')
+        if (!rel || rel.startsWith('/') || /^[A-Za-z]:/.test(rel) || rel.split('/').includes('..')) continue
+        if (seen.has(rel)) continue
+        seen.add(rel)
+        const kindRaw = String(item.kindGuess || '').toLowerCase()
+        const kind = SCAN_KIND_ORDER.includes(kindRaw) ? kindRaw : 'other'
+        const size = Number(item.size)
+        files.push({ path: rel, name: scanBasename(rel), kind, size: Number.isFinite(size) && size >= 0 ? size : 0 })
+      }
+      return files
+    }
+
+    /* ---------------- v0.16.x（C2-C 原型）：跨项目资产复用 helper（只读源项目 → assets-import B-1；无新调用点） ---------------- */
+    const CROSS_IMPORT_MIN_HOST_VERSION = '0.16.7' // C2-H 交付版本（v0.16.7）；旧宿主隐藏入口
+    const CROSS_IMPORT_MAX_BATCH = 100
+    function crossAssetCategoryOf(source) {
+      const text = String(source == null ? '' : source).replace(/\\/g, '/')
+      const match = /^素材\/([^/]+)\//.exec(text)
+      return match ? match[1] : ''
+    }
+    function normalizeCrossAssets(raw) {
+      const seen = new Set()
+      const list = []
+      for (const item of Array.isArray(raw) ? raw : []) {
+        if (!item || typeof item !== 'object') continue
+        const id = String(item.id == null ? '' : item.id).trim()
+        if (!id || seen.has(id)) continue
+        seen.add(id)
+        const name = String(item.name == null ? '' : item.name).trim() || id
+        const kind = String(item.kind == null ? '' : item.kind).toLowerCase()
+        const bytes = Number(item.bytes)
+        const sha256 = String(item.sha256 == null ? '' : item.sha256)
+        list.push({
+          id,
+          name,
+          kind,
+          category: crossAssetCategoryOf(item.source),
+          bytes: Number.isFinite(bytes) && bytes >= 0 ? bytes : 0,
+          sha256,
+        })
+      }
+      return list.sort((a, b) => a.id.localeCompare(b.id, 'en'))
+    }
+    function sanitizeCrossMessage(text) {
+      return String(text == null ? '' : text).replace(/(?:[A-Za-z]:[\\/]|\/\/)[^\s'"，。；、）)]+/g, '（路径已隐藏）')
+    }
+    function crossImportErrorText(error) {
+      const code = String((error && error.code) || 'failed')
+      const message = sanitizeCrossMessage((error && error.message) || '')
+      if (code === 'duplicate' || code === 'conflict') return '已存在（内容相同），已跳过'
+      if (code === 'too-large') return '文件超过 50MB 上限，未导入'
+      if (code === 'forbidden' || code === 'invalid-args') return '源项目或资产不可用（仅支持受管项目内的已登记素材）'
+      if (code === 'not-found') return '源资产已不存在，请刷新源列表后重试'
+      if (code === 'style-directed' || code === 'style-locked') return '目标风格已定稿/已锁定，未导入风格（不改目标状态机）'
+      if (code === 'id-exists') return '同 id 冲突（默认跳过）'
+      if (code === 'alias-exists') return '别名冲突，未导入'
+      return '导入失败：' + (message || '未知错误') + '（不阻塞；可重试失败项）'
+    }
+
+    /* ---------------- v0.16.8（I5-1-C）：跨项目对象导入（资产卡/场景卡/风格 DNA）helper ---------------- */
+    const CROSS_OBJECTS_MIN_HOST_VERSION = '0.16.8'
+    const CROSS_OBJECT_BATCH = 100
+    const CROSS_TABS = [
+      { key: 'assets', label: '素材' },
+      { key: 'cards', label: '资产卡' },
+      { key: 'scenes', label: '场景卡' },
+      { key: 'style', label: '风格 DNA' },
+    ]
+    function crossCompact(input) {
+      if (input == null) return undefined
+      if (typeof input === 'string') return input.trim() ? input : undefined
+      if (Array.isArray(input)) {
+        const list = input.map((item) => crossCompact(item)).filter((item) => item !== undefined)
+        return list.length ? list : undefined
+      }
+      if (typeof input === 'object') {
+        const out = {}
+        for (const key of Object.keys(input).sort()) {
+          if (key === 'version' || key === 'history' || key === 'importedFrom') continue
+          const value = crossCompact(input[key])
+          if (value !== undefined) out[key] = value
+        }
+        return Object.keys(out).length ? out : undefined
+      }
+      return input
+    }
+    function crossStableStringify(value) {
+      try { return JSON.stringify(crossCompact(value)) || '' } catch { return '' }
+    }
+    function crossCardSignature(card) {
+      if (!card || typeof card !== 'object') return ''
+      return crossStableStringify({
+        id: card.id,
+        type: card.type,
+        name: card.name,
+        status: card.status,
+        aliases: card.aliases,
+        fields: card.fields,
+        relations: card.relations,
+        prompts: card.prompts,
+        media: card.media,
+      })
+    }
+    function crossSceneSignature(scene) {
+      if (!scene || typeof scene !== 'object') return ''
+      return crossStableStringify({
+        id: scene.id,
+        name: scene.name,
+        space: scene.space,
+        lighting: scene.lighting,
+        assetRefs: scene.assetRefs,
+      })
+    }
+    function normalizeCrossCards(raw) {
+      const list = []
+      const seen = new Set()
+      for (const item of Array.isArray(raw) ? raw : []) {
+        if (!item || typeof item !== 'object') continue
+        const id = String(item.id == null ? '' : item.id).trim()
+        if (!id || seen.has(id)) continue
+        seen.add(id)
+        const media = item.media && typeof item.media === 'object' ? item.media : {}
+        const imageCount = Array.isArray(media.images) ? media.images.length : 0
+        const audioCount = Array.isArray(media.audio) ? media.audio.length : 0
+        list.push({
+          id,
+          name: String(item.name == null ? '' : item.name).trim() || id,
+          type: String(item.type == null ? '' : item.type).toUpperCase(),
+          status: String(item.status == null ? '' : item.status),
+          aliases: Array.isArray(item.aliases) ? item.aliases.map((alias) => String(alias)) : [],
+          mediaCount: imageCount + audioCount + (media.thumbnail ? 1 : 0),
+          instance: item,
+        })
+      }
+      return list.sort((a, b) => a.id.localeCompare(b.id, 'en'))
+    }
+    function normalizeCrossScenes(raw) {
+      const list = []
+      const seen = new Set()
+      for (const item of Array.isArray(raw) ? raw : []) {
+        if (!item || typeof item !== 'object') continue
+        const id = String(item.id == null ? '' : item.id).trim()
+        if (!id || seen.has(id)) continue
+        seen.add(id)
+        const space = item.space && typeof item.space === 'object' ? item.space : {}
+        const summary = [space.interior, space.timeOfDay, space.weather, space.location].filter(Boolean).join(' · ')
+        list.push({
+          id,
+          name: String(item.name == null ? '' : item.name).trim() || id,
+          summary,
+          instance: item,
+        })
+      }
+      return list.sort((a, b) => a.id.localeCompare(b.id, 'en'))
+    }
+    function normalizeCrossStyle(raw) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+      const style = {}
+      for (const [key, value] of Object.entries(raw)) {
+        if (typeof value === 'string' && value.trim()) style[key] = value.trim()
+      }
+      return Object.keys(style).length ? style : null
+    }
+    function crossObjectCount(entry) {
+      if (!entry || typeof entry !== 'object') return { ok: 0, duplicate: 0, fail: [] }
+      const imported = Array.isArray(entry.imported) ? entry.imported : []
+      const skipped = Array.isArray(entry.skipped) ? entry.skipped : []
+      const failed = Array.isArray(entry.failed) ? entry.failed : []
+      return { ok: imported.length, duplicate: skipped.length, fail: failed }
+    }
+    function sanitizeCrossWarnings(raw) {
+      return (Array.isArray(raw) ? raw : []).map((item) => {
+        const text = typeof item === 'string' ? item : String((item && (item.message || item.reason || item.warning || item.detail)) || '')
+        return sanitizeCrossMessage(text).trim()
+      }).filter(Boolean)
+    }
+
+    function crossFailureText(item) {
+      if (!item || typeof item !== 'object') return '导入失败'
+      const reason = item.reason || item.error || item.message
+      if (reason) return sanitizeCrossMessage(String(reason))
+      if (item.code) return crossImportErrorText({ code: item.code })
+      return '导入失败'
+    }
+    function crossFailItems(rawList, kind, lookupName) {
+      return (Array.isArray(rawList) ? rawList : []).map((item) => {
+        const sourceId = String((item && (item.sourceAssetId || item.sourceCardId || item.sourceSceneId || item.id)) || '')
+        const name = String((item && item.name) || (typeof lookupName === 'function' ? lookupName(sourceId) : '') || sourceId)
+        return { kind, sourceId, name, reason: crossFailureText(item) }
+      })
+    }
+    function crossCounts(rawEntry, kind, lookupName) {
+      const entry = rawEntry && typeof rawEntry === 'object' ? rawEntry : {}
+      const imported = Array.isArray(entry.imported) ? entry.imported : []
+      const skipped = Array.isArray(entry.skipped) ? entry.skipped : []
+      const failed = crossFailItems(entry.failed, kind, lookupName)
+      return { ok: imported.length, duplicate: skipped.length, fail: failed }
+    }
+
+    /* ---------------- v0.16.10（M3-C）：registry 损坏提示 / 修复 / ledger 显式渲染 helper ---------------- */
+    const M3_MIN_HOST_VERSION = '0.16.10' // M3-H 交付版本（C3 冻结/host M3 打包后校准）
+    const REGISTRY_WARNING_TEXT = '素材登记文件损坏，已降级只读'
+    const REGISTRY_WARNING_DETAIL = '扫描/导入素材/跨项目导入已暂停；请先修复登记表（修复前会备份原登记文件）。'
+    const REGISTRY_REPAIR_CONFIRM = '修复素材登记表？\n\n将从项目「素材/」实际文件重建登记（按 SHA/大小校验）；修复前会备份原登记文件。'
+    const REGISTRY_REPAIR_FAIL_TEXT = '修复失败：登记表未能重建（原文件与备份保留）；请检查项目数据文件后重试'
+    const REGISTRY_DISABLED_ACTION_TEXT = '素材登记表损坏，请先修复登记表后再操作'
+    const LEDGER_RENDER_FAIL_TEXT = '渲染失败：账本文件未写入（原数据未改动）'
+    function m3RepairNotice(result) {
+      const rebuilt = Number(
+        result && (result.rebuiltCount != null
+          ? result.rebuiltCount
+          : result.rebuilt != null
+            ? result.rebuilt
+            : result.repairedCount != null
+              ? result.repairedCount
+              : result.count)
+      )
+      const count = Number.isFinite(rebuilt) && rebuilt >= 0 ? rebuilt : 0
+      const backupPath = result && typeof result.backup === 'string' ? result.backup.trim() : ''
+      const safeBackup = backupPath && !/^[A-Za-z]:[\\/]/.test(backupPath) && !backupPath.startsWith('/') ? backupPath : 'assets.json.bak'
+      return `登记表已修复：重建 ${count} 条；原登记文件已备份（${safeBackup}）`
+    }
+
+    /* ---------------- v0.15.11（task-135 / IMP-C）：一键导入 helper（file input/拖拽 → assets-import） ---------------- */
+    const IMPORT_MAX_BYTES = 50 * 1024 * 1024
+    const IMPORT_MAX_BATCH = 20
+    const IMPORT_MIN_HOST_VERSION = '0.15.11'
+    const IMPORT_CATEGORIES = ['角色', '场景', '道具', '服装', '表情', '特效', '音效', '配音', '音乐', '分镜', '其他']
+    const IMPORT_KIND_EXTENSIONS = {
+      image: ['png', 'jpg', 'jpeg', 'webp', 'gif'],
+      audio: ['mp3', 'wav', 'm4a', 'ogg', 'aac'],
+      video: ['mp4', 'mov', 'webm', 'mkv', 'avi', 'm4v'],
+      doc: ['md', 'txt', 'json', 'pdf', 'doc', 'docx', 'csv'],
+    }
+    const IMPORT_ACCEPT = Object.values(IMPORT_KIND_EXTENSIONS).flat().map((ext) => '.' + ext).join(',')
+    const IMPORT_KIND_LABELS = { image: '图片', audio: '音频', video: '视频', doc: '文档' }
+    function importExtensionOf(name) {
+      const text = String(name == null ? '' : name).trim()
+      const match = /\.([A-Za-z0-9]{1,8})$/.exec(text)
+      return match ? match[1].toLowerCase() : ''
+    }
+    function importKindOf(name) {
+      const extension = importExtensionOf(name)
+      for (const [kind, extensions] of Object.entries(IMPORT_KIND_EXTENSIONS)) {
+        if (extensions.includes(extension)) return kind
+      }
+      return ''
+    }
+    function importKindLabelOf(name) {
+      const kind = importKindOf(name)
+      return IMPORT_KIND_LABELS[kind] || '未知类型'
+    }
+    function importDefaultCategory() {
+      const now = new Date()
+      const month = String(now.getMonth() + 1).padStart(2, '0')
+      const day = String(now.getDate()).padStart(2, '0')
+      return `导入_${now.getFullYear()}${month}${day}`
+    }
+    function importReadArrayBuffer(file) {
+      return new Promise((resolve, reject) => {
+        try {
+          const reader = new window.FileReader()
+          reader.onload = () => resolve(reader.result)
+          reader.onerror = () => reject(new Error('文件读取失败'))
+          reader.readAsArrayBuffer(file)
+        } catch (error) {
+          reject(new Error('文件读取失败'))
+        }
+      })
+    }
+    function importReadBase64(file) {
+      return new Promise((resolve, reject) => {
+        try {
+          const reader = new window.FileReader()
+          reader.onload = () => {
+            const text = String(reader.result || '')
+            const index = text.indexOf(',')
+            resolve(index >= 0 ? text.slice(index + 1) : text)
+          }
+          reader.onerror = () => reject(new Error('文件读取失败'))
+          reader.readAsDataURL(file)
+        } catch (error) {
+          reject(new Error('文件读取失败'))
+        }
+      })
+    }
+    async function importSha256Of(file) {
+      // crypto.subtle 不可用 → 省略 expectedSha256（host 仍自行计算/校验）
+      try {
+        const subtle = typeof crypto !== 'undefined' && crypto && crypto.subtle ? crypto.subtle : null
+        if (!subtle || typeof subtle.digest !== 'function') return ''
+        const buffer = await importReadArrayBuffer(file)
+        const digest = await subtle.digest('SHA-256', buffer)
+        return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('')
+      } catch (error) {
+        return ''
+      }
+    }
+
+    /* ---------------- v0.16.1（task-139 / C-6）：产物入库三模式 helper（本地文件→assets-import；项目内路径/URL→intake-artifact） ---------------- */
+    const ARTIFACT_EXTERNAL_HINT = '本地外部文件请使用「选择文件导入素材库」；或先把文件放入项目「素材/生成/」再传项目内路径'
+    const ARTIFACT_LOCAL_TOO_LARGE = '文件超过 50MB 上限'
+    const ARTIFACT_LOCAL_BAD_TYPE = '不支持的类型（png/jpg/jpeg/webp/gif、mp4/mov/webm/mkv/avi/m4v、mp3/wav/m4a/ogg/aac、md/txt/json/pdf/doc/docx/csv）'
+    const ARTIFACT_CATEGORY_DEFAULT = '生成'
+    const ARTIFACT_CATEGORIES = [ARTIFACT_CATEGORY_DEFAULT, ...IMPORT_CATEGORIES.filter((category) => category !== ARTIFACT_CATEGORY_DEFAULT)]
+    const ARTIFACT_URL_HINTS = {
+      private: '该链接指向内网或本机地址，出于安全考虑不允许下载',
+      redirect: '链接重定向次数过多或跳转到不允许的地址，请使用直链',
+      scheme: '仅支持 http(s) 直链（不允许账号密码或非法格式）；请粘贴生成产物的直链地址',
+      tooLarge: '远程文件超过 64MB 上限，未入库；大文件请下载后使用「选择文件导入素材库」（单文件 ≤50MB）或放入项目「素材/生成/」',
+      download: '下载失败：无法解析或访问链接，请检查链接或改用本地文件导入',
+    }
+    function artifactModeOf(file, source) {
+      if (file) return 'file'
+      const text = String(source == null ? '' : source).trim()
+      // 任何 scheme:// 文本都按 URL 模式交给宿主校验（非 http(s) 会得到固定协议提示，而不是当地址）
+      return /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text) ? 'url' : 'path'
+    }
+    function mapArtifactUrlError(error) {
+      const code = String((error && error.code) || '')
+      const message = String((error && error.message) || '')
+      if (/重定向|redirect/i.test(message)) return ARTIFACT_URL_HINTS.redirect
+      if (code === 'forbidden' || /内网|本机|localhost|不允许访问|地址不被允许/i.test(message)) return ARTIFACT_URL_HINTS.private
+      if (code === 'too-large' || /过大|超过.*64|64MB/i.test(message)) return ARTIFACT_URL_HINTS.tooLarge
+      if (code === 'invalid-args') return ARTIFACT_URL_HINTS.scheme
+      if (code === 'failed' || /解析|下载失败|HTTP/i.test(message)) return ARTIFACT_URL_HINTS.download
+      return ''
+    }
+    function mapArtifactPathError(error) {
+      const code = String((error && error.code) || '')
+      const message = String((error && error.message) || '')
+      if (code === 'forbidden' || /项目内|项目外|外部路径|外部文件|素材库「一键导入」|短剧项目内/i.test(message)) return ARTIFACT_EXTERNAL_HINT
+      return ''
+    }
+    let importFileSeq = 0
+    function importStatusText(item) {
+      if (!item) return ''
+      if (item.status === 'queued') return '待导入'
+      if (item.status === 'importing') return '导入中…'
+      if (item.status === 'ok') return '✓ 已导入'
+      if (item.status === 'duplicate') return '已存在'
+      if (item.status === 'too-large' || item.status === 'unsupported' || item.status === 'limit') return `⚠ ${item.reason}`
+      if (item.status === 'fail') return `✗ ${item.reason || '导入失败'}`
+      return ''
+    }
 
     /* ------------------------------------------------------------ 通用控件 */
 
@@ -2251,6 +2640,48 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
       )
     }
 
+    /* v0.16.2（C1-C）：契约页「八大设定（可选）」8 字段（E14 add-only；空串删键/读不补默认）
+     * 字段顺序 = worldSpace→worldTime→powerSystem→speciesEcology→factions→resourceEconomy→cultureBelief→soulDeath */
+    const CONTRACT_WORLD_FIELDS = [
+      ['worldSpace', '地理与空间', 1500, '舞台 / 通行成本 / 空间结构'],
+      ['worldTime', '时间与历史', 1500, '时代 / 关键历史事件 / 时间规则'],
+      ['powerSystem', '力量体系', 2000, '力量来源 / 天花板 / 代价（必须写清上限与代价）'],
+      ['speciesEcology', '种族与生态', 1200, '种族 / 生态 / 种族间关系'],
+      ['factions', '社会与势力', 1500, '势力格局 / 阵营 / 冲突'],
+      ['resourceEconomy', '资源与经济', 1200, '稀缺资源 / 货币 / 交换规则'],
+      ['cultureBelief', '文化与信仰', 1500, '信仰 / 习俗 / 禁忌'],
+      ['soulDeath', '灵魂/生死/因果', 1500, '死后去哪 / 能否复活 / 死亡权重'],
+    ]
+
+    /** 八大字段读取：仅接受 string；缺省/非法类型按未填处理（读不补默认）。 */
+    function contractWorldValue(contract, key) {
+      const value = contract && typeof contract === 'object' ? contract[key] : undefined
+      return typeof value === 'string' ? value : ''
+    }
+
+    /** 已填计数（trim 后非空；用于折叠组「已填 X/8 / 未填写」）。 */
+    function contractWorldFilledCount(contract) {
+      return CONTRACT_WORLD_FIELDS.filter(([key]) => contractWorldValue(contract, key).trim() !== '').length
+    }
+
+    /** 保存 payload（Lead 19:2x 修正）：8 个键**始终存在**且为 string —— 未填/清空发 ''，
+     *  由宿主 C1-H 在 trim 后删除该键（解决「清空字段无法删除旧值」）；非空发 trim 值；
+     *  其余 7 字段与未知旧字段原样保留。 */
+    function contractWorldPayload(contract) {
+      const payload = contract && typeof contract === 'object' ? { ...contract } : {}
+      for (const [key] of CONTRACT_WORLD_FIELDS) {
+        const value = contractWorldValue(payload, key).trim()
+        payload[key] = value ? value : ''
+      }
+      return payload
+    }
+
+    /** 超长前端提示（trim 后字符数 > 上限）；后端 C1-H 400 仍为最终权威。 */
+    function contractWorldOverLimit(contract) {
+      return CONTRACT_WORLD_FIELDS
+        .map(([key, label, limit]) => [label, contractWorldValue(contract, key).trim().length, limit])
+        .filter(([, length, limit]) => length > limit)
+    }
     /* ============================================= v0.12.1（task-8）：独立设置页 */
     // 宿主 settings.section（侧栏「设置 → AI 短剧」）与项目页面板内设置浮层共用同一组件：
     // - 每次挂载都 settings-get 重读（宿主 tree 与主面板 tree 之间经 API 共享状态）
@@ -2270,7 +2701,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
       const [taskModelError, setTaskModelError] = React.useState('')
       const [taskModelRecent, setTaskModelRecent] = React.useState(() => loadRecentTaskModels())
       const [costTierNotice, setCostTierNotice] = React.useState('')
-      const [flowModeBusy, setFlowModeBusy] = React.useState(false)
       // v0.12.3（task-21 / M4 批2）：诊断区 4 条既有路由（只读；仅按钮显式点击时调用，挂载不自动跑）
       const [diagBackends, setDiagBackends] = React.useState(null)
       const [diagBackendsBusy, setDiagBackendsBusy] = React.useState(false)
@@ -2499,24 +2929,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         }
       }
 
-      // 流程模式：设置页直接写宿主 settings.strictMode（项目页 flow 状态机仍由主面板负责，保持 flow-state 读写不变）
-      const applyFlowStrict = async (wantStrict) => {
-        if (!settings || busy || flowModeBusy) return
-        setFlowModeBusy(true)
-        setError('')
-        try {
-          const result = await api('settings-save', { settings: { ...normalizeSettings(settings), strictMode: wantStrict } })
-          const nextSettings = normalizeSettings(result.settings)
-          setSettings(nextSettings)
-          say(wantStrict ? '已开启强制模式：未确认上一阶段时，内容写入与步骤确认会被宿主阻止（HTTP 409）。' : '已切回宽松模式：只提示不强制。')
-          if (typeof options.onSaved === 'function') options.onSaved(nextSettings)
-        } catch (err) {
-          setError(err.message)
-        } finally {
-          setFlowModeBusy(false)
-        }
-      }
-
       const refreshStatus = async () => {
         try {
           setStatus(await api('status'))
@@ -2683,21 +3095,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
                 : null,
               taskModelError ? h('div', { className: 'ad-err', style: { marginBottom: 6 }, role: 'alert' }, taskModelError) : null,
               h('div', { className: 'ad-path' }, '回退链：任务模型 → 默认模型 → 宿主默认（agentDefaultModel）。模型运行时不可用时宿主降级并标记，不阻断审读。其他任务键（review/outline/characters/episode/storyboard）已预留，v0.6.1 暂不渲染。Ctrl/⌘+S 保存当前页签或文档栏；Enter 执行搜索。'))),
-          h('div', { className: 'ad-form-group', key: 'st-flow-mode' },
-            h('div', { className: 'ad-sec' }, '流程模式'),
-            h('div', { className: 'ad-field' },
-              h('label', null, '流程模式'),
-              h('select', {
-                className: 'ad-select',
-                value: settings.strictMode ? 'on' : 'off',
-                onChange: (e) => applyFlowStrict(e.target.value === 'on'),
-                disabled: busy || flowModeBusy,
-                'aria-label': '流程模式（宽松 / 强制门禁）',
-              },
-                h('option', { value: 'off' }, '宽松（默认，只提示不强制）'),
-                h('option', { value: 'on' }, '强制（未确认上一阶段时禁止越步写入/确认）')),
-              h('span', { className: 'ad-sub' }, '由宿主 settings.strictMode 生效')),
-            h('div', { className: 'ad-path' }, '流程状态存于 <项目>/.aidrama/flow-state.json（不随导出；回退只标「待重做」，不删除文件）')),
           h('div', { className: 'ad-form-group', key: 'st-templates' },
             h('div', { className: 'ad-sec' }, `提示词模板（${PROMPT_TEMPLATE_KEYS.length} 个环节，留空 = 内置默认）`),
             h('div', { className: 'ad-settings-grid' },
@@ -2719,7 +3116,7 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           ? null
           : h('div', { className: 'ad-settings-head' },
               h('div', { className: 'ad-sec', style: { margin: 0 } }, 'AI 短剧设置'),
-              h('div', { className: 'ad-sub' }, '默认契约 / 默认模型 / 任务模型 / 提示词模板 / 流程模式 / 存储位置；设置保存在宿主 settings，列表页不再重复展示。')),
+              h('div', { className: 'ad-sub' }, '默认契约 / 默认模型 / 任务模型 / 提示词模板 / 存储位置；设置保存在宿主 settings，列表页不再重复展示。')),
         flash ? h('div', { className: 'ad-flash', role: 'status', 'aria-live': 'polite' }, flash) : null,
         error ? h('div', { className: 'ad-err', role: 'alert' }, error) : null,
         body,
@@ -3162,8 +3559,11 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
       const [hits, setHits] = React.useState(null)
 
       const [openTitle, setOpenTitle] = React.useState('')
-      const [tab, setTab] = React.useState('contract')
+      const [tab, setTab] = React.useState('outline')
       const [tree, setTree] = React.useState(null)
+      // v0.15.8（task-126 / EXT-C1）：素材登记仅项目内 —— 当前项目根（from tree.path）+ 登记区错误提示
+      const [projectRoot, setProjectRoot] = React.useState('')
+      const [assetAddError, setAssetAddError] = React.useState('')
       const [contract, setContract] = React.useState(null)
       const [rows, setRows] = React.useState([])
       const [characters, setCharacters] = React.useState([])
@@ -3176,6 +3576,7 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
       const [exported, setExported] = React.useState([])
       const [memory, setMemory] = React.useState([])
       const [world, setWorld] = React.useState([])
+      // v0.16.0 A-C1：progress 仅 openProject 内部只读保留（进度 UI 已移除，不再渲染任何进度语义）
       const [progress, setProgress] = React.useState(null)
       const [collapsed, setCollapsed] = React.useState({})
       const [settings, setSettings] = React.useState(null)
@@ -3210,14 +3611,93 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
       const [visualType, setVisualType] = React.useState('all')
       const [visualQuery, setVisualQuery] = React.useState('')
       const [visualSort, setVisualSort] = React.useState('id-asc')
+      // v0.16.4（task-141 / C1-C）：图墙分组折叠（仅控制组内 DOM，不影响筛选）
+      const [visualGroupCollapsed, setVisualGroupCollapsed] = React.useState({})
       const [visualLightbox, setVisualLightbox] = React.useState(null)
       const [visualAudioIndex, setVisualAudioIndex] = React.useState({})
+      // v0.16.6（C2-C / E15+H-7）：视觉圣经风格定向/冻结状态（style-save 唯一写入口）
+      const [styleDirection, setStyleDirection] = React.useState(null)
+      const [styleDraft, setStyleDraft] = React.useState(styleDraftOf(null))
+      const [styleBusy, setStyleBusy] = React.useState(false)
+      const [styleNotice, setStyleNotice] = React.useState('')
+      const [styleError, setStyleError] = React.useState('')
+      const [styleDialog, setStyleDialog] = React.useState(null)
+      const [styleReason, setStyleReason] = React.useState('')
+      const [styleReasonError, setStyleReasonError] = React.useState('')
+      // v0.16.9（C3-C / E16+H-8）：资产/场景卡审核工作台 UI 态（asset-save 唯一写入口）
+      const [assetReviewKind, setAssetReviewKind] = React.useState('asset') // asset | scene
+      const [assetReviewStatusFilter, setAssetReviewStatusFilter] = React.useState('all')
+      const [assetReviewTypeFilter, setAssetReviewTypeFilter] = React.useState('全部')
+      const [assetReviewQuery, setAssetReviewQuery] = React.useState('')
+      const [assetReviewSelectedId, setAssetReviewSelectedId] = React.useState('')
+      const [assetReviewPrompt, setAssetReviewPrompt] = React.useState('')
+      const [assetReviewPromptError, setAssetReviewPromptError] = React.useState('')
+      const [assetReviewReason, setAssetReviewReason] = React.useState('')
+      const [assetReviewReasonError, setAssetReviewReasonError] = React.useState('')
+      const [assetReviewDialog, setAssetReviewDialog] = React.useState(null) // { type:'reject'|'finalize'|'reopen' } | null
+      const [assetReviewError, setAssetReviewError] = React.useState('')
+      const [assetReviewNotice, setAssetReviewNotice] = React.useState('')
+      const [assetReviewBusy, setAssetReviewBusy] = React.useState(false)
+      const [assetReviewHashes, setAssetReviewHashes] = React.useState({ asset: '', scene: '' })
       // v0.15.4（task-119 / M20-C）：素材库 2.0 · legacy 登记统一卡片视图
       const [legacyImageCache, setLegacyImageCache] = React.useState({})
       const [legacyKindFilter, setLegacyKindFilter] = React.useState('all')
       const [legacyQuery, setLegacyQuery] = React.useState('')
       const [legacySort, setLegacySort] = React.useState('name-asc')
       const [assetRegistrationOpen, setAssetRegistrationOpen] = React.useState(false)
+      // v0.15.9（task-129 / D2C-C）：扫描素材目录 + 批量登记（不移动文件；复用 assets-get 加参 + assets-add）
+      const [scanSupported, setScanSupported] = React.useState(null) // null=未探测 | true=支持 | false=旧宿主
+      const [scanOpen, setScanOpen] = React.useState(false)
+      const [scanFiles, setScanFiles] = React.useState([])
+      const [scanTotal, setScanTotal] = React.useState(0)
+      const [scanTruncated, setScanTruncated] = React.useState(false)
+      const [scanKindFilter, setScanKindFilter] = React.useState('all')
+      const [scanSelected, setScanSelected] = React.useState({})
+      const [scanBatchBusy, setScanBatchBusy] = React.useState(false)
+      const [scanProgress, setScanProgress] = React.useState({ done: 0, total: 0 })
+      const [scanSummary, setScanSummary] = React.useState(null)
+      // v0.15.11（task-135 / IMP-C）：一键导入（file input/拖拽 → assets-import；仅 host version≥0.15.11 显示）
+      const [importSupported, setImportSupported] = React.useState(null) // null=未知 | true | false
+      // v0.16.10（M3-C）：registry 损坏提示/修复 + ledger 显式渲染（host≥M3）
+      const [registrySupported, setRegistrySupported] = React.useState(null) // null=未探测 | true=字段存在 | false=旧宿主
+      const [registryOk, setRegistryOk] = React.useState(true)
+      const [registryBusy, setRegistryBusy] = React.useState(false)
+      const [registryNotice, setRegistryNotice] = React.useState('')
+      const [registryError, setRegistryError] = React.useState('')
+      const [m3Supported, setM3Supported] = React.useState(null) // ledger renderFile/修复能力（版本门禁）
+      const [ledgerRendered, setLedgerRendered] = React.useState(false)
+      const [importOpen, setImportOpen] = React.useState(false)
+      const [importQueue, setImportQueue] = React.useState([])
+      const [importCategory, setImportCategory] = React.useState('')
+      const [importBusy, setImportBusy] = React.useState(false)
+      const [importProgress, setImportProgress] = React.useState({ done: 0, total: 0 })
+      const [importSummary, setImportSummary] = React.useState(null)
+      // v0.16.x（C2-C 原型）：跨项目资产复用（只读源项目 → assets-import add-only；无新方法/调用点）
+      const [crossSupported, setCrossSupported] = React.useState(null) // null=未知 | true | false
+      const [crossOpen, setCrossOpen] = React.useState(false)
+      const [crossSourceTitle, setCrossSourceTitle] = React.useState('')
+      const [crossAssets, setCrossAssets] = React.useState([])
+      const [crossLoading, setCrossLoading] = React.useState(false)
+      const [crossLoadError, setCrossLoadError] = React.useState('')
+      const [crossQuery, setCrossQuery] = React.useState('')
+      const [crossSelected, setCrossSelected] = React.useState({})
+      const [crossCategory, setCrossCategory] = React.useState('')
+      const [crossBusy, setCrossBusy] = React.useState(false)
+      const [crossSummary, setCrossSummary] = React.useState(null)
+      // v0.16.8（I5-1-C）：跨项目对象导入 tabs（素材/资产卡/场景卡/风格 DNA；host≥0.16.8）
+      const [crossObjectsSupported, setCrossObjectsSupported] = React.useState(null) // null=未知 | true | false
+      const [crossTab, setCrossTab] = React.useState('assets')
+      const [crossCards, setCrossCards] = React.useState([])
+      const [crossScenes, setCrossScenes] = React.useState([])
+      const [crossStyle, setCrossStyle] = React.useState(null)
+      const [crossCardSelected, setCrossCardSelected] = React.useState({})
+      const [crossSceneSelected, setCrossSceneSelected] = React.useState({})
+      const [crossCopyStyleDNA, setCrossCopyStyleDNA] = React.useState(false)
+      const [crossCopyMedia, setCrossCopyMedia] = React.useState(true)
+      const [crossAllowNewIdSuffix, setCrossAllowNewIdSuffix] = React.useState(false)
+      const [crossOverwriteStyle, setCrossOverwriteStyle] = React.useState(false)
+      const [crossWarnings, setCrossWarnings] = React.useState([])
+
 
       // v0.15.5（task-121）：lightbox 关闭热修 —— 统一关闭函数 + Esc/背景/焦点/滚动锁（三方式关闭）
       const closeVisualLightbox = () => setVisualLightbox(null)
@@ -3328,6 +3808,11 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
       const [artifactName, setArtifactName] = React.useState('')
       const [artifactBusy, setArtifactBusy] = React.useState(false)
       const [artifactResult, setArtifactResult] = React.useState(null)
+      // v0.16.1（task-139 / C-6）：产物入库本地文件模式（选择文件 → assets-import）与导入分类
+      const [artifactFile, setArtifactFile] = React.useState(null)
+      const [artifactFileName, setArtifactFileName] = React.useState('')
+      const [artifactFileSize, setArtifactFileSize] = React.useState(0)
+      const [artifactCategory, setArtifactCategory] = React.useState(ARTIFACT_CATEGORY_DEFAULT)
       const [importText, setImportText] = React.useState('')
       const [importPreview, setImportPreview] = React.useState(null)
       const [showImport, setShowImport] = React.useState(false)
@@ -3372,15 +3857,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
       const [sourcesMode, setSourcesMode] = React.useState('loading') // loading | host | legacy
       const [sourcesDegraded, setSourcesDegraded] = React.useState(false)
       const [sourceBusy, setSourceBusy] = React.useState(false)
-      // P2-2 流程状态机：flow-state 由宿主 doc-read/doc-save 特例读写；默认宽松模式（Q1）
-      const [flowState, setFlowState] = React.useState(null)
-      const [flowAvailable, setFlowAvailable] = React.useState(false)
-      const [flowBusy, setFlowBusy] = React.useState(false)
-      const [flowMsg, setFlowMsg] = React.useState('')
-      const [flowError, setFlowError] = React.useState('')
-      const [flowHash, setFlowHash] = React.useState('')
-      const [flowDetail, setFlowDetail] = React.useState('')
-      const [flowStrictMode, setFlowStrictMode] = React.useState(false)
       // P2-8：错误可读化 + 可恢复动作（重试当前操作 / 重新载入 / 返回列表）
       const [errorInfo, setErrorInfo] = React.useState(null)
       const [retryAction, setRetryAction] = React.useState(null)
@@ -3434,15 +3910,9 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           const result = await fn()
           return result !== false
         } catch (err) {
-          // P2-2：强制模式下越步写入被宿主以 409 conflict 拒绝 → 用流程提示引导先确认上一步
-          if (err && err.code === 'conflict' && /强制模式|需先确认/.test(String(err.message || ''))) {
-            setFlowMsg(String(err.message || ''))
-            refreshFlow().catch(() => {})
-          } else {
-            setError(err.message)
-            setErrorInfo(friendlyErrorInfo(err))
-            setRetryAction({ run: fn })
-          }
+          setError(err.message)
+          setErrorInfo(friendlyErrorInfo(err))
+          setRetryAction({ run: fn })
           return false
         } finally {
           setBusy(false)
@@ -3513,6 +3983,12 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         setGenPlan(null)
         // 账本 / 台词 / 素材 / 导入预览：跨项目不串扰
         setLedger(null)
+        setLedgerRendered(false)
+        setRegistrySupported(null)
+        setRegistryOk(true)
+        setRegistryBusy(false)
+        setRegistryNotice('')
+        setRegistryError('')
         setDialogue(null)
         setEpisodeView('text')
         setDialogueEpisodeFilter('all')
@@ -3531,6 +4007,14 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         setAssetAudioIndex(0)
         setAssetBrokenAudios({})
         setVisualStyle(null)
+        setStyleDirection(null)
+        setStyleDraft(styleDraftOf(null))
+        setStyleBusy(false)
+        setStyleNotice('')
+        setStyleError('')
+        setStyleDialog(null)
+        setStyleReason('')
+        setStyleReasonError('')
         setVisualScenes([])
         setAssetView('cards')
         setVisualType('all')
@@ -3538,11 +4022,57 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         setVisualSort('id-asc')
         setVisualLightbox(null)
         setVisualAudioIndex({})
+        setVisualGroupCollapsed({})
         setLegacyImageCache({})
         setLegacyKindFilter('all')
         setLegacyQuery('')
         setLegacySort('name-asc')
         setAssetRegistrationOpen(false)
+        setScanSupported(null)
+        setScanOpen(false)
+        setScanFiles([])
+        setScanTotal(0)
+        setScanTruncated(false)
+        setScanKindFilter('all')
+        setScanSelected({})
+        setScanBatchBusy(false)
+        setScanProgress({ done: 0, total: 0 })
+        setScanSummary(null)
+        setImportOpen(false)
+        setImportQueue([])
+        setImportCategory('')
+        setImportBusy(false)
+        setImportProgress({ done: 0, total: 0 })
+        setImportSummary(null)
+        // v0.16.1（task-139 / C-6）：产物入库本地文件/分类状态（切项目清空）
+        setArtifactFile(null)
+        setArtifactFileName('')
+        setArtifactFileSize(0)
+        setArtifactCategory(ARTIFACT_CATEGORY_DEFAULT)
+        setArtifactResult(null)
+        setCrossOpen(false)
+        setCrossSourceTitle('')
+        setCrossAssets([])
+        setCrossLoading(false)
+        setCrossLoadError('')
+        setCrossQuery('')
+        setCrossSelected({})
+        setCrossCategory('')
+        setCrossBusy(false)
+        setCrossSummary(null)
+        setCrossTab('assets')
+        setCrossCards([])
+        setCrossScenes([])
+        setCrossStyle(null)
+        setCrossCardSelected({})
+        setCrossSceneSelected({})
+        setCrossCopyStyleDNA(false)
+        setCrossCopyMedia(true)
+        setCrossAllowNewIdSuffix(false)
+        setCrossOverwriteStyle(false)
+        setCrossWarnings([])
+        setProjectRoot('')
+        setAssetAddError('')
         legacyImageLoadState.clear()
         assetImageLoadState.clear()
         setImportText('')
@@ -3636,6 +4166,11 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           ])
           setStatus(st)
           setHostFlags({ p1: versionAtLeast(st.version, MIN_P1_HOST) })
+          // v0.15.11（task-135 / IMP-C）：能力探测 A（version≥0.15.11 才显示「导入素材」，旧宿主零新显示、零额外请求）
+          setImportSupported(versionAtLeast(st.version, IMPORT_MIN_HOST_VERSION))
+        setCrossSupported(versionAtLeast(st.version, CROSS_IMPORT_MIN_HOST_VERSION))
+        setM3Supported(versionAtLeast(st.version, M3_MIN_HOST_VERSION))
+        setCrossObjectsSupported(versionAtLeast(st.version, CROSS_OBJECTS_MIN_HOST_VERSION))
           setProjects(shelf.projects || [])
           setSettings(normalizeSettings(stg.settings))
           setShared(sh)
@@ -3679,6 +4214,7 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
             api('finalized-list', { title }),
           ])
           setOpenTitle(title)
+          setProjectRoot(t && t.tree && typeof t.tree.path === 'string' ? t.tree.path : '')
           setTree(t.tree)
           setContract(c.contract)
           setRows(o.rows || [])
@@ -3691,7 +4227,7 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           setFinalized((fin.finalized || []).map((f) => f))
           setReport(null)
           setExported([])
-          setTab('contract')
+          setTab('outline')
           const first = (eps.episodes || [])[0]
           const firstOrder = first ? Number(first.order) || 1 : 1
           setEpisodeOrder(firstOrder)
@@ -3708,8 +4244,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           // P0-3（task-4）：自动载入当前集正文 / 分镜（首屏即见磁盘内容；失败不阻断进入项目，仅给可读提示）
           autoLoadEpisode(title, firstOrder).catch(() => {})
           autoLoadShots(title, firstOrder).catch(() => {})
-          // P2-2：加载流程状态（宿主未就绪时按内容推断只读展示）
-          loadFlow(title, prg.progress).catch(() => {})
           // P2-3：审读报告按需读取（进入检查页触发）；切项目先清空本地裁决
           setReviewReport(null)
           setReviewBusy(false)
@@ -3736,14 +4270,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           setHits(result)
         })
 
-      // T8 流水线：progress-get 是唯一数据源（与「创作进度」工具一致）
-      const refreshProgress = () =>
-        guard(async () => {
-          const result = await api('progress-get', { title: openTitle })
-          setProgress(result.progress)
-          say('创作进度已刷新')
-        })
-
       /* ------------------------------------------------------ 契约 / 总纲 / 人物 */
 
       // P0-1（task-4）：契约编辑统一入口 —— 任何字段变更都标「未保存」（dirty 覆盖 7 个可保存页签）
@@ -3754,11 +4280,17 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
 
       const saveContract = () =>
         guard(async () => {
-          const result = await api('contract-save', { title: openTitle, contract })
+          // v0.16.2（C1-C）：8 字段超长前端提示（trim 后计；后端 C1-H 400 仍为最终权威）
+          const overLimit = contractWorldOverLimit(contract)
+          if (overLimit.length) {
+            setError('八大设定超出长度上限：' + overLimit.map(([label, length, limit]) => '「' + label + '」' + length + '/' + limit).join('、') + '；请精简后再保存（后端亦会以 400 拒绝）。')
+            return false
+          }
+          // v0.16.2（C1-C）：只提交非空字段（trim 非空保留、空串删键）；其余 7 字段与未知旧字段原样
+          const result = await api('contract-save', { title: openTitle, contract: contractWorldPayload(contract) })
           setContract(result.contract)
           clearDirty('contract')
           say('契约已保存')
-          refreshFlow().catch(() => {})
         })
 
       const setRow = (index, key, value) => {
@@ -3781,7 +4313,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         setRows(result.rows)
         clearDirty('outline')
         say('总纲已保存')
-        refreshFlow().catch(() => {})
       })
 
       const setCard = (index, key, value) => {
@@ -3801,7 +4332,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         setCharacters(result.characters)
         clearDirty('characters')
         say('人物卡已保存')
-        refreshFlow().catch(() => {})
       })
 
       /* ---------------------------------------------------------- 剧本 / 分镜 */
@@ -3839,12 +4369,8 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           setSaveBlock(null)
           const target = Number(episodeOrder) || 1
           const result = await api('episode-write', { title: openTitle, order: target, text: episodeText })
-          const [eps, prg] = await Promise.all([
-            api('episodes-list', { title: openTitle }),
-            api('progress-get', { title: openTitle }),
-          ])
+          const eps = await api('episodes-list', { title: openTitle })
           setEpisodes(eps.episodes || [])
-          setProgress(prg.progress)
           setLoadedEpisodeOrder(target)
           setEpisodeDiskHadContent(Boolean(String(episodeText || '').trim()))
           clearDirty('episode')
@@ -3855,7 +4381,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
             if (docDirty) setDocNotice('文档编辑器有未保存修改：可直接保存覆盖，或点「重新载入最新」同步刚保存的剧本。')
             else loadDoc(docPath).catch(() => {})
           }
-          refreshFlow().catch(() => {})
         })
 
       const loadShots = (order) =>
@@ -3918,7 +4443,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         setLoadedShotsOrder(target)
         clearDirty('storyboard')
         say(`分镜已保存${result.shots ? `（${result.shots.length} 个镜头）` : ''}`)
-        refreshFlow().catch(() => {})
       })
 
       /* ---------------------------------------------------------- 草稿 / 检查 / 导出 */
@@ -3932,15 +4456,14 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         })
       }
 
-      // 草稿处理后统一刷新：草稿区 + 可能被改写的正式内容 + 进度 + 分镜 + 目录树
+      // 草稿处理后统一刷新：草稿区 + 可能被改写的正式内容 + 分镜 + 目录树
       const reloadAfterDraftResolution = async () => {
-        const [dr, c, o, ch, eps, prg, sb, tr] = await Promise.all([
+        const [dr, c, o, ch, eps, sb, tr] = await Promise.all([
           api('drafts-list', { title: openTitle, includeResolved: draftIncludeResolved }),
           api('contract-get', { title: openTitle }),
           api('outline-get', { title: openTitle }),
           api('characters-get', { title: openTitle }),
           api('episodes-list', { title: openTitle }),
-          api('progress-get', { title: openTitle }),
           api('storyboard-get', { title: openTitle, order: episodeOrder }),
           api('tree', { title: openTitle }),
         ])
@@ -3949,7 +4472,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         setRows(o.rows || [])
         setCharacters(ch.characters || [])
         setEpisodes(eps.episodes || [])
-        setProgress(prg.progress)
         setShots(sb.shots || [])
         setLoadedShotsOrder(Number(episodeOrder) || 1)
         // 草稿采纳可能改写剧本正文：本地 episodeText 可能已过期 → 失效载入态，保存前必须先「载入」（防空覆盖）
@@ -3960,7 +4482,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         clearDirty('outline')
         clearDirty('characters')
         clearDirty('storyboard')
-        refreshFlow().catch(() => {})
       }
 
       const resolveDraft = (id, action) =>
@@ -4028,9 +4549,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           const result = await api('export-project', { title: openTitle, format })
           setExported((prev) => [...prev.filter((x) => x.format !== format), result.export])
           say('已导出 ' + format)
-          const prg = await api('progress-get', { title: openTitle })
-          setProgress(prg.progress)
-          refreshFlow().catch(() => {})
         })
 
       /* ------------------------------------------------------------ 本剧记忆 */
@@ -4311,7 +4829,7 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         setPhase('ready')
         setTree(null)
         setOpenTitle('')
-        setTab('contract')
+        setTab('outline')
         setContract(null)
         setRows([])
         setCharacters([])
@@ -4328,15 +4846,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         setSharedPath('')
         setSharedText('')
         setHits(null)
-        // P2-2：切源/返回列表时清空流程状态（跨项目不复用）
-        setFlowState(null)
-        setFlowAvailable(false)
-        setFlowBusy(false)
-        setFlowMsg('')
-        setFlowError('')
-        setFlowHash('')
-        setFlowDetail('')
-        setFlowStrictMode(false)
         // P2-3：审读报告与本地裁决一并清空（跨项目/跨源不串扰）
         setReviewReport(null)
         setReviewBusy(false)
@@ -4403,197 +4912,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         applySourceList(list, 'legacy', sourcesDegraded)
       }, [workspaceSnapshot])
 
-      /* ---------------------------------- P2-2 流程状态机读写 / 确认 / 回退 */
-
-      const flowHasContent = (key) => {
-        const facts = (progress && progress.facts) || {}
-        if (key === 'project') return true
-        if (key === 'outline') return rows.length > 0 || (facts.outlineCount || 0) > 0
-        if (key === 'characters') return characters.length > 0 || (facts.characterCount || 0) > 0
-        if (key === 'episode_script') return episodes.length > 0 || (facts.episodeCount || 0) > 0
-        if (key === 'storyboard') return (facts.storyboardCount || 0) > 0 || shots.length > 0
-        if (key === 'exported') return (facts.exportCount || 0) > 0 || exported.length > 0
-        return false
-      }
-
-      const flowStateFromText = (text) => {
-        try {
-          return normalizeFlowState(JSON.parse(text))
-        } catch {
-          return null
-        }
-      }
-
-      // 读：doc-read 的 `.aidrama/flow-state.json` 特例（宿主 task-22；零新增 route）
-      const loadFlow = async (title = openTitle, progressHint = progress, options = {}) => {
-        if (!title) return null
-        setFlowBusy(true)
-        if (!options.silent) setFlowError('')
-        try {
-          const result = await api('doc-read', { title, path: FLOW_STATE_PATH })
-          const state = flowStateFromText(result.text)
-          if (!state) throw new Error('flow-state 内容不是合法 JSON')
-          setFlowState(state)
-          setFlowStrictMode(state.strictMode === true)
-          setFlowAvailable(true)
-          setFlowHash(result.hash || '')
-          if (!options.silent) setFlowMsg('')
-          return state
-        } catch (error) {
-          if (isHostRouteMissing(error) || (error && (error.code === 'not-found' || error.code === 'invalid-args'))) {
-            // 宿主 flow 特例未就绪 → 降级：按 progress 推断只读展示，隐藏确认/回退
-            setFlowAvailable(false)
-            setFlowState(inferFlowStateFromProgress(progressHint))
-            setFlowHash('')
-            if (!options.silent) setFlowMsg('流程状态接口尚未就绪：当前为按内容推断的只读展示，确认/回退暂不可用。')
-          } else if (!options.silent) {
-            setFlowError(error.message)
-          }
-          return null
-        } finally {
-          setFlowBusy(false)
-        }
-      }
-
-      const persistFlow = async (nextState) => {
-        const text = JSON.stringify({
-          version: 1,
-          strictMode: nextState.strictMode === true,
-          steps: nextState.steps,
-        })
-        const result = await api('doc-save', { title: openTitle, path: FLOW_STATE_PATH, text, expectedHash: flowHash })
-        setFlowHash(result.hash || '')
-        return result
-      }
-
-      // Q4：宿主在内容写入后自动同步 flow-state → client 重新读取刷新步骤条
-      const refreshFlow = () =>
-        openTitle && flowAvailable ? loadFlow(openTitle, progress, { silent: true }) : Promise.resolve(null)
-
-      // Q1：强制门禁 = settings.strictMode（宿主权威）或项目级 flow-state.strictMode 任一开启
-      const flowStrictActive = () =>
-        (settings && settings.strictMode === true) || (flowState && flowState.strictMode === true) || flowStrictMode
-
-      // 统一处理流程写冲突：expectedHash 冲突 → 重载；强制模式拒绝（409 conflict，无 currentHash）→ 展示宿主指引
-      const applyFlowConflict = (error) => {
-        if (!error || error.code !== 'conflict') return false
-        if (error.detail && error.detail.currentHash) {
-          setFlowMsg('流程状态已被其他操作更新，已重新载入，请重试。')
-        } else {
-          setFlowMsg(String(error.message || '强制模式：请先确认上一步后再操作。'))
-        }
-        loadFlow(openTitle, progress, { silent: true }).catch(() => {})
-        return true
-      }
-
-      const confirmFlowStep = async (stepKey) => {
-        if (!flowState || !flowAvailable) {
-          setFlowMsg('流程状态接口尚未就绪，暂不能确认。')
-          return
-        }
-        const status = flowState.steps[stepKey] || 'not_started'
-        // AC-F1/F2：项目步由宿主初始化为 not_started，允许直接确认；其余步需 in_progress
-        const statusConfirmable = status === 'in_progress' || (stepKey === 'project' && status === 'not_started')
-        if (stepKey !== flowCurrentKey(flowState) || !statusConfirmable) {
-          setFlowMsg('只有「当前进行中」的步骤可以确认。')
-          return
-        }
-        if (!flowHasContent(stepKey)) {
-          setFlowMsg(`「${flowStepLabel(stepKey)}」还没有内容，不能确认。`)
-          return
-        }
-        setFlowBusy(true)
-        setFlowError('')
-        try {
-          const steps = { ...flowState.steps, [stepKey]: 'confirmed' }
-          const next = { ...flowState, steps }
-          await persistFlow(next)
-          setFlowState(next)
-          setFlowMsg(`已确认「${flowStepLabel(stepKey)}」，可进入下一步。`)
-          say(`已确认：${flowStepLabel(stepKey)}`)
-          await loadFlow(openTitle, progress, { silent: true })
-        } catch (error) {
-          if (!applyFlowConflict(error)) setFlowError(error.message)
-        } finally {
-          setFlowBusy(false)
-        }
-      }
-
-      // 回退/撤销确认：二次确认说明影响范围（Q3：仅标 stale，不删文件、不自动备份）
-      const rollbackFlowTo = async (stepKey) => {
-        if (!flowState || !flowAvailable) {
-          setFlowMsg('流程状态接口尚未就绪，暂不能回退。')
-          return
-        }
-        const targetIndex = flowStepIndex(stepKey)
-        const downstream = FLOW_STEPS.slice(targetIndex + 1)
-          .filter(([key]) => ['confirmed', 'stale'].includes(flowState.steps[key] || ''))
-          .map(([, label]) => label)
-        const exportedConfirmed = flowState.steps.exported === 'confirmed'
-        const riskHead = exportedConfirmed && targetIndex < FLOW_STEPS.length - 1 ? '⚠ 高危组合：下游包含「已导出」内容。\n\n' : ''
-        const impact = downstream.length ? downstream.join('、') : '（无下游已确认步骤）'
-        if (!window.confirm(`${riskHead}回退到「${flowStepLabel(stepKey)}」？\n\n影响范围：${impact}\n\n- 「${flowStepLabel(stepKey)}」回到「进行中」，需重新确认；\n- 下游已确认步骤将标记「待重做」（仅提示，文件不会被删除）；\n- 已导出内容不会被删除。\n\n继续？`)) return
-        setFlowBusy(true)
-        setFlowError('')
-        try {
-          const steps = { ...flowState.steps, [stepKey]: 'in_progress' }
-          for (const [key] of FLOW_STEPS.slice(targetIndex + 1)) {
-            if (steps[key] === 'confirmed') steps[key] = 'stale'
-          }
-          const next = { ...flowState, steps }
-          await persistFlow(next)
-          setFlowState(next)
-          setFlowMsg(`已回退到「${flowStepLabel(stepKey)}」：下游步骤标记为待重做（文件未删除）。`)
-          say(`已回退：${flowStepLabel(stepKey)}`)
-          await loadFlow(openTitle, progress, { silent: true })
-        } catch (error) {
-          if (!applyFlowConflict(error)) setFlowError(error.message)
-        } finally {
-          setFlowBusy(false)
-        }
-      }
-
-      // 默认宽松模式（Q1）；严格模式通过 settings-save 写 strictMode（宿主校验并生效，AC-F3）
-      const toggleFlowStrict = async (wantStrict) => {
-        if (busy || flowBusy) return
-        const baseSettings = settings ? settings : normalizeSettings(null)
-        const previous = flowStrictActive()
-        setFlowStrictMode(wantStrict)
-        setFlowBusy(true)
-        setFlowError('')
-        try {
-          const result = await api('settings-save', { settings: { ...baseSettings, strictMode: wantStrict } })
-          const nextSettings = normalizeSettings(result.settings)
-          setSettings(nextSettings)
-          setFlowStrictMode(nextSettings.strictMode === true)
-          setFlowMsg(
-            wantStrict
-              ? '已开启强制模式：未确认上一阶段时，内容写入与步骤确认会被宿主阻止（HTTP 409），先确认「上一阶段」即可。'
-              : '已切回宽松模式：只提示不强制。',
-          )
-          if (openTitle && flowState) await loadFlow(openTitle, progress, { silent: true })
-        } catch (error) {
-          setFlowStrictMode(previous)
-          setFlowError(error.message)
-        } finally {
-          setFlowBusy(false)
-        }
-      }
-
-      // AC-F3 客户端预检：严格模式且前置未确认时阻止切换页签（宿主仍为最终权威）
-      const strictGateBlock = (tabKey) => {
-        const stepKey = FLOW_TAB_STEP[tabKey]
-        if (!flowStrictActive() || !flowState || !flowAvailable || !stepKey) return ''
-        const targetIndex = flowStepIndex(stepKey)
-        for (let i = 0; i < targetIndex; i += 1) {
-          const [key] = FLOW_STEPS[i]
-          if ((flowState.steps[key] || '') !== 'confirmed') {
-            return `严格模式（强制门禁）：请先确认「${flowStepLabel(key)}」后再进入「${flowStepLabel(stepKey)}」。`
-          }
-        }
-        return ''
-      }
-
       const switchTab = (tabKey) => {
         // v0.15.2（task-112）：legacy dialogue → 剧本页台词视图（无 URL 深链机制，按 tab-key 别名重定向）
         const targetTab = normalizeTabKey(tabKey)
@@ -4601,14 +4919,8 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           setEpisodeView('dialogue')
           setDialogueRedirectNotice(true)
         }
-        const blocked = strictGateBlock(targetTab)
-        if (blocked) {
-          setFlowMsg(blocked)
-          return
-        }
         // P0-1（task-4）：切页签是「离开当前编辑页」路径，有未保存修改时先走三选一守卫
         requestLeave(() => {
-          setFlowMsg('')
           setTab(targetTab)
           // v0.15.4（task-119 / M20-C）：进入素材库自动加载（不再要求先点「刷新」）
           if (targetTab === 'assets' && openTitle) loadAssets().catch(() => {})
@@ -4862,13 +5174,44 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         }
       }
 
-      const loadAssets = () =>
+      const loadAssets = (options) =>
         guard(async () => {
-          const result = await api('assets-get', { title: openTitle })
+          // v0.15.9（task-129 / D2C-C）：首次进素材库带 scanMaterials:true 探测能力；失败保持未知下次重试；
+          // 判定 false 后普通 load 不再带该参数（旧宿主输出与 v0.15.8 完全一致）。
+          const keepView = Boolean(options && options.keepView === true)
+          const wantsScan = options && typeof options.scan === 'boolean' ? options.scan : scanSupported === null
+          // v0.16.9（C3-C / E16+H-8）：带 includeReviewHashes（add-only 入参）→ 读 cardsHash/scenesHash 供 asset-save expectedHash
+          const assetsRequest = { title: openTitle, includeReviewHashes: true }
+          if (wantsScan) assetsRequest.scanMaterials = true
+          const result = await api('assets-get', assetsRequest)
           const cards = normalizeAssetCards(result.cards)
           const legacyList = normalizeLegacyAssets(result.assets)
           setAssets(result.assets || [])
           setAssetCards(cards)
+          setAssetAddError('')
+          if (Object.prototype.hasOwnProperty.call(result, 'registryOk')) {
+            setRegistrySupported(true)
+            setRegistryOk(result.registryOk !== false)
+            if (result.registryOk === false) {
+              setScanOpen(false)
+              setImportOpen(false)
+              setCrossOpen(false)
+            }
+          } else {
+            setRegistrySupported(false)
+            setRegistryOk(true)
+          }
+          if (Object.prototype.hasOwnProperty.call(result, 'unregisteredFiles')) {
+            const normalizedScanFiles = normalizeScanFiles(result.unregisteredFiles)
+            const total = Number(result.unregisteredTotal)
+            setScanSupported(true)
+            setScanFiles(normalizedScanFiles)
+            setScanTotal(Number.isFinite(total) && total >= 0 ? Math.floor(total) : normalizedScanFiles.length)
+            setScanTruncated(Boolean(result.truncated))
+          } else if (wantsScan) {
+            setScanSupported(false)
+            setScanOpen(false)
+          }
           setLegacyKindFilter('all')
           setLegacyQuery('')
           setLegacySort('name-asc')
@@ -4878,29 +5221,240 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           // v0.15.3（task-115 / VB-C）：读取 add-only scenes/styleDNA（缺失 → 空态；零新调用点）
           setVisualScenes(normalizeVisualScenes(result.scenes))
           setVisualStyle(normalizeVisualStyle(result.styleDNA))
-          setAssetTypeFilter('全部')
-          setAssetQuery('')
-          setAssetSelectedId(null)
-          setAssetImageIndex(0)
-          setAssetView('cards')
-          setVisualType('all')
-          setVisualQuery('')
-          setVisualSort('id-asc')
-          setVisualLightbox(null)
-          setVisualAudioIndex({})
+          setStyleDraft(styleDraftOf(result.styleDNA))
+          setStyleDirection(normalizeStyleDirection(result.styleDirection))
+          setStyleBusy(false)
+          setStyleNotice('')
+          setStyleError('')
+          setStyleDialog(null)
+          setStyleReason('')
+          setStyleReasonError('')
+          // v0.16.9（C3-C / E16+H-8）：审核工作台 hash（add-only 读：只有带 includeReviewHashes 且目标文件存在才返回）+ 状态重置
+          const nextCardsHash = typeof result.cardsHash === 'string' ? result.cardsHash : ''
+          const nextScenesHash = typeof result.scenesHash === 'string' ? result.scenesHash : ''
+          setAssetReviewHashes({ asset: nextCardsHash, scene: nextScenesHash })
+          setAssetReviewBusy(false)
+          if (!keepView) {
+            setAssetTypeFilter('全部')
+            setAssetQuery('')
+            setAssetSelectedId(null)
+            setAssetImageIndex(0)
+            setAssetView('cards')
+            setVisualType('all')
+            setVisualQuery('')
+            setVisualSort('id-asc')
+            setVisualLightbox(null)
+            setVisualAudioIndex({})
+            setVisualGroupCollapsed({})
+            setAssetReviewKind('asset')
+            setAssetReviewStatusFilter('all')
+            setAssetReviewTypeFilter('全部')
+            setAssetReviewQuery('')
+            setAssetReviewSelectedId('')
+            setAssetReviewPrompt('')
+            setAssetReviewPromptError('')
+            setAssetReviewReason('')
+            setAssetReviewReasonError('')
+            setAssetReviewDialog(null)
+          }
+          setAssetReviewError('')
+          // 审核视图刷新后：同步当前选中卡的已保存提示词（保留视图/筛选）
+          if (keepView) {
+            const keepKindCards = assetReviewKind === 'scene' ? normalizeVisualScenes(result.scenes) : cards
+            const keepTarget = keepKindCards.find((item) => String(item.id || '').toUpperCase() === String(assetReviewSelectedId || '').toUpperCase())
+            if (keepTarget && keepTarget.review) setAssetReviewPrompt(keepTarget.review.currentPrompt)
+          }
           assetImageLoadState.clear()
           setAssetImageCache({})
           ensureAssetImages(assetCardImagePaths(cards))
         })
+
+      /* v0.16.9（C3-C / E16+H-8）：资产/场景卡审核动作层（唯一 asset-save 调用点；面板审核动作） */
+      const assetReviewKindCardsOf = (kind) => {
+        const list = kind === 'scene' ? visualScenes : assetCards
+        return (Array.isArray(list) ? list : []).filter((item) => item && item.review)
+      }
+      const firstAssetReviewCardOf = (kind) => assetReviewKindCardsOf(kind)[0] || null
+      const selectAssetReviewCard = (card) => {
+        if (!card || !card.review) return
+        setAssetReviewSelectedId(String(card.id || ''))
+        setAssetReviewPrompt(card.review.currentPrompt)
+        setAssetReviewPromptError('')
+        setAssetReviewReason('')
+        setAssetReviewReasonError('')
+        setAssetReviewDialog(null)
+        setAssetReviewError('')
+        setAssetReviewNotice('')
+      }
+      const selectFirstAssetReviewCard = () => {
+        const first = firstAssetReviewCardOf(assetReviewKind)
+        if (first) selectAssetReviewCard(first)
+      }
+      const assetReviewSelectedCardOf = () => assetReviewKindCardsOf(assetReviewKind).find((item) => String(item.id || '').toUpperCase() === String(assetReviewSelectedId || '').toUpperCase()) || null
+      const assetReviewExpectedHashOf = (kind) => (kind === 'scene' ? assetReviewHashes.scene : assetReviewHashes.asset)
+      const assetReviewApplyResult = (result, action) => {
+        if (!result || typeof result !== 'object') return
+        const nextReview = normalizeAssetReview(result.review)
+        if (nextReview) {
+          const targetId = String(result.id || '').toUpperCase()
+          if (result.kind === 'scene') {
+            setVisualScenes((prev) => prev.map((item) => (String(item.id || '').toUpperCase() === targetId ? { ...item, review: nextReview } : item)))
+          } else {
+            setAssetCards((prev) => prev.map((item) => (String(item.id || '').toUpperCase() === targetId ? { ...item, review: nextReview } : item)))
+          }
+          setAssetReviewPrompt(nextReview.currentPrompt)
+        }
+        const nextHash = typeof result.hash === 'string' ? result.hash : ''
+        setAssetReviewHashes((prev) => ({ ...prev, [result.kind === 'scene' ? 'scene' : 'asset']: nextHash }))
+        setAssetReviewBusy(false)
+        setAssetReviewPromptError('')
+        setAssetReviewReason('')
+        setAssetReviewReasonError('')
+        setAssetReviewDialog(null)
+        setAssetReviewError('')
+        setAssetReviewNotice(ASSET_REVIEW_ACTION_NOTICES[action] || '审核操作已完成')
+      }
+      const assetReviewActionError = (error) => {
+        const code = String((error && error.code) || '')
+        const message = String((error && error.message) || '审核操作失败')
+        const refreshWithNotice = (notice) => {
+          setAssetReviewNotice(notice)
+          loadAssets({ keepView: true }).then(() => { setAssetReviewNotice(notice) }).catch(() => { setAssetReviewNotice(notice) })
+        }
+        if (code === 'asset-locked') {
+          say('作品已定稿，需重打开后才能修改')
+          refreshWithNotice('作品已定稿，需重打开后才能修改（已刷新审核状态）')
+          return
+        }
+        if (code === 'conflict') {
+          say('资产卡已被其他写入修改，已刷新')
+          refreshWithNotice('资产卡已被其他写入修改，已刷新，请重试')
+          return
+        }
+        if (code === 'state-conflict') {
+          say('当前审核状态不允许该操作，已刷新')
+          refreshWithNotice('当前审核状态不允许该操作，已刷新')
+          return
+        }
+        if (code === 'not-found') {
+          say('项目或卡不存在，已刷新列表')
+          loadAssets({ keepView: true }).catch(() => {})
+          return
+        }
+        if (code === 'forbidden') {
+          setAssetReviewError('无审核权限：审核动作仅面板可用')
+          return
+        }
+        if (code === 'invalid-args') {
+          if (assetReviewDialog && assetReviewDialog.type !== 'finalize') setAssetReviewReasonError(message)
+          else setAssetReviewPromptError(message)
+          return
+        }
+        setAssetReviewError(message)
+      }
+      const runAssetReviewAction = async (action) => {
+        if (assetReviewBusy || !openTitle) return false
+        const target = assetReviewSelectedCardOf()
+        if (!target || !target.review) {
+          setAssetReviewError('请先选择要审核的卡片')
+          return false
+        }
+        const expectedHash = assetReviewExpectedHashOf(assetReviewKind)
+        if (!expectedHash) {
+          setAssetReviewError('缺少 cards.json / scenes cards.json 的 hash：请刷新素材库后重试')
+          return false
+        }
+        const payload = {
+          title: openTitle,
+          kind: assetReviewKind,
+          id: target.id,
+          action,
+          expectedHash,
+        }
+        if (action === 'saveDraft') {
+          const prompt = String(assetReviewPrompt || '').trim()
+          const promptError = assetReviewPromptIssue(prompt)
+          if (promptError) {
+            setAssetReviewPromptError(promptError)
+            return false
+          }
+          payload.prompt = prompt
+        }
+        if (action === 'submit' && String(assetReviewPrompt || '').trim() !== String(target.review.currentPrompt || '').trim()) {
+          setAssetReviewPromptError('有未保存提示词修改：请先保存草稿，再提交审核')
+          return false
+        }
+        if (action === 'reject' || action === 'reopen') {
+          const reason = String(assetReviewReason || '').trim()
+          const reasonError = assetReviewReasonIssue(reason)
+          if (reasonError) {
+            setAssetReviewReasonError(reasonError)
+            return false
+          }
+          payload.reason = reason
+        }
+        setAssetReviewBusy(true)
+        setAssetReviewError('')
+        setAssetReviewNotice('')
+        try {
+          const result = await api('asset-save', payload)
+          assetReviewApplyResult(result, action)
+          say(ASSET_REVIEW_ACTION_NOTICES[action] || '审核操作已完成')
+          return true
+        } catch (error) {
+          assetReviewActionError(error)
+          return false
+        } finally {
+          setAssetReviewBusy(false)
+        }
+      }
+      const openAssetReviewDialog = (type) => {
+        if (assetReviewBusy) return
+        setAssetReviewDialog({ type })
+        setAssetReviewReason('')
+        setAssetReviewReasonError('')
+        setAssetReviewError('')
+        setAssetReviewNotice('')
+      }
+      const closeAssetReviewDialog = () => {
+        if (assetReviewBusy) return
+        setAssetReviewDialog(null)
+        setAssetReviewReason('')
+        setAssetReviewReasonError('')
+        setAssetReviewError('')
+      }
+      const confirmAssetReviewDialog = () => {
+        if (!assetReviewDialog || assetReviewBusy) return
+        const type = assetReviewDialog.type
+        if (type === 'reject') runAssetReviewAction('reject').catch(() => {})
+        else if (type === 'finalize') runAssetReviewAction('finalize').catch(() => {})
+        else if (type === 'reopen') runAssetReviewAction('reopen').catch(() => {})
+      }
 
       const addAsset = () =>
         guard(async () => {
           const source = assetSource.trim()
           if (!source) return
           const linkedShots = assetShots.split(/[、,，\s]+/).map((s) => s.trim()).filter(Boolean)
-          await api('assets-add', { title: openTitle, source, linkedShots })
+          setAssetAddError('')
+          try {
+            await api('assets-add', { title: openTitle, source, linkedShots })
+          } catch (err) {
+            // v0.15.8（task-126 / EXT-C1）：外部路径拒绝 → 登记区固定文案（不显示项目外绝对路径）；其它错误沿用全局展示
+            const message = String((err && err.message) || '')
+            const outsideProject = Boolean(err && (err.code === 'forbidden' || OUTSIDE_PROJECT_MESSAGE_PATTERN.test(message)))
+            if (outsideProject) {
+              setAssetAddError(OUTSIDE_PROJECT_HINT)
+              setAssetRegistrationOpen(true)
+              return false
+            }
+            const nextError = new Error(hideProjectExternalPaths(message, projectRoot) || '素材登记失败')
+            nextError.code = (err && err.code) || 'failed'
+            throw nextError
+          }
           setAssetSource('')
           setAssetShots('')
+          setAssetAddError('')
           await loadAssets()
           say('素材已登记')
         })
@@ -4911,6 +5465,527 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           await loadAssets()
           say('已移除')
         })
+
+      // v0.15.9（task-129 / D2C-C）：扫描素材目录 + 勾选批量登记（串行；复用既有 assets-get 加参 + assets-add；不移动文件）
+      const openScanPanel = () => {
+        if (scanSupported !== true || scanBatchBusy) return
+        if (registryOk === false) {
+          say(REGISTRY_DISABLED_ACTION_TEXT)
+          return
+        }
+        setScanSummary(null)
+        setScanOpen(true)
+        loadAssets({ scan: true }).catch(() => {})
+      }
+      const closeScanPanel = () => {
+        if (scanBatchBusy) return
+        setScanOpen(false)
+        setScanSummary(null)
+      }
+      const toggleScanFile = (pathValue) => {
+        setScanSelected((prev) => ({ ...prev, [pathValue]: !prev[pathValue] }))
+      }
+      const toggleScanAll = (visibleFiles) => {
+        const list = Array.isArray(visibleFiles) ? visibleFiles : []
+        const shouldSelect = list.length > 0 && list.every((file) => Boolean(scanSelected[file.path]))
+        setScanSelected((prev) => {
+          const next = { ...prev }
+          for (const file of list) {
+            if (shouldSelect) delete next[file.path]
+            else next[file.path] = true
+          }
+          return next
+        })
+      }
+      const runScanBatch = async () => {
+        if (scanBatchBusy) return
+        if (registryOk === false) {
+          say(REGISTRY_DISABLED_ACTION_TEXT)
+          return
+        }
+        const targets = scanFiles.filter((file) => Boolean(scanSelected[file.path]))
+        if (!targets.length) return
+        setScanBatchBusy(true)
+        setScanSummary(null)
+        setScanProgress({ done: 0, total: targets.length })
+        const failed = []
+        let ok = 0
+        try {
+          for (let i = 0; i < targets.length; i += 1) {
+            const file = targets[i]
+            try {
+              await api('assets-add', { title: openTitle, source: file.path, name: file.name, kind: file.kind || 'other' })
+              ok += 1
+            } catch (err) {
+              failed.push({ path: file.path, reason: hideProjectExternalPaths(String((err && err.message) || '登记失败'), projectRoot) })
+            }
+            setScanProgress({ done: i + 1, total: targets.length })
+          }
+          // 失败项保留在扫描列表且默认勾选，可再次批量重试；成功项经重新扫描后消失
+          setScanSelected(Object.fromEntries(failed.map((item) => [item.path, true])))
+          setScanSummary({ ok, fail: failed })
+          await loadAssets({ scan: true })
+          say(`批量登记：成功 ${ok}${failed.length ? ` · 失败 ${failed.length}` : ''}`)
+        } finally {
+          setScanBatchBusy(false)
+        }
+      }
+
+      const repairRegistry = () => {
+        if (registryBusy || !openTitle) return
+        if (typeof window !== 'undefined' && typeof window.confirm === 'function' && !window.confirm(REGISTRY_REPAIR_CONFIRM)) return
+        setRegistryBusy(true)
+        setRegistryError('')
+        api('assets-add', { title: openTitle, repairRegistry: true })
+          .then(async (result) => {
+            const notice = m3RepairNotice(result)
+            setRegistryNotice(notice)
+            say(notice)
+            try {
+              await loadAssets({ scan: true })
+            } catch { /* 刷新失败不阻断修复结果 */ }
+          })
+          .catch(() => {
+            setRegistryError(REGISTRY_REPAIR_FAIL_TEXT)
+          })
+          .finally(() => {
+            setRegistryBusy(false)
+          })
+      }
+      // v0.15.11（task-135 / IMP-C）：一键导入（file input/拖拽 → 串行 assets-import；不移动源文件）
+      const openImportPanel = () => {
+        if (importSupported !== true || importBusy) return
+        if (registryOk === false) {
+          say(REGISTRY_DISABLED_ACTION_TEXT)
+          return
+        }
+        setImportOpen(true)
+        setImportSummary(null)
+      }
+      const closeImportPanel = () => {
+        if (importBusy) return
+        setImportOpen(false)
+      }
+      const pickImportFiles = () => {
+        if (importBusy) return
+        const input = typeof document !== 'undefined' && typeof document.getElementById === 'function' ? document.getElementById('ad-import-file-input') : null
+        if (input && typeof input.click === 'function') input.click()
+      }
+      const addImportFiles = (fileList) => {
+        if (importBusy) return
+        const incoming = Array.prototype.slice.call(fileList || [])
+        if (!incoming.length) return
+        setImportSummary(null)
+        setImportQueue((prev) => {
+          const next = prev.slice()
+          let queuedCount = next.filter((entry) => entry.status === 'queued').length
+          for (const file of incoming) {
+            const name = String((file && file.name) || '').trim() || '未命名文件'
+            const size = Number(file && file.size) || 0
+            const kind = importKindOf(name)
+            const item = { id: `imp-${(importFileSeq += 1)}`, name, size, kindLabel: kind ? IMPORT_KIND_LABELS[kind] : '未知类型', status: 'queued', reason: '', file }
+            if (size > IMPORT_MAX_BYTES) {
+              item.status = 'too-large'
+              item.reason = '超过 50MB，不会导入'
+              item.file = null
+            } else if (!kind) {
+              item.status = 'unsupported'
+              item.reason = '不支持的类型'
+              item.file = null
+            } else if (queuedCount >= IMPORT_MAX_BATCH) {
+              item.status = 'limit'
+              item.reason = `单批最多 ${IMPORT_MAX_BATCH} 个，请分批导入`
+              item.file = null
+            } else {
+              queuedCount += 1
+            }
+            next.push(item)
+          }
+          return next
+        })
+      }
+      const removeImportItem = (id) => {
+        if (importBusy) return
+        setImportQueue((prev) => prev.filter((item) => item.id !== id))
+      }
+      const clearImportQueue = () => {
+        if (importBusy) return
+        setImportQueue([])
+        setImportSummary(null)
+        setImportProgress({ done: 0, total: 0 })
+      }
+      const runImportBatch = async (retryOnly) => {
+        if (importBusy) return
+        if (registryOk === false) {
+          say(REGISTRY_DISABLED_ACTION_TEXT)
+          return
+        }
+        const targets = importQueue.filter((item) => (retryOnly ? item.status === 'fail' : item.status === 'queued'))
+        if (!targets.length) return
+        setImportBusy(true)
+        setImportSummary(null)
+        setImportProgress({ done: 0, total: targets.length })
+        const failed = []
+        let ok = 0
+        let duplicate = 0
+        let methodMissing = false
+        for (let i = 0; i < targets.length; i += 1) {
+          const item = targets[i]
+          setImportQueue((prev) => prev.map((entry) => (entry.id === item.id ? { ...entry, status: 'importing', reason: '' } : entry)))
+          try {
+            // 内存策略：先读 ArrayBuffer 算 sha → 释放；再 readAsDataURL 得 base64；请求后释放引用（不预读、不缓存）
+            const expectedSha256 = await importSha256Of(item.file)
+            const base64 = await importReadBase64(item.file)
+            const payload = { title: openTitle, fileName: item.name, base64 }
+            if (importCategory) payload.targetCategory = importCategory
+            if (expectedSha256) payload.expectedSha256 = expectedSha256
+            await api('assets-import', payload)
+            ok += 1
+            setImportQueue((prev) => prev.map((entry) => (entry.id === item.id ? { ...entry, status: 'ok', reason: '', file: null } : entry)))
+          } catch (err) {
+            const code = String((err && err.code) || 'failed')
+            const message = String((err && err.message) || '导入失败')
+            if (code === 'not-found' && /未知方法|未注册|不支持/.test(message)) {
+              // 防御旧包误判：方法缺失 → 隐藏入口并提示升级
+              methodMissing = true
+              setImportSupported(false)
+              setImportOpen(false)
+              say('当前插件版本不支持导入素材，请升级插件后重试')
+              break
+            }
+            let status = 'fail'
+            let reason = hideProjectExternalPaths(message, projectRoot)
+            if (code === 'conflict') {
+              status = 'duplicate'
+              reason = '已存在（相同内容或同名文件），未重复写入'
+              duplicate += 1
+            } else {
+              if (code === 'too-large') reason = '文件过大（服务端拒绝）'
+              failed.push({ id: item.id, name: item.name, reason })
+            }
+            setImportQueue((prev) => prev.map((entry) => (entry.id === item.id ? { ...entry, status, reason } : entry)))
+          }
+          setImportProgress({ done: i + 1, total: targets.length })
+        }
+        setImportSummary({ ok, duplicate, fail: failed })
+        try {
+          if (!methodMissing) await loadAssets({ scan: true })
+        } finally {
+          setImportBusy(false)
+        }
+        if (!methodMissing) say(`导入完成：成功 ${ok}${duplicate ? ` · 已存在 ${duplicate}` : ''}${failed.length ? ` · 失败 ${failed.length}` : ''}`)
+      }
+      const retryFailedImports = () => {
+        if (importBusy) return
+        runImportBatch(true).catch(() => {})
+      }
+
+      // v0.16.x（C2-C 原型）：跨项目资产复用（只读源项目 assets-get → assets-import B-1 复制；调用点不新增）
+      const crossProjectOptions = (projects || []).filter((item) => item && item.title && item.title !== openTitle)
+      const crossQueryText = crossQuery.trim().toLowerCase()
+      const crossVisibleAssets = crossAssets.filter((asset) =>
+        !crossQueryText || `${asset.id} ${asset.name} ${asset.category}`.toLowerCase().includes(crossQueryText))
+      const crossSelectedIds = Object.keys(crossSelected).filter((id) => Boolean(crossSelected[id]))
+      const crossSelectedCount = crossSelectedIds.length
+      const crossAllSelected = crossVisibleAssets.length > 0 && crossVisibleAssets.every((asset) => Boolean(crossSelected[asset.id]))
+      const crossSelectedBytes = crossAssets.filter((asset) => crossSelected[asset.id]).reduce((sum, asset) => sum + asset.bytes, 0)
+      const crossCapabilityHint = crossProjectOptions.length
+        ? '只读源项目；复制到当前项目「素材/<分类>/」并自动登记（不移动源项目文件）'
+        : '当前工作区还没有其他项目；先新建或打开另一个项目后再试。'
+      // v0.16.8（I5-1-C）：tabs 选择/冲突/汇总（只读源项目；assets-import add-only；调用点 71 不增）
+      const crossVisibleCards = crossCards.filter((card) =>
+        !crossQueryText || `${card.id} ${card.name} ${card.type}`.toLowerCase().includes(crossQueryText))
+      const crossVisibleScenes = crossScenes.filter((scene) =>
+        !crossQueryText || `${scene.id} ${scene.name} ${scene.summary}`.toLowerCase().includes(crossQueryText))
+      const crossSelectedCardIds = Object.keys(crossCardSelected).filter((id) => crossCardSelected[id])
+      const crossSelectedSceneIds = Object.keys(crossSceneSelected).filter((id) => crossSceneSelected[id])
+      const crossSelectedCardCount = crossSelectedCardIds.length
+      const crossSelectedSceneCount = crossSelectedSceneIds.length
+      const crossAllCardsSelected = crossVisibleCards.length > 0 && crossVisibleCards.every((card) => crossCardSelected[card.id])
+      const crossAllScenesSelected = crossVisibleScenes.length > 0 && crossVisibleScenes.every((scene) => crossSceneSelected[scene.id])
+      const crossTotalSelected = crossSelectedCount + crossSelectedCardCount + crossSelectedSceneCount + (crossCopyStyleDNA ? 1 : 0)
+      const crossStyleDims = crossStyle ? Object.keys(crossStyle).length : 0
+      const crossTargetStyleDims = visualStyle ? Object.keys(visualStyle).filter((key) => visualStyle[key]).length : 0
+      const crossObjectConflict = (sourceList, targetList, signatureOf) => {
+        const target = new Map()
+        for (const item of Array.isArray(targetList) ? targetList : []) {
+          if (item && item.id) target.set(item.id, item)
+        }
+        const same = []
+        const diff = []
+        for (const item of sourceList) {
+          if (!target.has(item.id)) continue
+          const left = signatureOf(item.instance || item)
+          const right = signatureOf(target.get(item.id))
+          if (left && left === right) same.push(item)
+          else diff.push(item)
+        }
+        return { same, diff }
+      }
+      const resetCrossSourceState = () => {
+        setCrossAssets([])
+        setCrossCards([])
+        setCrossScenes([])
+        setCrossStyle(null)
+        setCrossSelected({})
+        setCrossCardSelected({})
+        setCrossSceneSelected({})
+        setCrossCopyStyleDNA(false)
+        setCrossCopyMedia(true)
+        setCrossAllowNewIdSuffix(false)
+        setCrossOverwriteStyle(false)
+        setCrossWarnings([])
+        setCrossSummary(null)
+        setCrossLoadError('')
+        setCrossQuery('')
+      }
+      const openCrossPanel = () => {
+        if (!openTitle) return
+        if (registryOk === false) {
+          say(REGISTRY_DISABLED_ACTION_TEXT)
+          return
+        }
+        setCrossOpen((prev) => {
+          const next = !prev
+          if (!next) resetCrossSourceState()
+          return next
+        })
+      }
+      const closeCrossPanel = () => {
+        if (crossBusy) return
+        setCrossOpen(false)
+        setCrossSourceTitle('')
+        resetCrossSourceState()
+      }
+      const loadCrossSource = (title) => {
+        const sourceTitle = String(title == null ? '' : title).trim()
+        setCrossSourceTitle(sourceTitle)
+        resetCrossSourceState()
+        if (!sourceTitle || crossBusy) return Promise.resolve()
+        setCrossLoading(true)
+        return api('assets-get', { title: sourceTitle })
+          .then((result) => {
+            setCrossAssets(normalizeCrossAssets(result && result.assets))
+            setCrossCards(crossObjectsSupported === true ? normalizeCrossCards(result && result.cards) : [])
+            setCrossScenes(crossObjectsSupported === true ? normalizeCrossScenes(result && result.scenes) : [])
+            setCrossStyle(crossObjectsSupported === true ? normalizeCrossStyle(result && result.styleDNA) : null)
+          })
+          .catch((error) => {
+            setCrossLoadError('读取源项目资产失败：' + crossImportErrorText(error))
+          })
+          .finally(() => {
+            setCrossLoading(false)
+          })
+      }
+      const toggleCrossAsset = (id) => {
+        if (crossBusy) return
+        setCrossSelected((prev) => ({ ...prev, [id]: !prev[id] }))
+      }
+      const toggleAllCrossAssets = () => {
+        if (crossBusy) return
+        setCrossSelected((prev) => {
+          if (crossAllSelected) {
+            const next = { ...prev }
+            crossVisibleAssets.forEach((asset) => { delete next[asset.id] })
+            return next
+          }
+          if (crossVisibleAssets.length > CROSS_IMPORT_MAX_BATCH) {
+            say(`单批最多 ${CROSS_IMPORT_MAX_BATCH} 个；已选择前 ${CROSS_IMPORT_MAX_BATCH} 个`)
+          }
+          const next = { ...prev }
+          crossVisibleAssets.slice(0, CROSS_IMPORT_MAX_BATCH).forEach((asset) => { next[asset.id] = true })
+          return next
+        })
+      }
+      const clearCrossSelection = () => {
+        if (crossBusy) return
+        setCrossSelected({})
+      }
+      const toggleCrossCard = (id) => {
+        if (crossBusy) return
+        setCrossCardSelected((prev) => ({ ...prev, [id]: !prev[id] }))
+      }
+      const toggleAllCrossCards = () => {
+        if (crossBusy) return
+        setCrossCardSelected((prev) => {
+          if (crossAllCardsSelected) {
+            const next = { ...prev }
+            crossVisibleCards.forEach((card) => { delete next[card.id] })
+            return next
+          }
+          if (crossVisibleCards.length > CROSS_OBJECT_BATCH) say(`单批最多 ${CROSS_OBJECT_BATCH} 个；已选择前 ${CROSS_OBJECT_BATCH} 个`)
+          const next = { ...prev }
+          crossVisibleCards.slice(0, CROSS_OBJECT_BATCH).forEach((card) => { next[card.id] = true })
+          return next
+        })
+      }
+      const clearCrossCardSelection = () => {
+        if (crossBusy) return
+        setCrossCardSelected({})
+      }
+      const toggleCrossScene = (id) => {
+        if (crossBusy) return
+        setCrossSceneSelected((prev) => ({ ...prev, [id]: !prev[id] }))
+      }
+      const toggleAllCrossScenes = () => {
+        if (crossBusy) return
+        setCrossSceneSelected((prev) => {
+          if (crossAllScenesSelected) {
+            const next = { ...prev }
+            crossVisibleScenes.forEach((scene) => { delete next[scene.id] })
+            return next
+          }
+          if (crossVisibleScenes.length > CROSS_OBJECT_BATCH) say(`单批最多 ${CROSS_OBJECT_BATCH} 个；已选择前 ${CROSS_OBJECT_BATCH} 个`)
+          const next = { ...prev }
+          crossVisibleScenes.slice(0, CROSS_OBJECT_BATCH).forEach((scene) => { next[scene.id] = true })
+          return next
+        })
+      }
+      const clearCrossSceneSelection = () => {
+        if (crossBusy) return
+        setCrossSceneSelected({})
+      }
+      const buildCrossSummary = (result, requested) => {
+        const styleRaw = requested.style ? (result && result.style) || { copied: true } : null
+        const styleFailed = styleRaw && styleRaw.failed && styleRaw.failed.code ? styleRaw.failed : null
+        const summary = {
+          requested,
+          assets: requested.assets
+            ? crossCounts({ imported: result && result.imported, skipped: result && result.skipped, failed: result && result.failed }, 'assets', (id) => (crossAssets.find((item) => item.id === id) || {}).name)
+            : null,
+          cards: requested.cards
+            ? crossCounts(result && result.cards, 'cards', (id) => (crossCards.find((item) => item.id === id) || {}).name)
+            : null,
+          scenes: requested.scenes
+            ? crossCounts(result && result.scenes, 'scenes', (id) => (crossScenes.find((item) => item.id === id) || {}).name)
+            : null,
+          style: styleRaw
+            ? (styleFailed
+                ? { ...styleRaw, code: styleFailed.code, error: crossImportErrorText({ code: styleFailed.code, message: styleFailed.reason || '' }) }
+                : styleRaw)
+            : null,
+          warnings: sanitizeCrossWarnings(result && result.warnings),
+          idMap: Object.assign({}, (result && result.cards && result.cards.idMap) || {}, (result && result.scenes && result.scenes.idMap) || {}),
+        }
+        return summary
+      }
+      const runCrossImport = async () => {
+        if (crossBusy || !crossSourceTitle) return
+        if (registryOk === false) {
+          say(REGISTRY_DISABLED_ACTION_TEXT)
+          return
+        }
+        const assetIds = Object.keys(crossSelected).filter((id) => crossSelected[id])
+        const cardIds = crossObjectsSupported === true ? crossSelectedCardIds.slice() : []
+        const sceneIds = crossObjectsSupported === true ? crossSelectedSceneIds.slice() : []
+        const wantsStyle = crossObjectsSupported === true && crossCopyStyleDNA === true
+        if (!assetIds.length && !cardIds.length && !sceneIds.length && !wantsStyle) {
+          say('请先选择要导入的素材/资产卡/场景卡或勾选复制风格 DNA')
+          return
+        }
+        if (assetIds.length > CROSS_IMPORT_MAX_BATCH || cardIds.length > CROSS_OBJECT_BATCH || sceneIds.length > CROSS_OBJECT_BATCH) {
+          say(`单批上限：素材 ${CROSS_IMPORT_MAX_BATCH}、资产卡/场景卡 ${CROSS_OBJECT_BATCH}`)
+          return
+        }
+        setCrossBusy(true)
+        setCrossSummary(null)
+        setCrossWarnings([])
+        const requested = { assets: assetIds.length > 0, cards: cardIds.length > 0, scenes: sceneIds.length > 0, style: wantsStyle }
+        let capabilityMissing = false
+        try {
+          const payload = { title: openTitle, sourceProjectId: crossSourceTitle }
+          if (requested.assets) {
+            payload.sourceAssetIds = assetIds
+            if (crossCategory) payload.targetCategory = crossCategory
+          }
+          if (requested.cards) {
+            payload.sourceCardIds = cardIds
+            payload.copyMedia = crossCopyMedia
+            payload.allowNewIdSuffix = crossAllowNewIdSuffix
+          }
+          if (requested.scenes) {
+            payload.sourceSceneIds = sceneIds
+            payload.allowNewIdSuffix = crossAllowNewIdSuffix
+          }
+          if (requested.style) {
+            payload.copyStyleDNA = true
+            payload.overwriteStyle = crossOverwriteStyle
+          }
+          let result = null
+          try {
+            result = await api('assets-import', payload)
+          } catch (error) {
+            const code = String((error && error.code) || 'failed')
+            const message = String((error && error.message) || '')
+            if (code === 'not-found' && /未知方法|未注册|不支持/.test(message)) {
+              capabilityMissing = true
+              setCrossSupported(false)
+              setCrossOpen(false)
+              say('当前插件版本不支持跨项目导入，请升级插件后重试')
+            } else {
+              const reason = crossImportErrorText(error)
+              const mk = (list, kind) => ({ ok: 0, duplicate: 0, fail: list.map((item) => ({ kind, sourceId: item.id, name: item.name, reason })) })
+              setCrossSummary({
+                requested,
+                assets: requested.assets ? mk(crossAssets.filter((item) => crossSelected[item.id]), 'assets') : null,
+                cards: requested.cards ? mk(crossCards.filter((item) => crossCardSelected[item.id]), 'cards') : null,
+                scenes: requested.scenes ? mk(crossScenes.filter((item) => crossSceneSelected[item.id]), 'scenes') : null,
+                style: requested.style ? { copied: false, merge: 'skip', copiedDims: [], error: reason } : null,
+                warnings: [],
+                idMap: {},
+              })
+            }
+          }
+          if (!capabilityMissing && result) {
+            const summary = buildCrossSummary(result, requested)
+            setCrossSummary(summary)
+            setCrossWarnings(summary.warnings)
+            setCrossSelected({})
+            setCrossCardSelected({})
+            setCrossSceneSelected({})
+            setCrossCopyStyleDNA(false)
+            try {
+              await loadAssets({ scan: true })
+            } catch { /* 刷新失败不阻断汇总 */ }
+            const parts = []
+            if (summary.assets) parts.push(`素材 成功 ${summary.assets.ok}${summary.assets.duplicate ? ` · 已存在 ${summary.assets.duplicate}` : ''}${summary.assets.fail.length ? ` · 失败 ${summary.assets.fail.length}` : ''}`)
+            if (summary.cards) parts.push(`资产卡 成功 ${summary.cards.ok}${summary.cards.duplicate ? ` · 已存在 ${summary.cards.duplicate}` : ''}${summary.cards.fail.length ? ` · 失败 ${summary.cards.fail.length}` : ''}`)
+            if (summary.scenes) parts.push(`场景卡 成功 ${summary.scenes.ok}${summary.scenes.duplicate ? ` · 已存在 ${summary.scenes.duplicate}` : ''}${summary.scenes.fail.length ? ` · 失败 ${summary.scenes.fail.length}` : ''}`)
+            if (summary.style) parts.push(`风格 ${summary.style.copied === false ? '已跳过' : summary.style.merge === 'overwrite' ? '已覆盖' : summary.style.merge === 'skip' ? '已跳过' : '已合并'}`)
+            say(`跨项目导入完成：${parts.join('；')}`)
+          }
+        } finally {
+          setCrossBusy(false)
+        }
+      }
+      const retryCrossFailed = async () => {
+        if (crossBusy || !crossSummary) return
+        const fails = []
+        for (const key of ['assets', 'cards', 'scenes']) {
+          const entry = crossSummary[key]
+          if (entry && Array.isArray(entry.fail)) fails.push(...entry.fail)
+        }
+        if (!fails.length) return
+        const nextAssets = {}
+        const nextCards = {}
+        const nextScenes = {}
+        for (const item of fails) {
+          if (item.kind === 'assets') nextAssets[item.sourceId] = true
+          else if (item.kind === 'cards') nextCards[item.sourceId] = true
+          else if (item.kind === 'scenes') nextScenes[item.sourceId] = true
+        }
+        setCrossSelected(nextAssets)
+        setCrossCardSelected(nextCards)
+        setCrossSceneSelected(nextScenes)
+        if (crossObjectsSupported === true) {
+          if (Object.keys(nextCards).length) setCrossTab('cards')
+          else if (Object.keys(nextScenes).length) setCrossTab('scenes')
+          else setCrossTab('assets')
+        }
+        setCrossSummary(null)
+        setCrossWarnings([])
+        say('已选失败项；再点「开始导入」重试')
+      }
 
       /* ------------------------------------------------------------ 定稿 */
 
@@ -4963,11 +6038,36 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
 
       /* ------------------------------------------------------ 账本 / 导入 */
 
-      const loadLedger = () =>
+      const loadLedger = (options) =>
         guard(async () => {
-          const result = await api('ledger-get', { title: openTitle })
-          setLedger(result.ledger)
+          const renderFile = Boolean(options && options.renderFile === true)
+          try {
+            const result = await api('ledger-get', { title: openTitle, ...(renderFile ? { renderFile: true } : {}) })
+            setLedger(result.ledger)
+            if (renderFile) {
+              if (result && result.rendered === true) {
+                setLedgerRendered(true)
+                say('已渲染到项目账本')
+              } else {
+                setLedgerRendered(false)
+                say(LEDGER_RENDER_FAIL_TEXT)
+              }
+            } else {
+              setLedgerRendered(false)
+            }
+          } catch (error) {
+            if (!renderFile) throw error
+            const code = String((error && error.code) || '')
+            const message = String((error && error.message) || '')
+            if (code === 'invalid-args' && /renderFile|未知|不支持/.test(message)) {
+              setM3Supported(false)
+              say('当前插件版本不支持渲染账本文件，已保持只读')
+            } else {
+              say(LEDGER_RENDER_FAIL_TEXT)
+            }
+          }
         })
+      const renderLedgerFile = () => loadLedger({ renderFile: true })
 
       const previewImport = () =>
         guard(async () => {
@@ -5155,29 +6255,129 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
       }
 
 
-      // v0.12.3（task-21 / M4 批2）：产物入库 —— 仅点击时调用；URL 下载/本地拷入由宿主控制超时与大小上限
+      // v0.16.1（task-139 / C-6）：产物入库三模式 —— 本地文件→assets-import（不关联生成任务）；项目内路径/URL→intake-artifact（保持任务关联）
+      const artifactMode = artifactModeOf(artifactFile, artifactSource)
+      const pickArtifactFile = () => {
+        if (artifactBusy || importSupported !== true) return
+        const input = typeof document !== 'undefined' && typeof document.getElementById === 'function' ? document.getElementById('ad-artifact-file-input') : null
+        if (input && typeof input.click === 'function') input.click()
+      }
+      const clearArtifactFile = () => {
+        setArtifactFile(null)
+        setArtifactFileName('')
+        setArtifactFileSize(0)
+        const input = typeof document !== 'undefined' && typeof document.getElementById === 'function' ? document.getElementById('ad-artifact-file-input') : null
+        if (input) {
+          try { input.value = '' } catch { /* 允许重新选择同一文件 */ }
+        }
+      }
+      const pickArtifactFileChange = (event) => {
+        if (artifactBusy) return
+        const files = event && event.target && event.target.files ? Array.prototype.slice.call(event.target.files) : []
+        if (!files.length) return
+        const file = files[0]
+        const name = String((file && file.name) || '').trim() || '未命名文件'
+        const size = Number(file && file.size) || 0
+        setArtifactResult(null)
+        if (size > IMPORT_MAX_BYTES) {
+          clearArtifactFile()
+          setArtifactResult({ ok: false, error: ARTIFACT_LOCAL_TOO_LARGE, fixed: true })
+          return
+        }
+        if (!importKindOf(name)) {
+          clearArtifactFile()
+          setArtifactResult({ ok: false, error: ARTIFACT_LOCAL_BAD_TYPE, fixed: true })
+          return
+        }
+        setArtifactFile(file)
+        setArtifactFileName(name)
+        setArtifactFileSize(size)
+        if (!artifactName.trim()) setArtifactName(name)
+      }
+      const importArtifactLocalFile = async () => {
+        const file = artifactFile
+        if (!file || artifactBusy) return
+        setArtifactBusy(true)
+        setArtifactResult(null)
+        try {
+          const expectedSha256 = await importSha256Of(file)
+          const base64 = await importReadBase64(file)
+          const category = artifactCategory || ARTIFACT_CATEGORY_DEFAULT
+          const buildPayload = (withCategory) => {
+            const payload = { title: openTitle, fileName: file.name, base64 }
+            if (withCategory) payload.targetCategory = category
+            if (expectedSha256) payload.expectedSha256 = expectedSha256
+            return payload
+          }
+          let result
+          let fallbackCategory = false
+          try {
+            result = await api('assets-import', buildPayload(true))
+          } catch (error) {
+            const code = String((error && error.code) || '')
+            const raw = String((error && error.message) || '')
+            // 兼容：host 尚未把「生成」加入 import 白名单 → 回退不带 targetCategory（host 默认 导入_YYYYMMDD）
+            if (category === ARTIFACT_CATEGORY_DEFAULT && code === 'invalid-args' && /targetCategory|不支持|白名单|分类/.test(raw)) {
+              result = await api('assets-import', buildPayload(false))
+              fallbackCategory = true
+            } else {
+              throw error
+            }
+          }
+          setArtifactResult({
+            ok: true,
+            relative: result && result.path ? String(result.path) : '',
+            name: result && result.name ? String(result.name) : file.name,
+            bytes: result && result.bytes != null ? result.bytes : file.size,
+            sha256: result && result.sha256 ? String(result.sha256) : '',
+            assetId: result && result.asset && result.asset.id ? String(result.asset.id) : '',
+            fallbackCategory,
+          })
+          clearArtifactFile()
+          say('本地文件已导入素材库')
+          await loadAssets({ scan: true })
+        } catch (error) {
+          const code = String((error && error.code) || '')
+          const raw = String((error && error.message) || '')
+          let message = ''
+          if (code === 'conflict') message = '素材已存在（相同内容），未重复导入'
+          else if (code === 'too-large') message = ARTIFACT_LOCAL_TOO_LARGE
+          else if (code === 'not-found' && /未知方法|未注册|不支持/.test(raw)) message = '当前插件版本不支持本地文件导入，请升级插件后重试'
+          else message = '导入失败：' + hideProjectExternalPaths(raw || '未知错误', projectRoot)
+          setArtifactResult({ ok: false, error: message, fixed: true })
+        } finally {
+          setArtifactBusy(false)
+        }
+      }
+      // v0.12.3（task-21 / M4 批2）：产物入库 —— 项目内路径/URL 模式沿用既有 intake-artifact（保持任务关联语义）
       const intakeGeneratedArtifact = async () => {
         if (artifactBusy) return
+        const mode = artifactModeOf(artifactFile, artifactSource)
+        if (mode === 'file') {
+          await importArtifactLocalFile()
+          return
+        }
         const source = artifactSource.trim()
         if (!source) {
-          setArtifactResult({ ok: false, error: '请输入本地文件路径或 http(s) URL' })
+          setArtifactResult({ ok: false, error: '请输入项目内路径或 http(s) 直链' })
           return
         }
         setArtifactBusy(true)
         setArtifactResult(null)
         try {
-          const isUrl = /^https?:\/\//i.test(source)
           const result = await api('intake-artifact', {
             title: openTitle,
             artifact: {
-              ...(isUrl ? { url: source } : { file: source }),
+              ...(mode === 'url' ? { url: source } : { file: source }),
               kind: artifactKind,
               ...(artifactName.trim() ? { name: artifactName.trim() } : {}),
             },
           })
           setArtifactResult(result && typeof result === 'object' ? result : { ok: false, error: '入库返回为空' })
         } catch (error) {
-          setArtifactResult({ ok: false, error: error.message })
+          const fixed = mode === 'url' ? mapArtifactUrlError(error) : mapArtifactPathError(error)
+          if (fixed) setArtifactResult({ ok: false, error: fixed, fixed: true })
+          else setArtifactResult({ ok: false, error: '入库失败：' + hideProjectExternalPaths(String((error && error.message) || '未知错误'), projectRoot) })
         } finally {
           setArtifactBusy(false)
         }
@@ -5423,6 +6623,178 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         if (!handoffOpen) return undefined
         return installDialogFocusTrap('ad-agent-dialog')
       }, [Boolean(handoffOpen)])
+      /* ---------------- v0.16.6（C2-C / E15+H-7）：视觉圣经定向/冻结动作（style-save） ---------------- */
+      const currentStyleDirection = normalizeStyleDirection(styleDirection)
+      const styleStatus = currentStyleDirection.status
+      const styleFrozen = styleStatus === 'frozen'
+      const styleSavedDraft = styleDraftOf(visualStyle)
+      const styleDraftPayload = () => {
+        const payload = {}
+        for (const [key] of STYLE_DIMENSION_ORDER) payload[key] = String(styleDraft[key] == null ? '' : styleDraft[key]).trim().slice(0, VISUAL_STYLE_TEXT_MAX)
+        return payload
+      }
+      const styleHasAnyContent = () => STYLE_DIMENSION_ORDER.some(([key]) => String(styleDraft[key] == null ? '' : styleDraft[key]).trim())
+      const styleDraftChanged = () => STYLE_DIMENSION_ORDER.some(([key]) => String(styleDraft[key] == null ? '' : styleDraft[key]).trim() !== String(styleSavedDraft[key] == null ? '' : styleSavedDraft[key]).trim())
+      const applyStyleResult = (result) => {
+        if (result && result.style) {
+          setVisualStyle(normalizeVisualStyle(result.style))
+          setStyleDraft(styleDraftOf(result.style))
+        }
+        if (result && result.state) setStyleDirection(normalizeStyleDirection(result.state))
+      }
+      const styleErrorMessage = (error) => {
+        const code = String((error && error.code) || '')
+        if (code === 'conflict') return '已被其他写入修改，请刷新后重试。'
+        if (code === 'state-conflict') return '当前状态不允许该操作，请刷新状态后重试。'
+        if (code === 'style-locked') return '风格已冻结，需先解冻。'
+        if (code === 'invalid-args') return String((error && error.message) || '风格参数不合法')
+        if (code === 'not-found') return '项目不存在或已返回列表，请重新打开项目后重试。'
+        return String((error && error.message) || '风格保存失败，请重试。')
+      }
+      const applyStyleError = (error) => {
+        const detail = error && error.detail
+        if (detail && detail.state) setStyleDirection(normalizeStyleDirection(detail.state))
+        setStyleError(styleErrorMessage(error))
+        setStyleNotice('')
+      }
+      const postStyleSave = async (payload) => {
+        try {
+          return await api('style-save', Object.assign({ title: openTitle }, payload))
+        } catch (error) {
+          applyStyleError(error)
+          throw error
+        }
+      }
+      const refreshStyleState = async () => {
+        if (!openTitle || busy || styleBusy) return
+        setStyleBusy(true)
+        setStyleNotice('')
+        setStyleError('')
+        try {
+          const result = await api('assets-get', { title: openTitle })
+          setVisualStyle(normalizeVisualStyle(result.styleDNA))
+          setStyleDraft(styleDraftOf(result.styleDNA))
+          setStyleDirection(normalizeStyleDirection(result.styleDirection))
+          setStyleNotice('已刷新风格状态。')
+        } catch (error) {
+          setStyleError(styleErrorMessage(error))
+        } finally {
+          setStyleBusy(false)
+        }
+      }
+      const saveStyle = async (action, options) => {
+        if (styleBusy || !openTitle) return
+        const opts = options || {}
+        if (styleFrozen && (action === 'save' || action === 'direct')) {
+          setStyleError('风格已冻结，需先解冻。')
+          return
+        }
+        setStyleBusy(true)
+        setStyleNotice('')
+        setStyleError('')
+        try {
+          const payload = styleDraftPayload()
+          if (action === 'save') {
+            if (!styleHasAnyContent() && styleStatus === 'directed') throw new Error('已定向风格微调需至少保留一维非空内容')
+            const request = { action: 'save', style: payload }
+            if (currentStyleDirection.hash) request.expectedHash = currentStyleDirection.hash
+            const result = await postStyleSave(request)
+            applyStyleResult(result)
+            setStyleNotice(styleStatus === 'directed' ? '微调已保存。' : '风格草稿已保存。')
+          } else if (action === 'direct') {
+            if (!styleHasAnyContent()) throw new Error('请至少填写一维风格后再定向')
+            if (styleDraftChanged() || !currentStyleDirection.hash) {
+              const saveRequest = { action: 'save', style: payload }
+              if (currentStyleDirection.hash) saveRequest.expectedHash = currentStyleDirection.hash
+              const saveResult = await postStyleSave(saveRequest)
+              applyStyleResult(saveResult)
+            }
+            const result = await postStyleSave({ action: 'direct' })
+            applyStyleResult(result)
+            setStyleNotice('已定向：后续进入受控微调。')
+          } else if (action === 'freeze') {
+            if (styleDraftChanged()) {
+              const saveRequest = { action: 'save', style: payload }
+              if (currentStyleDirection.hash) saveRequest.expectedHash = currentStyleDirection.hash
+              const saveResult = await postStyleSave(saveRequest)
+              applyStyleResult(saveResult)
+            }
+            const note = String(opts.reason == null ? '' : opts.reason).trim().slice(0, STYLE_REASON_MAX)
+            const result = await postStyleSave(note ? { action: 'freeze', reason: note } : { action: 'freeze' })
+            applyStyleResult(result)
+            setStyleNotice('风格已冻结（只读）。')
+          } else if (action === 'unfreeze') {
+            const reason = String(opts.reason == null ? '' : opts.reason).trim()
+            if (reason.length < STYLE_REASON_MIN || reason.length > STYLE_REASON_MAX) {
+              setStyleReasonError('解冻原因需 ' + STYLE_REASON_MIN + '–' + STYLE_REASON_MAX + ' 字（当前 ' + reason.length + ' 字）')
+              return
+            }
+            if (!currentStyleDirection.hash) throw new Error('缺少当前风格 hash，请先刷新状态')
+            const result = await postStyleSave({ action: 'unfreeze', reason: reason, expectedHash: currentStyleDirection.hash })
+            applyStyleResult(result)
+            setStyleNotice('已解冻，风格恢复为可微调。')
+          }
+          setStyleDialog(null)
+          setStyleReason('')
+          setStyleReasonError('')
+        } catch (error) {
+          if (!(error && error.code)) setStyleError(String((error && error.message) || '风格保存失败，请重试。'))
+        } finally {
+          setStyleBusy(false)
+        }
+      }
+      const openStyleDialog = (type) => {
+        setStyleDialog(type)
+        setStyleReason('')
+        setStyleReasonError('')
+        setStyleNotice('')
+        setStyleError('')
+      }
+      const closeStyleDialog = () => {
+        if (styleBusy) return
+        setStyleDialog(null)
+        setStyleReason('')
+        setStyleReasonError('')
+      }
+      const confirmStyleDialog = () => {
+        if (styleDialog === 'direct') saveStyle('direct')
+        else if (styleDialog === 'micro') saveStyle('save')
+        else if (styleDialog === 'freeze') saveStyle('freeze', { reason: styleReason })
+        else if (styleDialog === 'unfreeze') saveStyle('unfreeze', { reason: styleReason })
+      }
+      React.useEffect(() => {
+        if (!styleDialog) return
+        const onEscape = (event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            if (!styleBusy) setStyleDialog(null)
+          }
+        }
+        window.addEventListener('keydown', onEscape)
+        return () => window.removeEventListener('keydown', onEscape)
+      })
+      React.useEffect(() => {
+        if (!styleDialog) return undefined
+        return installDialogFocusTrap('ad-style-dialog')
+      }, [Boolean(styleDialog)])
+      // v0.16.9（C3-C / E16+H-8）：审核对话框 Esc 关闭 + 焦点陷阱（复用 installDialogFocusTrap）
+      React.useEffect(() => {
+        if (!assetReviewDialog) return undefined
+        const onEscape = (event) => {
+          if (event.key !== 'Escape' || assetReviewBusy) return
+          event.preventDefault()
+          setAssetReviewDialog(null)
+          setAssetReviewReason('')
+          setAssetReviewReasonError('')
+          setAssetReviewError('')
+        }
+        window.addEventListener('keydown', onEscape)
+        return () => window.removeEventListener('keydown', onEscape)
+      })
+      React.useEffect(() => {
+        if (!assetReviewDialog) return undefined
+        return installDialogFocusTrap('ad-review-dialog')
+      }, [Boolean(assetReviewDialog)])
       // v0.12.4（task-28 / M5-H hotfix）：设置浮层运行期可读性自愈 —— 若主题派生背景在该渲染上下文未解析为不透明色
       // （g2 证据：遮罩正常、面板 background 未绘制）。取值优先级：①同页 .ad-shell 的 computed background/color（与宿主主题一致）
       // → ②系统色 Canvas/CanvasText 兜底（浅/深自适应、0 hex、不新增 token）。只加 inline style 与诊断属性，
@@ -5574,13 +6946,7 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
 
       const children = [h(Styles, { key: 'styles' })]
 
-      // v0.15.0（task-39 / M6-2）：页头「下一步」CTA（只读 flowState/已加载内存状态；0 新 api）
-      const nextStep = openTitle ? nextStepTarget(flowState, {
-        loading: flowBusy && !flowState,
-        available: flowAvailable,
-        tab,
-        data: { contract, rows, characters, world, episodeText, shots },
-      }) : null
+      const headLeft = []
       const headRight = []
       if (flash) headRight.push(h('span', { className: 'ad-flash', key: 'flash', role: 'status', 'aria-live': 'polite' }, flash))
       if (phase === 'project') {
@@ -5595,31 +6961,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
             ? '当前项目有未保存修改：Ctrl/⌘+S 可保存当前页签或文档栏，离开前会提示'
             : '当前项目没有未保存修改',
         }, unsaved ? '● 未保存修改' : '✓ 已保存'))
-        if (nextStep && (nextStep.disabled || nextStep.tab !== tab)) {
-          const nextStepBlocked = nextStep.disabled === true
-          headRight.push(h('div', { className: 'ad-next-step', key: 'next-step' },
-            h('button', {
-              className: 'ad-btn ad-primary ad-sm ad-next-cta',
-              'aria-label': nextStep.ariaLabel,
-              title: nextStep.ariaLabel,
-              'aria-disabled': (nextStepBlocked || busy) ? 'true' : 'false',
-              disabled: busy,
-              onClick: () => {
-                if (nextStepBlocked || busy) return
-                if (nextStep.tab) switchTab(nextStep.tab)
-              },
-            }, icon('chevron'),
-              h('span', { className: 'ad-next-label' }, nextStep.label),
-              h('span', { className: 'ad-next-label-short', 'aria-hidden': 'true' }, nextStep.shortLabel || nextStep.label)),
-            nextStep.alt ? h('button', {
-              className: 'ad-next-alt',
-              'aria-label': nextStep.alt.ariaLabel,
-              title: nextStep.alt.ariaLabel,
-              onClick: () => { if (nextStep.alt && nextStep.alt.tab) switchTab(nextStep.alt.tab) },
-            }, nextStep.alt.label) : null,
-            nextStep.hint ? h('span', { className: 'ad-next-hint', title: nextStep.hint }, nextStep.hint) : null,
-            nextStep.chipLabel ? h('span', { className: 'ad-next-chip', 'data-tone': nextStep.tone || 'neutral', 'aria-hidden': 'true' }, nextStep.chipLabel) : null))
-        }
         headRight.push(h('button', {
           className: 'ad-btn ad-sm ad-agent-entry',
           key: 'agent-handoff',
@@ -5630,6 +6971,18 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           disabled: busy,
           onClick: () => openHandoff(),
         }, icon('send'), h('span', { className: 'ad-agent-label' }, '交给 Agent')))
+        // v0.16.5（task-45）：剧集契约整页入口（从创作页签组上移到页头；复用 switchTab，含未保存守卫）
+        headRight.push(h('button', {
+          className: 'ad-btn ad-sm ad-head-entry',
+          key: 'contract-entry',
+          id: 'ad-tab-contract',
+          'aria-label': tab === 'contract' ? '剧集契约（当前页）' : '剧集契约',
+          title: '剧集契约（项目级约束设置）',
+          'aria-current': tab === 'contract' ? 'page' : undefined,
+          'data-on': tab === 'contract' ? '1' : '0',
+          disabled: busy,
+          onClick: () => { if (tab !== 'contract') switchTab('contract') },
+        }, h('span', { className: 'ad-head-entry-full' }, '剧集契约'), h('span', { className: 'ad-head-entry-short', 'aria-hidden': 'true' }, '契约')))
         headRight.push(h('button', {
           className: 'ad-btn ad-sm',
           key: 'settings',
@@ -5637,7 +6990,7 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           disabled: busy,
           'aria-haspopup': 'dialog',
           'aria-expanded': settingsOverlay ? 'true' : 'false',
-          title: 'AI 短剧设置（默认契约 / 模型 / 任务模型 / 提示词模板 / 流程模式 / 存储位置 + 环境诊断）',
+          title: 'AI 短剧设置（默认契约 / 模型 / 任务模型 / 提示词模板 / 存储位置 + 环境诊断）',
         }, '设置'))
         headRight.push(h('button', {
           className: 'ad-btn',
@@ -5647,7 +7000,7 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           'aria-pressed': docOpen ? 'true' : 'false',
           title: '面板内右栏文档编辑器（T7 / E1；不接管原生 documentpreview）',
         }, docOpen ? '收起文档' : '文档'))
-        headRight.push(h('button', { className: 'ad-btn', key: 'back', onClick: () => requestLeave(goBackToList), disabled: busy, 'aria-label': '返回短剧列表' }, '← 返回'))
+        headLeft.push(h('button', { className: 'ad-btn', key: 'back', onClick: () => requestLeave(goBackToList), disabled: busy, 'aria-label': '返回短剧列表' }, '← 返回'))
       } else {
         headRight.push(h('button', { className: 'ad-btn', key: 'refresh', onClick: loadList, disabled: busy, 'aria-label': '刷新短剧列表' }, icon('refresh'), '刷新'))
       }
@@ -5656,6 +7009,7 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         h(
           'div',
           { className: 'ad-head', key: 'head' },
+          headLeft,
           h(DramaIcon, { size: 18 }),
           h('div', null,
             h('div', { className: 'ad-title' }, phase === 'project' ? openTitle : 'AI 短剧',
@@ -5667,90 +7021,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           headRight,
         ),
       )
-
-      // P2-2：流程状态机步骤条 = 项目页唯一主进度（6 步三态 + facts 计数 + 恢复提示 + 详情操作；flow-state 读写不变）
-      if (phase === 'project') {
-        const flowCurrent = flowState ? flowCurrentKey(flowState) : ''
-        const staleSteps = flowState ? FLOW_STEPS.filter(([key]) => flowState.steps[key] === 'stale') : []
-        const flowFacts = (progress && progress.facts) || {}
-        children.push(h('div', { className: 'ad-flow', key: 'flow', role: 'group', 'aria-label': '创作进度（流程状态机 + 内容计数）' },
-          flowState
-            ? FLOW_STEPS.flatMap(([key, label], index) => {
-                const status = flowState.steps[key] || 'not_started'
-                const kind = status === 'confirmed' ? 'confirmed' : status === 'stale' ? 'stale' : key === flowCurrent ? 'current' : 'pending'
-                const mark = kind === 'confirmed' ? '✓ ' : kind === 'stale' ? '! ' : kind === 'current' ? '● ' : '· '
-                const factKey = FLOW_FACT_KEYS[key]
-                const factValue = factKey ? flowFacts[factKey] : null
-                const stepButton = h('button', {
-                  key,
-                  className: 'ad-flow-step',
-                  'data-state': kind,
-                  'aria-pressed': flowDetail === key ? 'true' : 'false',
-                  title: `${label} · ${FLOW_STATUS_LABELS[status] || status}${factKey ? ` · 计数 ${factValue == null ? 0 : factValue}` : ''}（点击查看 / 操作）`,
-                  onClick: () => setFlowDetail(flowDetail === key ? '' : key),
-                }, `${mark}${index + 1}. ${label}`,
-                factKey ? h('span', { className: 'ad-count', style: { marginLeft: 2 } }, String(factValue == null ? 0 : factValue)) : null)
-                return index < FLOW_STEPS.length - 1
-                  ? [stepButton, h('span', { key: 'sep-' + key, className: 'ad-flow-sep', 'aria-hidden': 'true' }, '→')]
-                  : [stepButton]
-              })
-            : h('span', { className: 'ad-flow-hint' }, '流程状态：未开始（打开项目后读取 flow-state）'),
-          h('span', { className: 'ad-flow-hint' }, flowState ? flowRecoveryText(flowState) : ''),
-          !flowAvailable && flowState ? h('span', { className: 'ad-count' }, '只读推断（宿主接口待就绪）') : null,
-          staleSteps.length ? h('span', { className: 'ad-flow-msg' }, '待重做：' + staleSteps.map(([, label]) => label).join('、')) : null,
-          flowBusy ? h('span', { className: 'ad-count' }, '同步中…') : null,
-          h('button', {
-            className: 'ad-btn ad-sm ad-flow-mode',
-            onClick: () => toggleFlowStrict(!flowStrictActive()),
-            disabled: busy || flowBusy,
-            'aria-label': '切换流程模式（宽松 / 强制门禁）',
-            title: '切换流程模式（默认宽松：只提示不强制；强制：未确认上一阶段时宿主阻止越步写入/确认，HTTP 409）',
-          }, flowStrictActive() ? '强制模式' : '宽松模式（只提示）'),
-          h('button', { className: 'ad-btn ad-sm', onClick: refreshProgress, disabled: busy }, icon('refresh'), '刷新进度'),
-          flowMsg ? h('span', { className: 'ad-flow-msg', role: 'status' }, flowMsg) : null,
-          flowError ? h('span', { className: 'ad-err' }, flowError) : null,
-        ))
-        const flowDetailStep = flowDetail ? FLOW_STEPS.find(([key]) => key === flowDetail) : null
-        if (flowDetailStep) {
-          const [detailKey, detailLabel] = flowDetailStep
-          const detailStatus = flowState ? flowState.steps[detailKey] || 'not_started' : 'not_started'
-          const isCurrent = flowState ? flowCurrentKey(flowState) === detailKey : false
-          const hasContent = flowHasContent(detailKey)
-          // AC-F1/F2：项目步由宿主初始化为 not_started，允许直接确认（其余步需 in_progress）
-          const statusConfirmable = detailStatus === 'in_progress' || (detailKey === 'project' && detailStatus === 'not_started')
-          const canConfirm = flowAvailable && isCurrent && statusConfirmable && hasContent && !flowBusy
-          const canRollback = flowAvailable && detailStatus === 'confirmed' && !flowBusy
-          const whyNot = !flowAvailable
-            ? '等待宿主 flow-state 接口就绪（doc-read/doc-save 特例）'
-            : detailStatus === 'confirmed'
-              ? '已确认；可「撤销确认 / 回退」'
-              : detailStatus === 'stale'
-                ? '待重做：请先处理上游变更'
-                : !isCurrent
-                  ? '仅「当前进行中」的步骤可确认'
-                  : !hasContent
-                    ? '该步还没有内容，不能确认'
-                    : ''
-          children.push(h('div', { className: 'ad-flow-detail', key: 'flow-detail', role: 'group', 'aria-label': `步骤详情 ${detailLabel}` },
-            h('div', null, `步骤 ${flowStepIndex(detailKey) + 1}/6 · ${detailLabel} · 状态：${FLOW_STATUS_LABELS[detailStatus] || detailStatus}`),
-            whyNot ? h('div', { className: 'ad-flow-hint' }, whyNot) : null,
-            h('div', { className: 'ad-row' },
-              h('button', {
-                className: 'ad-btn ad-primary ad-sm',
-                onClick: () => confirmFlowStep(detailKey),
-                disabled: !canConfirm,
-                title: canConfirm ? '确认当前步骤' : (whyNot || '不可确认'),
-              }, '确认本步'),
-              h('button', {
-                className: 'ad-btn ad-sm ad-btn-danger',
-                onClick: () => rollbackFlowTo(detailKey),
-                disabled: !canRollback,
-                title: canRollback ? '撤销确认，下游标记待重做（二次确认）' : '仅已确认步骤可撤销确认',
-              }, '撤销确认 / 回退'),
-              h('button', { className: 'ad-btn ad-sm', onClick: () => setFlowDetail('') }, '关闭详情'),
-              h('button', { className: 'ad-btn ad-sm', onClick: () => loadFlow(openTitle), disabled: flowBusy }, icon('refresh'), flowBusy ? '刷新中…' : '刷新流程状态'))))
-        }
-      }
 
       const body = []
       if (error) {
@@ -5918,10 +7188,9 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
 
       } else if (phase === 'project') {
         const tabs = [
-          ['contract', '剧集契约'],
+          ['world', '世界观'],
           ['outline', '总纲'],
           ['characters', '人物'],
-          ['world', '世界观'],
           ['episode', '剧本'],
           ['storyboard', '分镜'],
           ['dialogue', '台词与音效'],
@@ -5937,6 +7206,9 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         // v0.12.0（task-7）：15 页签 4 组 + 窄窗「更多」收纳；aria：tablist/tab/aria-selected 保留，内容区统一 tabpanel
         const tabLabelOf = new Map(tabs)
         const groupedTabs = TAB_GROUPS.map((group) => ({ ...group, items: group.tabs.map((key) => [key, tabLabelOf.get(key)]) }))
+        // v0.16.5（task-45）：13 个可见页签键（页签条/更多菜单/键盘 roving 均以此为准；contract 为内部合法键但不在其中）
+        const visibleTabKeys = groupedTabs.flatMap((group) => group.items.map(([key]) => key))
+        const rovingTabKey = visibleTabKeys.includes(tab) ? tab : (visibleTabKeys[0] || 'outline')
         // v0.12.4（task-24 / M5-A）：页签 roving tabindex + ←/→/Home/End 仅移动焦点（manual activation：不调用 switchTab，避免误触发未保存守卫）
         const focusTabByKey = (targetKey) => {
           if (typeof document === 'undefined' || !document || typeof document.getElementById !== 'function') return
@@ -5952,14 +7224,14 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         const onTabKeyDown = (event, key) => {
           const keyName = String((event && event.key) || '')
           if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(keyName)) return
-          const index = tabs.findIndex(([tabKey]) => tabKey === key)
+          const index = visibleTabKeys.indexOf(key)
           if (index < 0) return
           let nextIndex = index
           if (keyName === 'Home') nextIndex = 0
-          else if (keyName === 'End') nextIndex = tabs.length - 1
-          else nextIndex = (index + (keyName === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
+          else if (keyName === 'End') nextIndex = visibleTabKeys.length - 1
+          else nextIndex = (index + (keyName === 'ArrowRight' ? 1 : -1) + visibleTabKeys.length) % visibleTabKeys.length
           if (event && typeof event.preventDefault === 'function') event.preventDefault()
-          focusTabByKey(tabs[nextIndex][0])
+          focusTabByKey(visibleTabKeys[nextIndex])
         }
         const renderMainTab = (key, label) => h('button', {
           key,
@@ -5969,7 +7241,7 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           'aria-selected': tab === key ? 'true' : 'false',
           'aria-controls': 'ad-tabpanel',
           'data-on': tab === key ? '1' : '0',
-          tabIndex: tab === key ? 0 : -1,
+          tabIndex: rovingTabKey === key ? 0 : -1,
           onKeyDown: (event) => onTabKeyDown(event, key),
           onClick: () => switchTab(key),
         }, label,
@@ -5984,19 +7256,19 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
               className: 'ad-btn ad-sm',
               'aria-expanded': tabsMoreOpen ? 'true' : 'false',
               'aria-haspopup': 'true',
-              title: '窄窗页签收纳（当前：' + (tabLabelOf.get(tab) || '') + '）',
+              title: '窄窗页签收纳（当前：' + (tabLabelOf.get(tab) || tabLabelOfKey(tab)) + '）',
               onClick: () => setTabsMoreOpen((open) => !open),
               'aria-label': '更多页签',
             }, icon('ellipsis')),
             tabsMoreOpen
               ? h('div', { className: 'ad-tabs-more-panel', role: 'menu', 'aria-label': '全部页签' },
-                  tabs.map(([key, label]) => h('button', {
+                  visibleTabKeys.map((key) => h('button', {
                     key,
                     className: tab === key ? 'ad-btn ad-sm ad-primary' : 'ad-btn ad-sm',
                     role: 'menuitem',
                     'data-on': tab === key ? '1' : '0',
                     onClick: () => { setTabsMoreOpen(false); switchTab(key) },
-                  }, label)))
+                  }, tabLabelOf.get(key) || tabLabelOfKey(key))))
               : null),
           h('div', { className: 'ad-tabs-agent', key: 'tabs-agent' },
             h('button', {
@@ -6010,15 +7282,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
             }, icon('send'), h('span', { className: 'ad-agent-label' }, '交给 Agent'))))
         body.push(tabsNode)
 
-        // P2-2：当前页签对应步骤的 stale 黄色提示（不阻止编辑）
-        const tabStaleKey = flowState && FLOW_TAB_STEP[tab] ? FLOW_TAB_STEP[tab] : ''
-        if (tabStaleKey && flowState && flowState.steps[tabStaleKey] === 'stale') {
-          body.push(h('div', {
-            className: 'ad-flow-stale',
-            key: 'flow-stale',
-            role: 'status',
-          }, `上游已变更，建议重做「${flowStepLabel(tabStaleKey)}」（不阻止编辑，可先继续编辑后再回来确认）`))
-        }
 
         // P2-3：审读定位横幅（跨页签可见，跳转后仍显示目标位置，可一键清除）
         if (reviewJump) {
@@ -6050,11 +7313,33 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
               h('div', { className: 'ad-form-group' },
                 h('div', { className: 'ad-sec' }, '审核红线'),
                 h(TextField, { label: '审核红线', rows: 4, value: contract.redlines, onChange: (v) => updateContract({ ...contract, redlines: v }) })),
-              h('div', { className: 'ad-row', style: { gap: 8 } },
-                h('button', { className: 'ad-btn ad-primary', onClick: saveContract, disabled: busy, 'aria-keyshortcuts': 'Control+S Meta+S' }, '保存契约'),
-                dirty.contract ? dirtyMark('contract') : null,
-                h('span', { className: 'ad-sub' }, 'Ctrl/⌘+S 保存本页')),
-              h('div', { className: 'ad-path' }, '剧集契约是后续 AI 生成时的强约束输入（FR-B01），同时会渲染到 剧集契约.md。'),
+              h('details', { className: 'ad-form-group ad-contract-world', key: 'contract-world' },
+                h('summary', { className: 'ad-contract-world-summary' },
+                  '八大设定（可选）',
+                  h('span', { className: 'ad-count' }, contractWorldFilledCount(contract) > 0 ? `已填 ${contractWorldFilledCount(contract)}/8` : '未填写')),
+                h('div', { className: 'ad-path', style: { marginTop: 8 } }, '世界观型长文本设定（可选，留空不落盘）。建议优先：灵魂/生死/因果、力量体系、地理与空间。'),
+                h('div', { className: 'ad-contract-world-grid' },
+                  CONTRACT_WORLD_FIELDS.map(([key, label, limit, placeholder]) => {
+                    const value = contractWorldValue(contract, key)
+                    const trimmedLength = value.trim().length
+                    return h('div', { className: 'ad-field', key },
+                      h('label', null, label, ' ',
+                        h('span', { className: 'ad-count', 'data-over': trimmedLength > limit ? '1' : '0' }, `${trimmedLength}/${limit}`)),
+                      h('textarea', {
+                        className: 'ad-area',
+                        rows: 3,
+                        value,
+                        placeholder,
+                        'aria-label': `${label}（上限 ${limit} 字）`,
+                        onChange: (e) => updateContract({ ...contract, [key]: e.target.value }),
+                      }))
+                  }))),
+              h('div', { className: 'ad-form-group ad-contract-footer', key: 'contract-save' },
+                h('div', { className: 'ad-row', style: { gap: 8, flexWrap: 'wrap' } },
+                  h('button', { className: 'ad-btn ad-primary', onClick: saveContract, disabled: busy, 'aria-keyshortcuts': 'Control+S Meta+S' }, '保存契约'),
+                  dirty.contract ? dirtyMark('contract') : null,
+                  h('span', { className: 'ad-sub' }, 'Ctrl/⌘+S 保存本页')),
+                h('div', { className: 'ad-path', style: { marginTop: 6 } }, '剧集契约是后续 AI 生成时的强约束输入（FR-B01），同时会渲染到 剧集契约.md。')),
             ),
           )
         }
@@ -6567,11 +7852,7 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           /* ---------------- v0.15.3（task-115 / VB-C）：视觉圣经只读专区（素材库内视图切换） ---------------- */
           const visualImages = collectVisualImages(assetCards)
           const visualCardById = new Map(assetCards.map((card) => [card.id, card]))
-          const visualTypes = ASSET_TYPE_ORDER.filter(([type]) => {
-            if (type === 'SPC' && visualScenes.length) return true
-            if (type === 'CHR') return assetCards.some((card) => card.type === 'CHR')
-            return visualImages.some((entry) => entry.type === type)
-          })
+          const visualGroupCounts = new Map(VISUAL_WALL_GROUPS.map((group) => [group.key, visualImages.filter((entry) => visualWallGroupOf(entry.type) === group.key).length]))
           const hasVisualData = Boolean(visualStyle) || visualScenes.length > 0 || visualImages.length > 0
           const visualMatch = (value) => {
             const keyword = visualQuery.trim().toLowerCase()
@@ -6585,13 +7866,30 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
             return visualSort === 'id-desc' ? -result : result
           })
           const visualWallImages = visualSortList(visualImages.filter((entry) =>
-            (visualType === 'all' || entry.type === visualType) && (visualMatch(entry.cardId) || visualMatch(entry.cardName))))
+            (visualType === 'all' || visualWallGroupOf(entry.type) === visualType) && (visualMatch(entry.cardId) || visualMatch(entry.cardName))))
           const visualSceneCards = visualSortList(visualScenes.filter((scene) =>
-            (visualType === 'all' || visualType === 'SPC') && (visualMatch(scene.id) || visualMatch(scene.name))))
+            (visualType === 'all' || visualType === 'scene') && (visualMatch(scene.id) || visualMatch(scene.name))))
           const visualCharacterCards = visualSortList(assetCards.filter((card) => card.type === 'CHR' &&
-            (visualType === 'all' || visualType === 'CHR') &&
+            (visualType === 'all' || visualType === 'char') &&
             (visualMatch(card.id) || visualMatch(card.name) || card.aliases.some((alias) => visualMatch(alias)))))
           const visualHeadImage = visualImages.length ? visualImages[0] : null
+          const visualShowSceneSection = visualType === 'all' || visualType === 'scene'
+          const visualShowCharacterSection = visualType === 'all' || visualType === 'char'
+          const visualWallGroups = VISUAL_WALL_GROUPS.map((group) => ({
+            key: group.key,
+            label: group.label,
+            entries: visualWallImages.filter((entry) => visualWallGroupOf(entry.type) === group.key),
+          })).filter((group) => group.entries.length > 0)
+          const visualGuidanceNode = (text, actions) => h('div', { className: 'ad-visual-empty ad-visual-guidance' },
+            h('div', { className: 'ad-visual-guidance-text' }, text),
+            Array.isArray(actions) && actions.length
+              ? h('div', { className: 'ad-visual-guidance-actions' }, actions.map((action) => h('button', {
+                  key: action.label,
+                  type: 'button',
+                  className: 'ad-btn ad-sm',
+                  onClick: action.onClick,
+                }, action.label)))
+              : null)
           const ensureVisualAssets = () => {
             const paths = []
             for (const entry of visualWallImages.slice(0, 80)) paths.push(entry.src)
@@ -6661,6 +7959,53 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
                   }, `片段 ${index + 1}`)))
                 : null)
           }
+          const styleEditorNode = h('div', { className: 'ad-style-editor', key: 'style-editor' },
+            h('div', { className: 'ad-style-status', role: 'status', 'aria-live': 'polite' },
+              h('span', { className: 'ad-style-state' }, '风格状态：' + String(STYLE_DIRECTION_LABELS[styleStatus] || '草稿')),
+              h('span', { className: 'ad-count' }, 'revision ' + String(currentStyleDirection.revision)),
+              currentStyleDirection.directedAt ? h('span', null, '定向：' + styleMomentText(currentStyleDirection.directedAt)) : null,
+              currentStyleDirection.frozenAt ? h('span', null, '冻结：' + styleMomentText(currentStyleDirection.frozenAt)) : null,
+              currentStyleDirection.unfreezeCount > 0
+                ? h('span', { className: 'ad-style-badge' }, '解冻 ' + String(currentStyleDirection.unfreezeCount) + ' 次' + (currentStyleDirection.unfreezeCount >= 3 ? ' ⚠️' : ''))
+                : null),
+            styleStatus === 'frozen'
+              ? h('div', { className: 'ad-style-frozen', role: 'note' },
+                  h('span', null, '已于 ' + styleMomentText(currentStyleDirection.frozenAt) + ' 冻结，风格只读' + (currentStyleDirection.freezeNote ? '：' + currentStyleDirection.freezeNote : '')),
+                  h('button', { className: 'ad-btn ad-sm', onClick: () => openStyleDialog('unfreeze'), disabled: styleBusy }, '解冻'))
+              : null,
+            h('div', { className: 'ad-style-grid' },
+              STYLE_DIMENSION_ORDER.map(([key, label]) => h('div', { className: 'ad-style-field', key },
+                h('label', null, label, ' ',
+                  h('span', { className: 'ad-style-count' }, String(String(styleDraft[key] == null ? '' : styleDraft[key]).length) + '/' + String(VISUAL_STYLE_TEXT_MAX))),
+                h('textarea', {
+                  className: 'ad-area',
+                  rows: 2,
+                  maxLength: VISUAL_STYLE_TEXT_MAX,
+                  value: styleDraft[key] == null ? '' : styleDraft[key],
+                  disabled: styleFrozen || styleBusy,
+                  'aria-label': label + '（上限 ' + String(VISUAL_STYLE_TEXT_MAX) + ' 字）',
+                  onChange: (event) => {
+                    const value = event.target.value
+                    setStyleDraft((prev) => Object.assign({}, prev, { [key]: value }))
+                    if (styleError) setStyleError('')
+                  },
+                })))),
+            h('div', { className: 'ad-style-actions' },
+              styleStatus === 'draft'
+                ? [h('button', { key: 'style-save-draft', className: 'ad-btn ad-primary ad-sm', onClick: () => saveStyle('save'), disabled: styleBusy }, styleBusy ? '保存中…' : '保存草稿'),
+                   h('button', { key: 'style-direct', className: 'ad-btn ad-sm', onClick: () => openStyleDialog('direct'), disabled: styleBusy }, '定向确认')]
+                : styleStatus === 'directed'
+                  ? [h('button', { key: 'style-save-micro', className: 'ad-btn ad-primary ad-sm', onClick: () => openStyleDialog('micro'), disabled: styleBusy }, '保存微调'),
+                     h('button', { key: 'style-freeze', className: 'ad-btn ad-sm', onClick: () => openStyleDialog('freeze'), disabled: styleBusy }, '冻结风格')]
+                  : [h('button', { key: 'style-unfreeze', className: 'ad-btn ad-primary ad-sm', onClick: () => openStyleDialog('unfreeze'), disabled: styleBusy }, '解冻风格')],
+              h('button', { key: 'style-refresh', className: 'ad-btn ad-sm', onClick: () => { refreshStyleState() }, disabled: busy || styleBusy }, '刷新状态')),
+            styleNotice ? h('div', { className: 'ad-hint-next', role: 'status', 'aria-live': 'polite' }, styleNotice) : null,
+            styleError
+              ? h('div', { className: 'ad-err-box', role: 'alert' },
+                  h('div', { className: 'ad-err-head' }, '风格操作失败'),
+                  h('div', { className: 'ad-err' }, styleError),
+                  h('div', { className: 'ad-err-next' }, '可刷新状态后重试；冻结状态需先解冻。'))
+              : null)
           const visualStyleNode = h('div', { className: 'ad-visual-section', key: 'visual-style' },
             h('div', { className: 'ad-sec' }, '视觉基调'),
             visualStyle
@@ -6670,49 +8015,92 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
                     STYLE_DIMENSION_ORDER.filter(([key]) => visualStyle[key]).map(([key, label]) => h('div', { className: 'ad-visual-style-dim', key },
                       h('div', { className: 'ad-visual-style-label' }, label),
                       h('div', { className: 'ad-visual-style-text' }, visualStyle[key])))))
-              : h('div', { className: 'ad-visual-empty' }, '暂无风格 DNA：在项目里配置五维风格后显示'))
-          const visualScenesNode = h('div', { className: 'ad-visual-section', key: 'visual-scenes' },
-            h('div', { className: 'ad-sec' }, `场景卡区 · ${visualSceneCards.length}`),
-            visualSceneCards.length
-              ? h('div', { className: 'ad-visual-grid' }, visualSceneCards.map((scene) => {
-                  const thumb = sceneThumbOf(scene, visualCardById)
-                  const meta = [scene.interior, scene.timeOfDay, scene.weather, scene.location].filter(Boolean).join(' · ')
-                  return h('div', { className: 'ad-visual-card', key: scene.id },
-                    h('div', { className: 'ad-visual-thumb-wrap' }, thumb ? visualImageThumb(thumb, `${scene.id} ${scene.name}`) : h('span', { className: 'ad-visual-placeholder' }, '场景 · 无图')),
-                    h('div', { className: 'ad-visual-card-body' },
-                      h('strong', null, `${scene.id} ${scene.name}`),
-                      meta ? h('div', { className: 'ad-visual-meta' }, meta) : null,
-                      scene.lighting ? h('div', { className: 'ad-visual-meta' }, `光源：${scene.lighting.slice(0, 120)}`) : null))
-                }))
-              : h('div', { className: 'ad-visual-empty' }, visualScenes.length ? '当前筛选没有场景卡' : '暂无场景卡：在项目里配置场景卡后出现'))
-          const visualCharactersNode = h('div', { className: 'ad-visual-section', key: 'visual-characters' },
-            h('div', { className: 'ad-sec' }, `角色卡区 · ${visualCharacterCards.length}`),
-            visualCharacterCards.length
-              ? h('div', { className: 'ad-visual-grid' }, visualCharacterCards.map((card) => {
-                  const rawThumb = card.media ? card.media.thumbnail || (card.media.images && card.media.images[0]) || '' : ''
-                  return h('div', { className: 'ad-visual-card', key: card.id },
-                    h('div', { className: 'ad-visual-thumb-wrap' }, rawThumb ? visualImageThumb(rawThumb, `${card.id} ${card.name}`) : h('span', { className: 'ad-visual-placeholder' }, '角色 · 无图')),
-                    h('div', { className: 'ad-visual-card-body' },
-                      h('strong', null, `${card.id} ${card.name}`),
-                      card.aliases.length ? h('div', { className: 'ad-visual-meta' }, `别名：${card.aliases.join('、')}`) : null,
-                      visualAudioNode(card)))
-                }))
-              : h('div', { className: 'ad-visual-empty' }, '暂无角色卡：为角色资产卡添加图片/音频后出现'))
+              : visualGuidanceNode('暂无风格 DNA。可在下方填写五维风格并保存；也可先在卡片视图查看已登记参考图。', [
+                  { label: '交给 Agent', onClick: openHandoff },
+                  { label: '去卡片视图', onClick: () => setAssetView('cards') },
+                ]),
+            styleEditorNode)
+          const visualScenesSectionNode = visualShowSceneSection
+            ? h('div', { className: 'ad-visual-section', key: 'visual-scenes' },
+                h('div', { className: 'ad-sec' }, `场景卡区 · ${visualSceneCards.length}`),
+                visualSceneCards.length
+                  ? h('div', { className: 'ad-visual-grid' }, visualSceneCards.map((scene) => {
+                      const thumb = sceneThumbOf(scene, visualCardById)
+                      const meta = [scene.interior, scene.timeOfDay, scene.weather, scene.location].filter(Boolean).join(' · ')
+                      return h('div', { className: 'ad-visual-card', key: scene.id },
+                        h('div', { className: 'ad-visual-thumb-wrap' }, thumb ? visualImageThumb(thumb, `${scene.id} ${scene.name}`) : h('span', { className: 'ad-visual-placeholder' }, '场景 · 无图')),
+                        h('div', { className: 'ad-visual-card-body' },
+                          h('strong', null, `${scene.id} ${scene.name}`),
+                          meta ? h('div', { className: 'ad-visual-meta' }, meta) : null,
+                          scene.lighting ? h('div', { className: 'ad-visual-meta' }, `光源：${scene.lighting.slice(0, 120)}`) : null))
+                    }))
+                  : visualScenes.length
+                    ? h('div', { className: 'ad-visual-empty' }, '当前筛选没有场景卡')
+                    : visualGuidanceNode('暂无场景卡。可让 Agent 生成场景卡；或先在素材库为场景资产登记参考图。', [
+                        { label: '交给 Agent', onClick: openHandoff },
+                        { label: '去卡片视图', onClick: () => setAssetView('cards') },
+                      ]))
+            : null
+          const visualCharactersSectionNode = visualShowCharacterSection
+            ? h('div', { className: 'ad-visual-section', key: 'visual-characters' },
+                h('div', { className: 'ad-sec' }, `角色卡区 · ${visualCharacterCards.length}`),
+                visualCharacterCards.length
+                  ? h('div', { className: 'ad-visual-grid' }, visualCharacterCards.map((card) => {
+                      const rawThumb = card.media ? card.media.thumbnail || (card.media.images && card.media.images[0]) || '' : ''
+                      return h('div', { className: 'ad-visual-card', key: card.id },
+                        h('div', { className: 'ad-visual-thumb-wrap' }, rawThumb ? visualImageThumb(rawThumb, `${card.id} ${card.name}`) : h('span', { className: 'ad-visual-placeholder' }, '角色 · 无图')),
+                        h('div', { className: 'ad-visual-card-body' },
+                          h('strong', null, `${card.id} ${card.name}`),
+                          card.aliases.length ? h('div', { className: 'ad-visual-meta' }, `别名：${card.aliases.join('、')}`) : null,
+                          visualAudioNode(card)))
+                    }))
+                  : assetCards.some((card) => card.type === 'CHR')
+                    ? h('div', { className: 'ad-visual-empty' }, '当前筛选没有角色卡')
+                    : visualGuidanceNode('暂无角色图片/音色。为角色资产卡添加图片或音频后会出现在这里；也可让 Agent 补充。', [
+                        { label: '去卡片视图', onClick: () => setAssetView('cards') },
+                        { label: '交给 Agent', onClick: openHandoff },
+                      ]))
+            : null
+          const visualWallGroupNode = (group) => {
+            const collapsed = Boolean(visualGroupCollapsed && visualGroupCollapsed[group.key])
+            return h('div', { className: 'ad-visual-group', key: group.key },
+              h('button', {
+                type: 'button',
+                className: 'ad-visual-group-head',
+                'aria-expanded': !collapsed,
+                'aria-label': `${group.label}参考图 ${group.entries.length} 张，点击${collapsed ? '展开' : '折叠'}`,
+                onClick: () => setVisualGroupCollapsed((prev) => ({ ...prev, [group.key]: !prev[group.key] })),
+              },
+                h('span', { className: 'ad-visual-group-title' }, group.label),
+                h('span', { className: 'ad-visual-group-count ad-count' }, group.entries.length),
+                h('span', { className: 'ad-visual-group-symbol', 'aria-hidden': 'true' }, collapsed ? '▸' : '▾')),
+              collapsed
+                ? null
+                : h('div', { className: 'ad-visual-wall ad-visual-wall-group', role: 'list', 'aria-label': `${group.label}参考图墙` },
+                    group.entries.map((entry) => visualImageThumb(entry.src, `${entry.cardId} ${entry.cardName}`))))
+          }
           const visualWallNode = h('div', { className: 'ad-visual-section', key: 'visual-wall' },
             h('div', { className: 'ad-sec' }, `关键参考图墙 · ${visualWallImages.length}`),
-            visualWallImages.length
-              ? h('div', { className: 'ad-visual-wall', role: 'list', 'aria-label': '关键参考图墙' }, visualWallImages.map((entry) => visualImageThumb(entry.src, `${entry.cardId} ${entry.cardName}`)))
-              : h('div', { className: 'ad-visual-empty' }, '暂无参考图：为资产卡添加图片后出现在图墙'))
+            visualWallGroups.length
+              ? h('div', { className: 'ad-visual-groups' }, visualWallGroups.map(visualWallGroupNode))
+              : visualType !== 'all'
+                ? h('div', { className: 'ad-visual-empty' }, `当前筛选没有${visualWallGroupLabel(visualType)}参考图`)
+                : visualImages.length
+                  ? h('div', { className: 'ad-visual-empty' }, '当前筛选没有匹配的参考图（换个类型或关键词试试）')
+                  : visualGuidanceNode('还没有参考图。在卡片视图为资产卡添加图片，或让 Agent 生成参考图。', [
+                      { label: '去卡片视图', onClick: () => setAssetView('cards') },
+                      { label: '交给 Agent', onClick: openHandoff },
+                    ]))
           const visualBibleNode = h('div', { key: 'visual-bible', className: 'ad-visual-bible' },
             h('div', { className: 'ad-visual-toolbar', role: 'group', 'aria-label': '视觉圣经筛选' },
-              h('button', { type: 'button', className: 'ad-asset-chip', 'aria-pressed': visualType === 'all', onClick: () => setVisualType('all') }, '全部'),
-              visualTypes.map(([type, label]) => h('button', {
-                key: type,
+              h('button', { type: 'button', className: 'ad-asset-chip', 'aria-pressed': visualType === 'all', onClick: () => setVisualType('all') }, `全部 ${visualImages.length}`),
+              VISUAL_WALL_GROUPS.map((group) => h('button', {
+                key: group.key,
                 type: 'button',
                 className: 'ad-asset-chip',
-                'aria-pressed': visualType === type,
-                onClick: () => setVisualType(type),
-              }, label)),
+                'aria-pressed': visualType === group.key,
+                onClick: () => setVisualType(group.key),
+              }, `${group.label} ${visualGroupCounts.get(group.key) || 0}`)),
               h('input', {
                 className: 'ad-input ad-sm',
                 style: { maxWidth: 220 },
@@ -6730,8 +8118,8 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
                 onChange: (e) => setVisualSort(e.target.value),
               }, h('option', { value: 'id-asc' }, '编号 ↑'), h('option', { value: 'id-desc' }, '编号 ↓'))),
             visualStyleNode,
-            visualScenesNode,
-            visualCharactersNode,
+            visualScenesSectionNode,
+            visualCharactersSectionNode,
             visualWallNode)
 
           /* ---------------- v0.15.4（task-119 / M20-C）：素材库 2.0 · legacy 登记统一卡片视图 ---------------- */
@@ -6742,6 +8130,13 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           const legacyKindChips = LEGACY_ASSET_KIND_ORDER.filter((kind) => legacyKindCounts.has(kind))
           const legacyVisibleAssets = sortLegacyAssets(filterLegacyAssets(legacyAssetList, legacyKindFilter, legacyQuery), legacySort)
           const assetRegistrationExpanded = assetRegistrationOpen || assets.length === 0
+          // v0.15.8（task-126 / EXT-C1）：历史外部登记识别（projectRoot 取不到 → 不标记，避免误伤项目内绝对路径）
+          const externalAssetIds = new Set()
+          for (const asset of legacyAssetList) {
+            if (isProjectExternalSource(asset.source, projectRoot)) externalAssetIds.add(asset.id)
+          }
+          const externalAssetCount = externalAssetIds.size
+          const isExternalAsset = (entry) => Boolean(entry && externalAssetIds.has(entry.id))
           const legacyImageNode = (asset) => {
             if (asset.kind !== 'image') {
               return h('span', { className: 'ad-legacy-placeholder' }, `${LEGACY_ASSET_KIND_LABELS[asset.kind] || '素材'} · 不支持预览`)
@@ -6772,10 +8167,12 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
               h('strong', { className: 'ad-legacy-name', title: asset.name }, asset.name),
               h('div', { className: 'ad-legacy-meta' },
                 h('span', { className: 'ad-asset-badge' }, LEGACY_ASSET_KIND_LABELS[asset.kind] || '素材'),
-                h('span', null, formatAssetBytes(asset.bytes))),
+                h('span', null, formatAssetBytes(asset.bytes)),
+                isExternalAsset(asset) ? h('span', { className: 'ad-asset-badge ad-asset-badge-warn' }, '外部路径（待迁移）') : null),
               asset.linkedShots.length ? h('div', { className: 'ad-legacy-meta' }, `关联镜头：${asset.linkedShots.join('、')}`) : null,
               asset.note ? h('div', { className: 'ad-legacy-meta ad-legacy-note', title: asset.note }, asset.note) : null,
-              asset.sha256 ? h('div', { className: 'ad-legacy-meta' }, `校验：${asset.sha256.slice(0, 8)}`) : null))
+              asset.sha256 ? h('div', { className: 'ad-legacy-meta' }, `校验：${asset.sha256.slice(0, 8)}`) : null,
+              isExternalAsset(asset) ? h('div', { className: 'ad-legacy-meta ad-legacy-warn' }, '历史外部登记：请先迁入项目「素材/」目录再重新登记（图片预览保持只读兼容）') : null))
           const legacyUnifiedNode = h('div', { key: 'legacy-unified', className: 'ad-legacy-view' },
             h('div', { className: 'ad-row', style: { marginBottom: 8, flexWrap: 'wrap', gap: 8 } },
               h('span', { className: 'ad-sub' }, `素材库 · 已登记 ${legacyAssetList.length} 条${assetCards.length ? ` · 资产卡 ${assetCards.length} 张` : ''}（只读预览）`),
@@ -6800,6 +8197,9 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
                 value: legacySort,
                 onChange: (e) => setLegacySort(e.target.value),
               }, h('option', { value: 'name-asc' }, '名称'), h('option', { value: 'size-desc' }, '大小'))),
+            externalAssetCount
+              ? h('div', { className: 'ad-warn', key: 'legacy-external', role: 'status' }, `当前有 ${externalAssetCount} 条历史外部登记（待迁移）：请先把文件迁入项目「素材/」目录再重新登记；图片预览暂时保持只读兼容。`)
+              : null,
             legacyAssetList.length
               ? h('div', { className: 'ad-asset-toolbar', role: 'group', 'aria-label': '登记素材类型筛选' },
                   h('button', {
@@ -6825,10 +8225,10 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
             h('div', { className: 'ad-sec' }, `已登记素材 · ${legacyVisibleAssets.length}`),
             legacyVisibleAssets.length
               ? h('div', { className: 'ad-asset-grid ad-legacy-grid', role: 'list', 'aria-label': '已登记素材卡片' }, legacyVisibleAssets.map(legacyCardNode))
-              : h('div', { className: 'ad-table-empty' }, legacyAssetList.length ? '当前筛选没有登记素材（换个类型/关键词试试）' : '还没有登记素材：粘贴文件路径 → 登记后自动出现在这里'),
-            h('div', { className: 'ad-visual-empty', style: { marginTop: 10 } }, '登记=引用外部文件路径，不复制文件；用于把出图/出片/文档与镜号关联；登记后自动出现在上方卡片视图。'))
+              : h('div', { className: 'ad-table-empty' }, legacyAssetList.length ? '当前筛选没有登记素材（换个类型/关键词试试）' : '还没有登记素材：把文件放入项目「素材/」目录后，粘贴项目内路径（例如 素材/角色/CHR001.png）→ 登记后自动出现在这里'),
+            h('div', { className: 'ad-visual-empty', style: { marginTop: 10 } }, '登记=把项目文件夹内的素材路径登记入库；仅支持项目内路径，素材必须位于项目「素材/」目录（或项目文件夹内），不支持项目外路径；登记后自动出现在上方卡片视图。'))
           const visualBibleHintNode = !hasVisualData
-            ? h('div', { key: 'visual-bible-hint', className: 'ad-visual-empty', style: { marginTop: 10 } }, '配置风格 DNA / 场景卡后，可在此查看视觉圣经（只读）。')
+            ? h('div', { key: 'visual-bible-hint', className: 'ad-visual-empty', style: { marginTop: 10 } }, '配置风格 DNA / 场景卡后，可在此查看视觉圣经。')
             : null
           const assetRegistrationNode = h('div', { key: 'asset-registration', className: 'ad-registration' },
             h('button', {
@@ -6839,13 +8239,19 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
             }, `登记管理（${assets.length} 条）${assetRegistrationExpanded ? ' · 收起 ▴' : ' · 展开 ▾'}`),
             assetRegistrationExpanded
               ? h('div', { className: 'ad-registration-body' },
-                  h('div', { className: 'ad-visual-empty', style: { marginBottom: 8 } }, '登记=引用外部文件路径，不复制文件；用于把出图/出片/文档与镜号关联；登记后自动出现在上方卡片视图；「刷新/重扫」= 重新读取登记并同步外部文件变化。'),
+                  h('div', { className: 'ad-visual-empty', style: { marginBottom: 8 } }, '登记=把项目文件夹内的素材路径登记入库；仅支持项目内路径，素材必须位于项目「素材/」目录（或项目文件夹内），不支持项目外路径；登记后自动出现在上方卡片视图；「刷新/重扫」= 重新读取登记并同步文件变化。'),
+                  assetAddError ? h('div', { className: 'ad-err-box', role: 'alert', style: { marginBottom: 8 } }, h('div', { className: 'ad-err' }, assetAddError)) : null,
                   h('div', { className: 'ad-row', style: { marginBottom: 6 } },
-                    h('input', { className: 'ad-input', placeholder: '素材文件绝对路径，例如 D:\\素材\\shot-1-1.png', value: assetSource, onChange: (e) => setAssetSource(e.target.value) }),
+                    h('input', {
+                      className: 'ad-input',
+                      placeholder: '项目内素材路径，例如 素材/角色/CHR001.png',
+                      value: assetSource,
+                      onChange: (e) => { setAssetSource(e.target.value); if (assetAddError) setAssetAddError('') },
+                    }),
                     h('input', { className: 'ad-input', style: { maxWidth: 160 }, placeholder: '关联镜号 1-1、1-2', value: assetShots, onChange: (e) => setAssetShots(e.target.value) }),
                     h('button', { className: 'ad-btn ad-primary ad-sm', onClick: addAsset, disabled: busy || !assetSource.trim() }, '登记'),
-                    h('button', { className: 'ad-btn ad-sm', onClick: loadAssets, disabled: busy }, icon('refresh'), '刷新/重扫')),
-                  h('div', { className: 'ad-sub', style: { marginBottom: 10 } }, '只登记路径与校验信息，**不复制原始文件**（大文件不会塞进项目目录）'),
+                    h('button', { className: 'ad-btn ad-sm', onClick: () => loadAssets(), disabled: busy }, icon('refresh'), '刷新/重扫')),
+                  h('div', { className: 'ad-sub', style: { marginBottom: 10 } }, '只登记项目内路径与校验信息，**不复制原始文件**；登记后自动刷新列表。'),
                   h('table', { className: 'ad-table' },
                     h('caption', { className: 'ad-sr-only' }, '素材资产登记表'),
                     h('thead', null, h('tr', null, ['名称', '类型', '大小', '关联镜头', '校验', '路径', ''].map((t, i) => h('th', { key: i, scope: 'col' }, t)))),
@@ -6854,22 +8260,741 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
                         ? assets.map((a) =>
                             h('tr', { key: a.id },
                               h('td', null, a.name),
-                              h('td', null, a.kind),
+                              h('td', null, a.kind, isExternalAsset(a) ? h('span', { className: 'ad-asset-badge ad-asset-badge-warn', style: { marginLeft: 6 } }, '外部路径（待迁移）') : null),
                               h('td', null, ((Number(a.bytes) || 0) / 1024).toFixed(1) + ' KB'),
                               h('td', null, (a.linkedShots || []).join('、') || '—'),
                               h('td', { title: a.sha256 || '未计算' }, a.sha256 ? a.sha256.slice(0, 8) : '—'),
-                              h('td', { style: { maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }, title: a.source }, a.source),
+                              h('td', { style: { maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }, title: isExternalAsset(a) ? '' : a.source }, isExternalAsset(a) ? '（历史外部路径已隐藏，待迁移）' : a.source),
                               h('td', null, h('button', { type: 'button', className: 'ad-btn ad-sm ad-btn-danger ad-icon-btn ad-icon-btn-sm', 'data-tone': 'danger', 'aria-label': '移除素材', title: '移除素材', onClick: () => removeAsset(a.id) }, icon('trash')))))
-                        : h('tr', null, h('td', { colSpan: 7, className: 'ad-table-empty' }, '还没有登记素材：粘贴文件路径后点「登记」→ 会自动出现在上方卡片视图。')))))
+                        : h('tr', null, h('td', { colSpan: 7, className: 'ad-table-empty' }, '还没有登记素材：把文件放入项目「素材/」目录后，粘贴项目内路径（例如 素材/角色/CHR001.png）→ 点「登记」后自动出现在上方卡片视图。')))))
               : null)
+
+          /* ---------------- v0.15.9（task-129 / D2C-C）：扫描素材目录 + 批量登记 ---------------- */
+          const scanKindCounts = new Map()
+          for (const file of scanFiles) scanKindCounts.set(file.kind, (scanKindCounts.get(file.kind) || 0) + 1)
+          const scanKindChips = SCAN_KIND_ORDER.filter((kind) => scanKindCounts.has(kind))
+          const scanVisibleFiles = scanKindFilter === 'all' ? scanFiles : scanFiles.filter((file) => file.kind === scanKindFilter)
+          const scanSelectedCount = scanFiles.filter((file) => Boolean(scanSelected[file.path])).length
+          const scanAllSelected = scanVisibleFiles.length > 0 && scanVisibleFiles.every((file) => Boolean(scanSelected[file.path]))
+          const scanStatsText = scanTruncated
+            ? `素材/ 内未登记文件：${scanTotal} 个（仅显示前 1000 条，可先登记一部分再重新扫描）`
+            : `素材/ 内未登记文件：${scanTotal} 个`
+          const registryWarningNode = registrySupported === true && registryOk === false
+            ? h('div', { key: 'registry-warning', className: 'ad-registry-warning', role: 'status' },
+                h('div', { className: 'ad-registry-warning-title' }, REGISTRY_WARNING_TEXT),
+                h('div', { className: 'ad-sub', style: { marginTop: 2 } }, REGISTRY_WARNING_DETAIL),
+                h('div', { className: 'ad-registry-actions' },
+                  h('button', { type: 'button', className: 'ad-btn ad-primary ad-sm', onClick: repairRegistry, disabled: registryBusy }, registryBusy ? '修复中…' : '修复登记表')),
+                registryError ? h('div', { className: 'ad-hint-next', role: 'status' }, registryError) : null)
+            : null
+          const registryNoticeNode = registrySupported === true && registryOk !== false && registryNotice
+            ? h('div', { key: 'registry-notice', className: 'ad-registry-notice', role: 'status' }, registryNotice)
+            : null
+          const scanEntryButton = scanSupported === true
+            ? h('button', {
+                type: 'button',
+                className: 'ad-btn ad-sm',
+                'aria-expanded': scanOpen,
+                onClick: openScanPanel,
+                disabled: scanBatchBusy || registryOk === false,
+                title: registryOk === false ? '素材登记表损坏，请先修复登记表后再扫描/批量登记' : undefined,
+              }, scanOpen ? '收起扫描结果' : '扫描素材目录')
+            : null
+          const importEntryButton = importSupported === true
+            ? h('button', {
+                type: 'button',
+                className: 'ad-btn ad-sm',
+                'aria-expanded': importOpen,
+                onClick: openImportPanel,
+                disabled: importBusy || registryOk === false,
+                title: registryOk === false ? '素材登记表损坏，请先修复登记表' : undefined,
+              }, importOpen ? '收起导入面板' : '导入素材')
+            : null
+          const crossEntryButton = crossSupported === true
+            ? h('button', {
+                type: 'button',
+                className: 'ad-btn ad-sm',
+                'aria-expanded': crossOpen,
+                onClick: openCrossPanel,
+                disabled: crossBusy || registryOk === false,
+                title: registryOk === false ? '素材登记表损坏，请先修复登记表' : undefined,
+              }, crossOpen ? '收起跨项目导入' : '从其他项目导入…')
+            : null
+          const assetActionsToolbarNode = scanEntryButton || importEntryButton || crossEntryButton
+            ? h('div', { key: 'asset-actions-toolbar', className: 'ad-scan-toolbar' },
+                scanEntryButton,
+                importEntryButton,
+                crossEntryButton,
+                h('span', { className: 'ad-sub' }, (importSupported === true
+                  ? '扫描=列出项目「素材/」内未登记文件批量登记；导入=把所选文件复制进项目并自动登记（均不移动源文件）'
+                  : '列出项目「素材/」内未登记文件，勾选后可批量登记（不移动文件）') + (crossSupported === true ? '；跨项目=从其他项目只读选择已登记资产并复制到当前项目（源项目不变）' : '')))
+            : null
+          const scanPanelNode = scanSupported === true && scanOpen
+            ? h('div', { key: 'scan-panel', className: 'ad-scan-panel', role: 'region', 'aria-label': '扫描素材目录' },
+                h('div', { className: 'ad-row', style: { flexWrap: 'wrap', gap: 8, marginBottom: 6, alignItems: 'center' } },
+                  h('strong', null, '扫描素材目录'),
+                  h('span', { className: 'ad-sub', role: 'status' }, scanStatsText),
+                  h('div', { style: { flex: 1 } }),
+                  h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: () => loadAssets({ scan: true }).catch(() => {}), disabled: scanBatchBusy }, '重新扫描'),
+                  h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: closeScanPanel, disabled: scanBatchBusy }, '关闭')),
+                h('div', { className: 'ad-sub', style: { marginBottom: 8 } }, '扫描=列出项目「素材/」内未登记文件；批量登记=登记进素材库（**不移动文件**）。'),
+                scanFiles.length
+                  ? h('div', { className: 'ad-row', style: { flexWrap: 'wrap', gap: 8, marginBottom: 8, alignItems: 'center' } },
+                      h('button', { type: 'button', className: 'ad-asset-chip', 'aria-pressed': scanKindFilter === 'all', onClick: () => setScanKindFilter('all') }, `全部 ${scanFiles.length}`),
+                      scanKindChips.map((kind) => h('button', {
+                        key: kind,
+                        type: 'button',
+                        className: 'ad-asset-chip',
+                        'aria-pressed': scanKindFilter === kind,
+                        onClick: () => setScanKindFilter(kind),
+                      }, `${LEGACY_ASSET_KIND_LABELS[kind] || '其他'} ${scanKindCounts.get(kind)}`)),
+                      h('label', { className: 'ad-scan-selectall' },
+                        h('input', {
+                          type: 'checkbox',
+                          className: 'ad-check',
+                          checked: scanAllSelected,
+                          onChange: () => toggleScanAll(scanVisibleFiles),
+                          disabled: scanBatchBusy,
+                          'aria-label': '全选当前筛选未登记文件',
+                        }),
+                        '全选'),
+                      h('span', { className: 'ad-sub' }, `已选 ${scanSelectedCount}`))
+                  : null,
+                scanFiles.length
+                  ? h('div', { className: 'ad-scan-list', role: 'list', 'aria-label': '未登记素材文件列表' },
+                      scanVisibleFiles.length
+                        ? scanVisibleFiles.map((file) => h('label', { className: 'ad-scan-row', key: file.path, role: 'listitem' },
+                            h('input', {
+                              type: 'checkbox',
+                              className: 'ad-check',
+                              checked: Boolean(scanSelected[file.path]),
+                              onChange: () => toggleScanFile(file.path),
+                              disabled: scanBatchBusy,
+                              'aria-label': `选择 ${file.path}`,
+                            }),
+                            h('span', { className: 'ad-scan-path', title: file.path }, file.path),
+                            h('span', { className: 'ad-asset-badge' }, LEGACY_ASSET_KIND_LABELS[file.kind] || '其他'),
+                            h('span', { className: 'ad-scan-size' }, formatAssetBytes(file.size))))
+                        : h('div', { className: 'ad-table-empty' }, '当前筛选没有未登记文件'))
+                  : h('div', { className: 'ad-table-empty' }, '素材/ 目录下没有未登记文件'),
+                h('div', { className: 'ad-scan-actions' },
+                  h('button', {
+                    type: 'button',
+                    className: 'ad-btn ad-primary ad-sm',
+                    onClick: runScanBatch,
+                    disabled: scanBatchBusy || scanSelectedCount === 0 || registryOk === false,
+                  }, scanBatchBusy ? `登记中… 已处理 ${scanProgress.done}/${scanProgress.total}` : `批量登记已选（${scanSelectedCount}）`),
+                  scanSelectedCount > SCAN_BATCH_WARN_THRESHOLD ? h('span', { className: 'ad-warn-inline' }, '将逐条登记，可能耗时数秒') : null),
+                scanBatchBusy || scanProgress.total > 0
+                  ? h('div', { className: 'ad-scan-progress', role: 'status' }, `已处理 ${scanProgress.done}/${scanProgress.total}`)
+                  : null,
+                scanSummary
+                  ? h('div', { className: 'ad-scan-summary', role: 'status' },
+                      h('div', null, `汇总：成功 ${scanSummary.ok} · 失败 ${scanSummary.fail.length}`),
+                      scanSummary.fail.length
+                        ? h('div', { className: 'ad-scan-fail-list' }, scanSummary.fail.map((item) => h('div', { className: 'ad-scan-fail-item', key: item.path }, `${item.path}：${item.reason}`)))
+                        : h('div', { className: 'ad-ok' }, '全部登记成功'))
+                  : null)
+            : null
+
+          /* ---------------- v0.15.11（task-135 / IMP-C）：一键导入面板 ---------------- */
+          const importQueuedCount = importQueue.filter((item) => item.status === 'queued').length
+          const importFailCount = importQueue.filter((item) => item.status === 'fail').length
+          const importPanelNode = importSupported === true && importOpen
+            ? h('div', { key: 'import-panel', className: 'ad-import-panel', role: 'region', 'aria-label': '导入素材' },
+                h('div', { className: 'ad-row', style: { flexWrap: 'wrap', gap: 8, marginBottom: 6, alignItems: 'center' } },
+                  h('strong', null, '导入素材'),
+                  h('span', { className: 'ad-sub', role: 'status' }, `待导入 ${importQueuedCount} 个${importQueue.length !== importQueuedCount ? `（队列共 ${importQueue.length} 个）` : ''}`),
+                  h('div', { style: { flex: 1 } }),
+                  h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: clearImportQueue, disabled: importBusy || importQueue.length === 0 }, '清空'),
+                  h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: closeImportPanel, disabled: importBusy }, '关闭')),
+                h('div', { className: 'ad-sub', style: { marginBottom: 8 } }, '导入=把所选文件复制进项目「素材/<分类>/」并自动登记（**不移动源文件**）；单文件 ≤50MB；单批 ≤20。'),
+                h('div', { className: 'ad-import-controls' },
+                  h('label', { className: 'ad-import-category' }, '分类',
+                    h('select', {
+                      className: 'ad-input ad-sm',
+                      'aria-label': '导入分类',
+                      value: importCategory,
+                      onChange: (event) => setImportCategory(event.target.value),
+                      disabled: importBusy,
+                    },
+                      h('option', { value: '' }, `默认（${importDefaultCategory()}）`),
+                      IMPORT_CATEGORIES.map((category) => h('option', { key: category, value: category }, category)))),
+                  h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: pickImportFiles, disabled: importBusy }, '选择文件…'),
+                  h('input', {
+                    id: 'ad-import-file-input',
+                    'data-import-input': 'true',
+                    type: 'file',
+                    multiple: true,
+                    accept: IMPORT_ACCEPT,
+                    style: { display: 'none' },
+                    onChange: (event) => {
+                      addImportFiles(event && event.target ? event.target.files : [])
+                      if (event && event.target) {
+                        try { event.target.value = '' } catch { /* 允许再次选择同名文件 */ }
+                      }
+                    },
+                  })),
+                h('div', {
+                  className: 'ad-import-drop',
+                  onDragOver: (event) => { if (event && typeof event.preventDefault === 'function') event.preventDefault() },
+                  onDrop: (event) => {
+                    if (event && typeof event.preventDefault === 'function') event.preventDefault()
+                    addImportFiles(event && event.dataTransfer ? event.dataTransfer.files : [])
+                  },
+                }, '把文件拖到这里，或点击「选择文件…」'),
+                importQueue.length
+                  ? h('div', { className: 'ad-import-list', role: 'list', 'aria-label': '待导入文件列表' },
+                      importQueue.map((item) => h('div', {
+                        className: `ad-import-row${item.status === 'too-large' || item.status === 'unsupported' || item.status === 'limit' ? ' ad-import-row-bad' : ''}`,
+                        key: item.id,
+                        role: 'listitem',
+                      },
+                        h('span', { className: 'ad-import-name', title: item.name }, item.name),
+                        h('span', { className: 'ad-asset-badge' }, item.kindLabel),
+                        h('span', { className: 'ad-import-size' }, formatAssetBytes(item.size)),
+                        h('span', { className: 'ad-import-status' }, importStatusText(item)),
+                        h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: () => removeImportItem(item.id), disabled: importBusy }, '移除'))))
+                  : h('div', { className: 'ad-table-empty' }, '还没有选择文件'),
+                h('div', { className: 'ad-import-actions' },
+                  h('button', {
+                    type: 'button',
+                    className: 'ad-btn ad-primary ad-sm',
+                    onClick: () => { runImportBatch(false).catch(() => {}) },
+                    disabled: importBusy || importQueuedCount === 0,
+                  }, importBusy ? `导入中… 已处理 ${importProgress.done}/${importProgress.total}` : `开始导入（${importQueuedCount}）`),
+                  importFailCount > 0
+                    ? h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: retryFailedImports, disabled: importBusy }, `重试失败项（${importFailCount}）`)
+                    : null),
+                importBusy || importProgress.total > 0
+                  ? h('div', { className: 'ad-import-progress', role: 'status' }, `已处理 ${importProgress.done}/${importProgress.total}`)
+                  : null,
+                importSummary
+                  ? h('div', { className: 'ad-import-summary', role: 'status' },
+                      h('div', null, `汇总：成功 ${importSummary.ok} · 已存在 ${importSummary.duplicate} · 失败 ${importSummary.fail.length}`),
+                      importSummary.fail.length
+                        ? h('div', { className: 'ad-scan-fail-list' }, importSummary.fail.map((item) => h('div', { className: 'ad-scan-fail-item', key: item.id }, `${item.name}：${item.reason}`)))
+                        : h('div', { className: 'ad-ok' }, '全部导入成功'))
+                  : null)
+            : null
+          /* ---------------- v0.16.8（I5-1-C）：从其他项目导入 tabs 面板 ---------------- */
+          const crossAssetTabContent = h('div', { key: 'cross-tab-assets' },
+            h('div', { className: 'ad-cross-import-toolbar' },
+              h('input', {
+                className: 'ad-input ad-sm',
+                type: 'search',
+                'aria-label': '搜索源项目资产',
+                placeholder: '搜索编号/名称/分类…',
+                value: crossQuery,
+                onChange: (event) => setCrossQuery(event.target.value),
+                disabled: crossBusy,
+              }),
+              h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: toggleAllCrossAssets, disabled: crossBusy || crossVisibleAssets.length === 0 }, crossAllSelected ? '取消全选' : `全选（${crossVisibleAssets.length}）`),
+              h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: clearCrossSelection, disabled: crossBusy || crossSelectedCount === 0 }, '清空选择'),
+              h('span', { className: 'ad-sub' }, `已选 ${crossSelectedCount} 个${crossSelectedCount ? ` · 预计 ${formatAssetBytes(crossSelectedBytes)}` : ''}`)),
+            crossVisibleAssets.length
+              ? h('div', { className: 'ad-cross-import-list', role: 'list', 'aria-label': '源项目已登记资产' },
+                  crossVisibleAssets.map((asset) => h('label', { key: asset.id, className: 'ad-cross-import-row', role: 'listitem' },
+                    h('input', {
+                      type: 'checkbox',
+                      checked: Boolean(crossSelected[asset.id]),
+                      onChange: () => toggleCrossAsset(asset.id),
+                      disabled: crossBusy,
+                      'aria-label': `选择源资产 ${asset.id} ${asset.name}`,
+                    }),
+                    h('span', { className: 'ad-asset-badge' }, asset.category || '未分类'),
+                    h('span', { className: 'ad-cross-import-id' }, asset.id),
+                    h('span', { className: 'ad-cross-import-name', title: asset.name }, asset.name),
+                    h('span', { className: 'ad-import-size' }, formatAssetBytes(asset.bytes)),
+                    h('span', { className: 'ad-sub' }, asset.sha256 ? 'sha ' + asset.sha256.slice(0, 8) : ''))))
+              : h('div', { className: 'ad-table-empty' }, crossQuery.trim() ? '没有匹配的源资产（换个关键词试试）' : '该项目还没有已登记素材；可先在源项目里导入/扫描登记。'),
+            h('div', { className: 'ad-cross-import-toolbar' },
+              h('label', { className: 'ad-import-category' }, '目标分类',
+                h('select', {
+                  className: 'ad-input ad-sm',
+                  'aria-label': '跨项目导入目标分类',
+                  value: crossCategory,
+                  onChange: (event) => setCrossCategory(event.target.value),
+                  disabled: crossBusy,
+                },
+                  h('option', { value: '' }, '保留源分类（默认）'),
+                  ARTIFACT_CATEGORIES.map((category) => h('option', { key: category, value: category }, category))))))
+          const crossCardTabContent = h('div', { key: 'cross-tab-cards' },
+            h('div', { className: 'ad-cross-import-toolbar' },
+              h('input', {
+                className: 'ad-input ad-sm',
+                type: 'search',
+                'aria-label': '搜索源资产卡',
+                placeholder: '搜索编号/名称/类型…',
+                value: crossQuery,
+                onChange: (event) => setCrossQuery(event.target.value),
+                disabled: crossBusy,
+              }),
+              h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: toggleAllCrossCards, disabled: crossBusy || crossVisibleCards.length === 0 }, crossAllCardsSelected ? '取消全选' : `全选（${crossVisibleCards.length}）`),
+              h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: clearCrossCardSelection, disabled: crossBusy || crossSelectedCardCount === 0 }, '清空选择'),
+              h('span', { className: 'ad-sub' }, `已选 ${crossSelectedCardCount} 个`)),
+            crossVisibleCards.length
+              ? h('div', { className: 'ad-cross-import-list', role: 'list', 'aria-label': '源项目资产卡' },
+                  crossVisibleCards.map((card) => h('label', { key: card.id, className: 'ad-cross-import-row', role: 'listitem' },
+                    h('input', {
+                      type: 'checkbox',
+                      checked: Boolean(crossCardSelected[card.id]),
+                      onChange: () => toggleCrossCard(card.id),
+                      disabled: crossBusy,
+                      'aria-label': `选择源资产卡 ${card.id} ${card.name}`,
+                    }),
+                    h('span', { className: 'ad-asset-badge' }, assetTypeLabelOf(card.type)),
+                    h('span', { className: 'ad-cross-import-id' }, card.id),
+                    h('span', { className: 'ad-cross-import-name', title: card.name }, card.name),
+                    h('span', { className: 'ad-sub' }, card.mediaCount ? `媒体 ${card.mediaCount}` : '无媒体'))))
+              : h('div', { className: 'ad-table-empty' }, crossQuery.trim() ? '没有匹配的源资产卡（换个关键词试试）' : '该项目还没有资产卡。'),
+            h('div', { className: 'ad-cross-switches' },
+              h('label', { className: 'ad-cross-switch' },
+                h('input', { type: 'checkbox', checked: crossCopyMedia, onChange: (event) => setCrossCopyMedia(Boolean(event.target.checked)), disabled: crossBusy, 'aria-label': '复制卡片媒体' }),
+                '复制卡片引用的媒体文件（默认开；SHA 去重）'),
+              h('label', { className: 'ad-cross-switch' },
+                h('input', { type: 'checkbox', checked: crossAllowNewIdSuffix, onChange: (event) => setCrossAllowNewIdSuffix(Boolean(event.target.checked)), disabled: crossBusy, 'aria-label': '允许分配新编号' }),
+                '允许分配新编号（默认关；同 id 不同内容才使用）')),
+            (() => {
+              const sourceCards = crossVisibleCards.filter((card) => crossCardSelected[card.id])
+              const conflict = crossObjectConflict(sourceCards, assetCards, crossCardSignature)
+              if (!sourceCards.length) return h('div', { className: 'ad-cross-conflict' }, '选择资产卡后显示冲突预览（预览仅供参考，最终以导入结果为准）')
+              if (!conflict.same.length && !conflict.diff.length) return h('div', { className: 'ad-cross-conflict' }, '冲突预览：所选资产卡与目标无同 id 冲突')
+              return h('div', { className: 'ad-cross-conflict' },
+                `冲突预览（仅供参考，最终以导入结果为准）：同 id ${conflict.same.length + conflict.diff.length} 个`,
+                conflict.same.length ? `；其中 ${conflict.same.length} 个内容相同将跳过` : '',
+                conflict.diff.length ? `；${conflict.diff.length} 个内容不同${crossAllowNewIdSuffix ? '将分配新编号导入' : '默认跳过（勾选「允许分配新编号」后导入）'}` : '')
+            })())
+          const crossSceneTabContent = h('div', { key: 'cross-tab-scenes' },
+            h('div', { className: 'ad-cross-import-toolbar' },
+              h('input', {
+                className: 'ad-input ad-sm',
+                type: 'search',
+                'aria-label': '搜索源场景卡',
+                placeholder: '搜索编号/名称/地点…',
+                value: crossQuery,
+                onChange: (event) => setCrossQuery(event.target.value),
+                disabled: crossBusy,
+              }),
+              h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: toggleAllCrossScenes, disabled: crossBusy || crossVisibleScenes.length === 0 }, crossAllScenesSelected ? '取消全选' : `全选（${crossVisibleScenes.length}）`),
+              h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: clearCrossSceneSelection, disabled: crossBusy || crossSelectedSceneCount === 0 }, '清空选择'),
+              h('span', { className: 'ad-sub' }, `已选 ${crossSelectedSceneCount} 个`)),
+            crossVisibleScenes.length
+              ? h('div', { className: 'ad-cross-import-list', role: 'list', 'aria-label': '源项目场景卡' },
+                  crossVisibleScenes.map((scene) => h('label', { key: scene.id, className: 'ad-cross-import-row', role: 'listitem' },
+                    h('input', {
+                      type: 'checkbox',
+                      checked: Boolean(crossSceneSelected[scene.id]),
+                      onChange: () => toggleCrossScene(scene.id),
+                      disabled: crossBusy,
+                      'aria-label': `选择源场景卡 ${scene.id} ${scene.name}`,
+                    }),
+                    h('span', { className: 'ad-asset-badge' }, '场景'),
+                    h('span', { className: 'ad-cross-import-id' }, scene.id),
+                    h('span', { className: 'ad-cross-import-name', title: scene.name }, scene.name),
+                    h('span', { className: 'ad-sub' }, scene.summary))))
+              : h('div', { className: 'ad-table-empty' }, crossQuery.trim() ? '没有匹配的源场景卡（换个关键词试试）' : '该项目还没有场景卡。'),
+            h('div', { className: 'ad-cross-switches' },
+              h('label', { className: 'ad-cross-switch' },
+                h('input', { type: 'checkbox', checked: crossAllowNewIdSuffix, onChange: (event) => setCrossAllowNewIdSuffix(Boolean(event.target.checked)), disabled: crossBusy, 'aria-label': '场景允许分配新编号' }),
+                '允许分配新编号（默认关；同 id 不同内容才使用）')),
+            (() => {
+              const sourceScenes = crossVisibleScenes.filter((scene) => crossSceneSelected[scene.id])
+              const conflict = crossObjectConflict(sourceScenes, visualScenes, crossSceneSignature)
+              if (!sourceScenes.length) return h('div', { className: 'ad-cross-conflict' }, '选择场景卡后显示冲突预览（预览仅供参考，最终以导入结果为准）')
+              if (!conflict.same.length && !conflict.diff.length) return h('div', { className: 'ad-cross-conflict' }, '冲突预览：所选场景卡与目标无同 id 冲突')
+              return h('div', { className: 'ad-cross-conflict' },
+                `冲突预览（仅供参考，最终以导入结果为准）：同 id ${conflict.same.length + conflict.diff.length} 个`,
+                conflict.same.length ? `；其中 ${conflict.same.length} 个内容相同将跳过` : '',
+                conflict.diff.length ? `；${conflict.diff.length} 个内容不同${crossAllowNewIdSuffix ? '将分配新编号导入' : '默认跳过（勾选「允许分配新编号」后导入）'}` : '')
+            })())
+          const crossStyleTabContent = h('div', { key: 'cross-tab-style' },
+            crossStyle
+              ? h('div', null,
+                  h('div', { className: 'ad-cross-style-grid' },
+                    STYLE_DIMENSION_ORDER.filter(([key]) => crossStyle[key]).map(([key, label]) => h('div', { className: 'ad-cross-style-dim', key },
+                      h('span', { className: 'ad-sub' }, label),
+                      h('span', null, crossStyle[key])))),
+                  h('div', { className: 'ad-cross-switches' },
+                    h('label', { className: 'ad-cross-switch' },
+                      h('input', {
+                        type: 'checkbox',
+                        checked: crossCopyStyleDNA,
+                        onChange: (event) => {
+                          const checked = Boolean(event.target.checked)
+                          setCrossCopyStyleDNA(checked)
+                          if (!checked) setCrossOverwriteStyle(false)
+                        },
+                        disabled: crossBusy,
+                        'aria-label': '复制风格DNA',
+                      }),
+                      '复制风格 DNA（仅五维草稿；不含 frozen/历史）'),
+                    h('label', { className: 'ad-cross-switch' },
+                      h('input', {
+                        type: 'checkbox',
+                        checked: crossOverwriteStyle,
+                        onChange: (event) => setCrossOverwriteStyle(Boolean(event.target.checked)),
+                        disabled: crossBusy || !crossCopyStyleDNA,
+                        'aria-label': '覆盖目标风格',
+                      }),
+                      '覆盖目标已有风格（默认关）')),
+                  h('div', { className: 'ad-cross-conflict' },
+                    crossTargetStyleDims
+                      ? `目标已有风格 DNA（${crossTargetStyleDims} 维非空）：默认仅补齐空维度，不覆盖已有维度；勾选「覆盖目标风格」才会替换`
+                      : '目标暂无风格 DNA：将写入五维草稿'))
+              : h('div', { className: 'ad-table-empty' }, '该项目还没有风格 DNA（五维均未配置）。'))
+          const crossTabsNode = crossObjectsSupported === true
+            ? h('div', { className: 'ad-cross-tabs', role: 'tablist', 'aria-label': '跨项目导入类型' },
+                CROSS_TABS.map((tab) => {
+                  const count = tab.key === 'assets'
+                    ? crossAssets.length
+                    : tab.key === 'cards'
+                      ? crossCards.length
+                      : tab.key === 'scenes'
+                        ? crossScenes.length
+                        : (crossStyle ? crossStyleDims : 0)
+                  return h('button', {
+                    key: tab.key,
+                    type: 'button',
+                    role: 'tab',
+                    className: 'ad-cross-tab',
+                    'aria-pressed': crossTab === tab.key,
+                    'aria-label': `跨项目导入${tab.label}`,
+                    onClick: () => setCrossTab(tab.key),
+                    disabled: crossBusy,
+                  }, tab.key === 'style' ? tab.label : `${tab.label} ${count}`)
+                }))
+            : null
+          const crossTabContentNode = crossObjectsSupported === true
+            ? (crossTab === 'cards'
+                ? crossCardTabContent
+                : crossTab === 'scenes'
+                  ? crossSceneTabContent
+                  : crossTab === 'style'
+                    ? crossStyleTabContent
+                    : crossAssetTabContent)
+            : crossAssetTabContent
+          const crossSummaryHasFail = Boolean(crossSummary && (
+            (crossSummary.assets && crossSummary.assets.fail.length) ||
+            (crossSummary.cards && crossSummary.cards.fail.length) ||
+            (crossSummary.scenes && crossSummary.scenes.fail.length)))
+          const crossSummaryLines = crossSummary
+            ? (crossObjectsSupported !== true
+                ? (crossSummary.assets ? [`汇总：成功 ${crossSummary.assets.ok} · 已存在 ${crossSummary.assets.duplicate} · 失败 ${crossSummary.assets.fail.length}`] : [])
+                : [
+                crossSummary.assets ? `素材：成功 ${crossSummary.assets.ok} · 已存在 ${crossSummary.assets.duplicate} · 失败 ${crossSummary.assets.fail.length}` : null,
+                crossSummary.cards ? `资产卡：成功 ${crossSummary.cards.ok} · 已存在 ${crossSummary.cards.duplicate} · 失败 ${crossSummary.cards.fail.length}` : null,
+                crossSummary.scenes ? `场景卡：成功 ${crossSummary.scenes.ok} · 已存在 ${crossSummary.scenes.duplicate} · 失败 ${crossSummary.scenes.fail.length}` : null,
+                crossSummary.style
+                  ? `风格：${crossSummary.style.error ? sanitizeCrossMessage(String(crossSummary.style.error)) : crossSummary.style.copied === false ? '未写入' : crossSummary.style.merge === 'overwrite' ? '已覆盖' : crossSummary.style.merge === 'skip' ? '已跳过' : '已合并'}`
+                  : null,
+              ].filter(Boolean))
+            : []
+          const crossFailList = crossSummary
+            ? [].concat(
+                (crossSummary.assets ? crossSummary.assets.fail : []),
+                (crossSummary.cards ? crossSummary.cards.fail : []),
+                (crossSummary.scenes ? crossSummary.scenes.fail : []))
+            : []
+          const crossIdMapLines = crossSummary && crossSummary.idMap
+            ? Object.entries(crossSummary.idMap).map(([from, to]) => `${from} → ${to}`)
+            : []
+          const crossImportPanelNode = crossSupported === true && crossOpen
+            ? h('div', { key: 'cross-import-panel', className: 'ad-import-panel ad-cross-import-panel', role: 'region', 'aria-label': '从其他项目导入' },
+                h('div', { className: 'ad-row', style: { flexWrap: 'wrap', gap: 8, marginBottom: 6, alignItems: 'center' } },
+                  h('strong', null, '从其他项目导入'),
+                  h('span', { className: 'ad-sub', role: 'status' },
+                    crossLoading
+                      ? '正在读取源项目资产…'
+                      : crossSourceTitle
+                        ? `源项目：${crossSourceTitle} · ${crossObjectsSupported === true ? `素材 ${crossAssets.length} / 资产卡 ${crossCards.length} / 场景卡 ${crossScenes.length}` : `已登记资产 ${crossAssets.length} 个`}`
+                        : '先选择源项目'),
+                  h('div', { style: { flex: 1 } }),
+                  h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: closeCrossPanel, disabled: crossBusy }, '关闭')),
+                h('div', { className: 'ad-sub', style: { marginBottom: 8 } }, crossCapabilityHint),
+                h('div', { className: 'ad-row', style: { flexWrap: 'wrap', gap: 8, marginBottom: 8, alignItems: 'center' } },
+                  h('label', { className: 'ad-import-category' }, '源项目',
+                    h('select', {
+                      className: 'ad-input ad-sm',
+                      'aria-label': '跨项目导入源项目',
+                      'data-cross-source': 'true',
+                      value: crossSourceTitle,
+                      onChange: (event) => { loadCrossSource(event.target.value).catch(() => {}) },
+                      disabled: crossBusy || crossLoading,
+                    },
+                      h('option', { value: '' }, crossProjectOptions.length ? '选择项目…' : '当前工作区没有其他项目'),
+                      crossProjectOptions.map((project) => h('option', { key: project.title, value: project.title }, project.title)))),
+                  h('button', {
+                    type: 'button',
+                    className: 'ad-btn ad-sm',
+                    onClick: () => { loadCrossSource(crossSourceTitle).catch(() => {}) },
+                    disabled: crossBusy || crossLoading || !crossSourceTitle,
+                  }, '刷新源资产')),
+                crossLoadError
+                  ? h('div', { className: 'ad-hint-next', role: 'status' }, crossLoadError)
+                  : null,
+                crossLoading
+                  ? h('div', { className: 'ad-table-empty', role: 'status' }, '正在读取源项目素材…')
+                  : h('div', null,
+                      crossTabsNode,
+                      crossTabContentNode),
+                h('div', { className: 'ad-cross-import-toolbar' },
+                  h('button', {
+                    type: 'button',
+                    className: 'ad-btn ad-primary ad-sm',
+                    onClick: () => { runCrossImport().catch(() => {}) },
+                    disabled: crossBusy || crossTotalSelected === 0 || !crossSourceTitle,
+                  }, crossBusy ? '导入中…' : `开始导入（${crossTotalSelected}）`),
+                  crossBusy
+                    ? h('span', { className: 'ad-sub', role: 'status' }, `正在导入 ${crossTotalSelected} 项…`)
+                    : null),
+                crossSummary
+                  ? h('div', { className: 'ad-import-summary', role: 'status' },
+                      crossSummaryLines.map((line) => h('div', { key: line }, line)),
+                      crossIdMapLines.length
+                        ? h('div', { className: 'ad-cross-idmap' }, crossIdMapLines.map((line) => h('div', { key: line }, `新编号：${line}`)))
+                        : null,
+                      crossFailList.length
+                        ? h('div', { className: 'ad-scan-fail-list' },
+                            crossFailList.map((item) => h('div', { className: 'ad-scan-fail-item', key: `${item.kind}-${item.sourceId}-${item.reason}` }, `${item.name}：${item.reason}`)),
+                            h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: () => { retryCrossFailed().catch(() => {}) }, disabled: crossBusy }, '选中失败项重试'))
+                        : h('div', { className: 'ad-ok' }, '全部导入成功'))
+                  : null,
+                crossWarnings.length
+                  ? h('div', { className: 'ad-cross-warning', role: 'status' },
+                      crossWarnings.map((warning) => h('div', { key: warning }, `警告：${warning}`)))
+                  : null)
+            : null
+
+          // v0.16.9（C3-C / E16+H-8）：资产/场景卡审核工作台（素材库第三视图；仅存在 review 卡时显示入口；旧项目零新 UI）
+          const assetReviewHasAny = Boolean(
+            (Array.isArray(assetCards) && assetCards.some((card) => card && card.review)) ||
+            (Array.isArray(visualScenes) && visualScenes.some((scene) => scene && scene.review)),
+          )
+          const assetReviewKindCards = assetReviewKindCardsOf(assetReviewKind)
+          const assetReviewStatusCounts = {}
+          for (const status of ASSET_REVIEW_STATUS_ORDER) assetReviewStatusCounts[status] = 0
+          for (const item of assetReviewKindCards) {
+            if (item.review && ASSET_REVIEW_STATUS_ORDER.includes(item.review.status)) assetReviewStatusCounts[item.review.status] += 1
+          }
+          const assetReviewTypeCounts = new Map()
+          for (const item of assetReviewKindCards) assetReviewTypeCounts.set(item.type, (assetReviewTypeCounts.get(item.type) || 0) + 1)
+          const assetReviewKeyword = String(assetReviewQuery || '').trim().toLowerCase()
+          const assetReviewVisibleCards = assetReviewKindCards.filter((item) => {
+            if (assetReviewStatusFilter !== 'all' && (!item.review || item.review.status !== assetReviewStatusFilter)) return false
+            if (assetReviewKind === 'asset' && assetReviewTypeFilter !== '全部' && String(item.type || '').toUpperCase() !== assetReviewTypeFilter) return false
+            if (!assetReviewKeyword) return true
+            return String(item.id || '').toLowerCase().includes(assetReviewKeyword) || String(item.name || '').toLowerCase().includes(assetReviewKeyword)
+          })
+          const assetReviewSelectedCard = assetReviewSelectedCardOf()
+          const assetReviewPromptText = String(assetReviewPrompt || '')
+          const assetReviewPromptTrimmed = assetReviewPromptText.trim()
+          const assetReviewPromptDirty = Boolean(assetReviewSelectedCard && assetReviewSelectedCard.review && assetReviewPromptTrimmed !== String(assetReviewSelectedCard.review.currentPrompt || '').trim())
+          const assetReviewBadgeNode = (review) => h('span', {
+            className: 'ad-review-badge',
+            'data-status': review && ASSET_REVIEW_STATUS_ORDER.includes(review.status) ? review.status : 'draft',
+          }, assetReviewStatusLabel(review))
+          const assetReviewListNodes = assetReviewVisibleCards.length
+            ? assetReviewVisibleCards.map((item) => h('button', {
+                key: item.id,
+                type: 'button',
+                className: 'ad-review-item',
+                'aria-pressed': String(item.id || '').toUpperCase() === String(assetReviewSelectedId || '').toUpperCase(),
+                onClick: () => selectAssetReviewCard(item),
+              },
+                h('span', { className: 'ad-review-item-title' },
+                  h('span', null, `${item.id} ${item.name}`),
+                  assetReviewBadgeNode(item.review)),
+                h('span', { className: 'ad-review-item-meta' }, `第 ${item.review.roundCount} 轮 · revision ${item.review.revision}`),
+                String(item.review.currentPrompt || '').trim()
+                  ? h('span', { className: 'ad-review-item-meta' }, String(item.review.currentPrompt || '').trim().length > 72 ? String(item.review.currentPrompt || '').trim().slice(0, 72) + '…' : String(item.review.currentPrompt || '').trim())
+                  : null))
+            : h('div', { className: 'ad-table-empty' }, '当前筛选没有审核卡')
+          const assetReviewRoundNodes = assetReviewSelectedCard && assetReviewSelectedCard.review
+            ? (assetReviewSelectedCard.review.rounds.length
+                ? assetReviewSelectedCard.review.rounds.slice().reverse().map((round, index) => h('div', { className: 'ad-review-round', key: `${round.round}-${index}` },
+                    h('div', { className: 'ad-review-round-head' },
+                      h('span', null, `第 ${round.round} 轮`),
+                      h('span', { className: 'ad-review-badge', 'data-status': round.status }, ASSET_REVIEW_STATUS_LABELS[round.status] || round.status),
+                      round.submittedAt ? h('span', null, `提交 ${styleMomentText(round.submittedAt)}`) : null,
+                      round.reviewedAt ? h('span', null, `审核 ${styleMomentText(round.reviewedAt)}`) : null,
+                      round.reviewer ? h('span', null, `审核人 ${round.reviewer}`) : null),
+                    round.reason ? h('div', { className: 'ad-review-round-reason' }, `意见：${round.reason}`) : null,
+                    round.prompt ? h('div', { className: 'ad-review-round-prompt' }, `提示词：${round.prompt.length > 160 ? round.prompt.slice(0, 160) + '…' : round.prompt}`) : null))
+                : [h('div', { className: 'ad-table-empty', key: 'no-round' }, '还没有提交记录')])
+            : null
+          const assetReviewDetailActions = []
+          if (assetReviewSelectedCard && assetReviewSelectedCard.review) {
+            const detailStatus = assetReviewSelectedCard.review.status
+            if (detailStatus === 'draft' || detailStatus === 'rejected') {
+              assetReviewDetailActions.push(h('button', {
+                key: 'save-draft',
+                type: 'button',
+                className: 'ad-btn ad-primary ad-sm',
+                disabled: assetReviewBusy,
+                onClick: () => { runAssetReviewAction('saveDraft').catch(() => {}) },
+              }, '保存草稿'))
+              assetReviewDetailActions.push(h('button', {
+                key: 'submit',
+                type: 'button',
+                className: 'ad-btn ad-sm',
+                disabled: assetReviewBusy || !assetReviewPromptTrimmed,
+                onClick: () => {
+                  if (assetReviewPromptDirty) {
+                    setAssetReviewPromptError('有未保存提示词修改：请先保存草稿，再提交审核')
+                    return
+                  }
+                  runAssetReviewAction('submit').catch(() => {})
+                },
+              }, '提交审核'))
+            } else if (detailStatus === 'pending') {
+              assetReviewDetailActions.push(h('button', { key: 'approve', type: 'button', className: 'ad-btn ad-primary ad-sm', disabled: assetReviewBusy, onClick: () => { runAssetReviewAction('approve').catch(() => {}) } }, '通过'))
+              assetReviewDetailActions.push(h('button', { key: 'reject', type: 'button', className: 'ad-btn ad-sm', disabled: assetReviewBusy, onClick: () => openAssetReviewDialog('reject') }, '驳回'))
+            } else if (detailStatus === 'approved') {
+              assetReviewDetailActions.push(h('button', { key: 'finalize', type: 'button', className: 'ad-btn ad-primary ad-sm', disabled: assetReviewBusy, onClick: () => openAssetReviewDialog('finalize') }, '定稿'))
+              assetReviewDetailActions.push(h('button', { key: 'reopen', type: 'button', className: 'ad-btn ad-sm', disabled: assetReviewBusy, onClick: () => openAssetReviewDialog('reopen') }, '重打开'))
+            } else if (detailStatus === 'final') {
+              assetReviewDetailActions.push(h('button', { key: 'reopen', type: 'button', className: 'ad-btn ad-primary ad-sm', disabled: assetReviewBusy, onClick: () => openAssetReviewDialog('reopen') }, '重打开'))
+            }
+            assetReviewDetailActions.push(h('button', {
+              key: 'refresh',
+              type: 'button',
+              className: 'ad-btn ad-sm',
+              disabled: assetReviewBusy,
+              onClick: () => { loadAssets({ keepView: true }).catch(() => {}) },
+            }, icon('refresh'), '刷新'))
+          }
+          const assetReviewDetailNode = assetReviewSelectedCard && assetReviewSelectedCard.review
+            ? (() => {
+                const detailStatus = assetReviewSelectedCard.review.status
+                const detailLocked = detailStatus === 'pending' || detailStatus === 'approved' || detailStatus === 'final'
+                return h('div', { className: 'ad-review-detail', key: 'review-detail' },
+                  h('div', { className: 'ad-review-detail-head' },
+                    h('strong', null, `${assetReviewSelectedCard.id} ${assetReviewSelectedCard.name}`),
+                    assetReviewBadgeNode(assetReviewSelectedCard.review),
+                    h('span', null, `第 ${assetReviewSelectedCard.review.roundCount} 轮 · revision ${assetReviewSelectedCard.review.revision} · promptVersion ${assetReviewSelectedCard.review.promptVersion}`),
+                    assetReviewSelectedCard.review.reopenCount > 0
+                      ? h('span', { className: 'ad-review-round-reason' }, `重打开 ${assetReviewSelectedCard.review.reopenCount} 次${assetReviewSelectedCard.review.reopenCount >= 3 ? ' ⚠️ 建议复核流程' : ''}`)
+                      : null),
+                  detailStatus === 'final'
+                    ? h('div', { className: 'ad-review-frozen', role: 'status' },
+                        `已定稿，需重打开后才能修改${assetReviewSelectedCard.review.finalPrompt ? `；定稿提示词：${assetReviewSelectedCard.review.finalPrompt.length > 160 ? assetReviewSelectedCard.review.finalPrompt.slice(0, 160) + '…' : assetReviewSelectedCard.review.finalPrompt}` : ''}`)
+                    : detailStatus === 'approved'
+                      ? h('div', { className: 'ad-hint-next', role: 'status' }, '已通过：可直接定稿；如需修改提示词请先「重打开」。')
+                      : detailStatus === 'pending'
+                        ? h('div', { className: 'ad-hint-next', role: 'status' }, '待审核：提示词只读，等待通过或驳回。')
+                        : null,
+                  h('div', { className: 'ad-review-prompt' },
+                    h('div', { className: 'ad-style-count' },
+                      `当前提示词（1–${ASSET_REVIEW_PROMPT_MAX} 字）`,
+                      h('span', { className: 'ad-review-counter', 'data-over': assetReviewPromptTrimmed.length > ASSET_REVIEW_PROMPT_MAX ? '1' : '0' }, ` ${assetReviewPromptTrimmed.length}/${ASSET_REVIEW_PROMPT_MAX}`)),
+                    h('textarea', {
+                      className: 'ad-area',
+                      rows: 5,
+                      maxLength: ASSET_REVIEW_PROMPT_MAX,
+                      value: assetReviewPromptText,
+                      disabled: assetReviewBusy || detailLocked,
+                      'aria-label': '当前提示词（1–2000 字）',
+                      placeholder: '填写用于资产生成的提示词（1–2000 字）',
+                      onChange: (event) => {
+                        setAssetReviewPrompt(event && event.target ? event.target.value : '')
+                        if (assetReviewPromptError) setAssetReviewPromptError('')
+                      },
+                    }),
+                    assetReviewPromptError ? h('div', { className: 'ad-err', role: 'alert' }, assetReviewPromptError) : null,
+                    assetReviewPromptDirty && !detailLocked ? h('div', { className: 'ad-hint-next', role: 'status' }, '有未保存提示词修改：提交审核前请先「保存草稿」。') : null),
+                  h('div', { className: 'ad-review-actions' }, assetReviewDetailActions),
+                  h('div', { className: 'ad-review-rounds' },
+                    h('div', { className: 'ad-sec' }, `轮次历史 · 累计 ${assetReviewSelectedCard.review.roundCount} 轮（保留最近 ${assetReviewSelectedCard.review.rounds.length} 条）`),
+                    assetReviewRoundNodes))
+              })()
+            : h('div', { className: 'ad-table-empty' }, '选择左侧卡片查看/编辑提示词与轮次历史')
+          const assetReviewBoardNode = h('div', { key: 'review-board', className: 'ad-review' },
+            h('div', { className: 'ad-review-kind', role: 'tablist', 'aria-label': '审核卡类型' },
+              ['asset', 'scene'].map((kind) => h('button', {
+                key: kind,
+                type: 'button',
+                role: 'tab',
+                'aria-selected': assetReviewKind === kind,
+                className: 'ad-btn ad-sm',
+                'aria-pressed': assetReviewKind === kind,
+                onClick: () => {
+                  setAssetReviewKind(kind)
+                  setAssetReviewSelectedId('')
+                  setAssetReviewPrompt('')
+                  setAssetReviewPromptError('')
+                  setAssetReviewReason('')
+                  setAssetReviewReasonError('')
+                  setAssetReviewDialog(null)
+                  setAssetReviewError('')
+                  setAssetReviewNotice('')
+                  const first = firstAssetReviewCardOf(kind)
+                  if (first) selectAssetReviewCard(first)
+                },
+              }, ASSET_REVIEW_KIND_LABELS[kind]))),
+            h('div', { className: 'ad-review-filters' },
+              h('button', { type: 'button', className: 'ad-asset-chip', 'aria-pressed': assetReviewStatusFilter === 'all', onClick: () => setAssetReviewStatusFilter('all') }, `全部 ${assetReviewKindCards.length}`),
+              ASSET_REVIEW_STATUS_ORDER.map((status) => h('button', {
+                key: status,
+                type: 'button',
+                className: 'ad-asset-chip',
+                'aria-pressed': assetReviewStatusFilter === status,
+                onClick: () => setAssetReviewStatusFilter(status),
+              }, `${ASSET_REVIEW_STATUS_LABELS[status]} ${assetReviewStatusCounts[status] || 0}`)),
+              assetReviewKind === 'asset'
+                ? [['全部', '全部'], ['CHR', '角色'], ['SPC', '场景'], ['PRP', '道具']].map(([type, label]) => h('button', {
+                    key: type,
+                    type: 'button',
+                    className: 'ad-asset-chip',
+                    'aria-pressed': assetReviewTypeFilter === type,
+                    onClick: () => setAssetReviewTypeFilter(type),
+                  }, `${label} ${type === '全部' ? assetReviewKindCards.length : (assetReviewTypeCounts.get(type) || 0)}`))
+                : null,
+              h('input', {
+                className: 'ad-input ad-sm',
+                style: { maxWidth: 220 },
+                type: 'search',
+                'aria-label': '搜索审核卡编号或名称',
+                placeholder: '搜索编号或名称…',
+                value: assetReviewQuery,
+                onChange: (event) => setAssetReviewQuery(event && event.target ? event.target.value : ''),
+              })),
+            assetReviewNotice ? h('div', { className: 'ad-ok', role: 'status' }, assetReviewNotice) : null,
+            assetReviewError
+              ? h('div', { className: 'ad-err-box', role: 'alert' },
+                  h('div', { className: 'ad-err-head' }, '审核操作失败'),
+                  h('div', { className: 'ad-err' }, assetReviewError))
+              : null,
+            h('div', { className: 'ad-review-body' },
+              h('div', { className: 'ad-review-list', role: 'list', 'aria-label': '审核卡列表' }, assetReviewListNodes),
+              assetReviewDetailNode))
           body.push(
             h('div', { key: 'as' },
-              hasVisualData
-                ? h('div', { key: 'asset-view-switch', className: 'ad-row', style: { marginBottom: 10, flexWrap: 'wrap', gap: 8 }, role: 'group', 'aria-label': '素材库视图切换' },
-                    h('button', { type: 'button', className: 'ad-btn ad-sm', 'aria-pressed': assetView === 'cards', onClick: () => { setAssetView('cards'); closeVisualLightbox() } }, '卡片视图'),
-                    h('button', { type: 'button', className: 'ad-btn ad-sm', 'aria-pressed': assetView === 'visual', onClick: () => { setAssetView('visual'); closeVisualLightbox(); ensureVisualAssets() } }, '视觉圣经'))
-                : null,
-              assetView === 'visual'
+              registryWarningNode,
+              registryNoticeNode,
+              h('div', { key: 'asset-view-switch', className: 'ad-row', style: { marginBottom: 10, flexWrap: 'wrap', gap: 8 }, role: 'group', 'aria-label': '素材库视图切换' },
+                h('button', { type: 'button', className: 'ad-btn ad-sm', 'aria-pressed': assetView === 'cards', onClick: () => { setAssetView('cards'); closeVisualLightbox() } }, '卡片视图'),
+                h('button', { type: 'button', className: 'ad-btn ad-sm', 'aria-pressed': assetView === 'visual', onClick: () => { setAssetView('visual'); closeVisualLightbox(); ensureVisualAssets() } }, '视觉圣经'),
+                assetReviewHasAny
+                  ? h('button', {
+                      type: 'button',
+                      className: 'ad-btn ad-sm',
+                      'aria-pressed': assetView === 'review',
+                      onClick: () => {
+                        setAssetView('review')
+                        closeVisualLightbox()
+                        const hasAssetReview = firstAssetReviewCardOf('asset') !== null
+                        const hasSceneReview = firstAssetReviewCardOf('scene') !== null
+                        const nextKind = hasAssetReview ? 'asset' : (hasSceneReview ? 'scene' : assetReviewKind)
+                        if (nextKind !== assetReviewKind) setAssetReviewKind(nextKind)
+                        const first = firstAssetReviewCardOf(nextKind)
+                        if (first) selectAssetReviewCard(first)
+                      },
+                    }, '审核工作台')
+                  : null),
+              assetView === 'review' && assetReviewHasAny
+                ? assetReviewBoardNode
+                : assetView === 'visual'
                 ? visualBibleNode
                 : hasAssetData
                 ? h('div', { key: 'asset-unified' },
@@ -6944,6 +9069,10 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
                     selectedCard ? assetDetail(selectedCard) : null)
                       : null)
                 : null,
+              assetActionsToolbarNode,
+              scanPanelNode,
+              importPanelNode,
+              crossImportPanelNode,
               visualBibleHintNode,
               assetRegistrationNode,
           ))
@@ -7063,8 +9192,11 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
         if (tab === 'ledger') {
           body.push(
             h('div', { key: 'lg' },
-              h('div', { className: 'ad-row', style: { marginBottom: 10 } },
-                h('button', { className: 'ad-btn ad-primary ad-sm', onClick: loadLedger, disabled: busy }, '生成账本'),
+              h('div', { className: 'ad-row', style: { marginBottom: 10, flexWrap: 'wrap', gap: 8, alignItems: 'center' } },
+                h('button', { className: 'ad-btn ad-primary ad-sm', onClick: () => loadLedger(), disabled: busy }, m3Supported === true ? '加载账本（只读）' : '生成账本'),
+                m3Supported === true
+                  ? h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: renderLedgerFile, disabled: busy }, '渲染账本文件')
+                  : null,
                 h('span', { className: 'ad-sub' }, '从剧本与分镜推导：场景 / 内外景 / 镜头 / 时长 / 角色 / 地点 + 成本提示')),
               ledger
                 ? h('div', null,
@@ -7089,8 +9221,11 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
                     ledger.warnings.length
                       ? h('div', { className: 'ad-hits' }, ledger.warnings.map((w, i) => h('div', { className: 'ad-hit', key: i }, w)))
                       : h('div', { className: 'ad-hint-next' }, '未发现明显成本风险。'),
-                    h('div', { className: 'ad-path' }, '同时渲染到 账本/账本.md'))
-                : emptyState({ key: 'ledger-empty', title: '还没有拍摄账本', description: '点「生成账本」看全剧的场景、镜头、时长与成本结构。', next: '点上方「生成账本」', actions: [{ label: '生成账本', onClick: loadLedger, disabled: busy }] })),
+                    m3Supported === true
+                      ? h('div', { className: 'ad-path' }, '默认只读，不写 账本/账本.md；点「渲染账本文件」才写入')
+                      : h('div', { className: 'ad-path' }, '同时渲染到 账本/账本.md'),
+                    m3Supported === true && ledgerRendered ? h('div', { className: 'ad-ok', role: 'status' }, '已渲染到项目账本') : null)
+                : emptyState({ key: 'ledger-empty', title: '还没有拍摄账本', description: '点「生成账本」看全剧的场景、镜头、时长与成本结构。', next: '点上方「生成账本」', actions: [{ label: m3Supported === true ? '加载账本' : '生成账本', onClick: () => loadLedger(), disabled: busy }] })),
           )
         }
 
@@ -7418,33 +9553,67 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
                 ? h('div', { className: 'ad-path', key: 'exl' },
                     exported.map((item) => h('div', { key: item.format }, `${item.format} · ${item.relative} · ${item.bytes} 字节`)))
                 : null,
-              h('div', { className: 'ad-sec', key: 'intake-art' }, '产物入库（只登记已产出文件，不触发生成）'),
-              h('div', { className: 'ad-hint-next', key: 'hint-intake' }, '把已生成的文件/链接登记到素材库（记录 sha256）'),
-              h('div', { className: 'ad-row', key: 'intake-bar', style: { flexWrap: 'wrap', gap: 8, marginBottom: 6 } },
+              h('div', { className: 'ad-sec', key: 'intake-art' }, '产物入库（选择本地文件导入 / 项目内路径 / URL 均可登记，不触发生成）'),
+              h('div', { className: 'ad-hint-next', key: 'hint-intake' }, '选择本地文件导入素材库（≤50MB，不移动源文件；本地导入不关联生成任务，如需关联请先把文件放入项目「素材/生成/」再传项目内路径）；或粘贴项目内路径 / http(s) 直链登记（记录 sha256）。'),
+              importSupported === true
+                ? h('input', {
+                    id: 'ad-artifact-file-input',
+                    'data-artifact-input': 'true',
+                    type: 'file',
+                    accept: IMPORT_ACCEPT,
+                    style: { display: 'none' },
+                    onChange: pickArtifactFileChange,
+                  })
+                : null,
+              h('div', { className: 'ad-row', key: 'intake-bar', style: { flexWrap: 'wrap', gap: 8, marginBottom: 6, alignItems: 'center' } },
+                importSupported === true
+                  ? h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: pickArtifactFile, disabled: artifactBusy || Boolean(artifactFile) }, artifactFile ? '已选本地文件' : '选择本地文件…')
+                  : null,
+                artifactFile
+                  ? h('span', { className: 'ad-artifact-file', key: 'artifact-file-chip' },
+                      h('span', { className: 'ad-artifact-file-name', title: artifactFileName }, artifactFileName),
+                      h('span', { className: 'ad-artifact-file-size' }, formatAssetBytes(artifactFileSize)),
+                      h('button', { type: 'button', className: 'ad-btn ad-sm', 'aria-label': '移除已选本地文件', onClick: clearArtifactFile, disabled: artifactBusy }, '移除'))
+                  : null,
                 h('input', {
                   className: 'ad-input ad-sm',
                   style: { width: 360 },
-                  'aria-label': '产物来源（本地路径或 URL）',
-                  placeholder: '本地文件路径 或 https://…（生成产物地址）',
+                  'aria-label': artifactFile ? '产物来源（已选择本地文件，输入框不可用）' : '产物来源（项目内路径或 URL）',
+                  placeholder: artifactFile ? '已选择本地文件；如需使用项目内路径/URL，请先移除文件' : '项目内路径（如 素材/生成/xxx.png）或 https://…（生成产物直链）',
                   value: artifactSource,
-                  onChange: (e) => setArtifactSource(e.target.value),
-                  onKeyDown: (e) => { if (e.key === 'Enter') intakeGeneratedArtifact() },
-                  disabled: artifactBusy,
+                  onChange: (e) => { if (!artifactFile) setArtifactSource(e.target.value) },
+                  onKeyDown: (e) => { if (e.key === 'Enter' && !artifactFile) intakeGeneratedArtifact() },
+                  disabled: artifactBusy || Boolean(artifactFile),
                 }),
-                h('select', { className: 'ad-select', 'aria-label': '产物类型', value: artifactKind, onChange: (e) => setArtifactKind(e.target.value), disabled: artifactBusy },
-                  h('option', { value: 'image' }, '分镜图'), h('option', { value: 'video' }, '分镜视频'), h('option', { value: 'audio' }, '配音')),
+                artifactFile
+                  ? null
+                  : h('select', { className: 'ad-select', 'aria-label': '产物类型', value: artifactKind, onChange: (e) => setArtifactKind(e.target.value), disabled: artifactBusy },
+                      h('option', { value: 'image' }, '分镜图'), h('option', { value: 'video' }, '分镜视频'), h('option', { value: 'audio' }, '配音')),
                 h('input', { className: 'ad-input ad-sm', style: { width: 160 }, 'aria-label': '产物名称（可选）', placeholder: '名称（可选）', value: artifactName, onChange: (e) => setArtifactName(e.target.value), disabled: artifactBusy }),
-                h('button', { className: 'ad-btn ad-sm', onClick: intakeGeneratedArtifact, disabled: artifactBusy || busy || !openTitle }, artifactBusy ? '入库中…' : '登记入库')),
+                h('button', {
+                  className: 'ad-btn ad-sm',
+                  onClick: intakeGeneratedArtifact,
+                  disabled: artifactBusy || busy || !openTitle || (artifactMode === 'file' ? !artifactFile : !artifactSource.trim()),
+                }, artifactBusy ? (artifactMode === 'file' ? '导入中…' : '入库中…') : (artifactMode === 'file' ? '导入素材' : '登记入库'))),
+              artifactMode === 'file'
+                ? h('div', { className: 'ad-row ad-artifact-category', key: 'artifact-category', style: { flexWrap: 'wrap', gap: 8, marginBottom: 6, alignItems: 'center' } },
+                    h('span', { className: 'ad-sub' }, `导入分类（写入项目「素材/<分类>/」，默认「${ARTIFACT_CATEGORY_DEFAULT}」）`),
+                    h('select', { className: 'ad-select', 'aria-label': '产物导入分类', value: artifactCategory, onChange: (e) => setArtifactCategory(e.target.value), disabled: artifactBusy },
+                      ARTIFACT_CATEGORIES.map((category) => h('option', { key: category, value: category }, category === ARTIFACT_CATEGORY_DEFAULT ? `生成（素材/生成/）` : category))))
+                : null,
               artifactResult
                 ? (artifactResult.ok === false || artifactResult.error
-                    ? h('div', { className: 'ad-hint-next', key: 'intake-err', role: 'status' }, '入库失败：' + String(artifactResult.error || artifactResult.reason || '未知错误') + '（不阻塞；可检查路径/URL 后重试）')
+                    ? h('div', { className: 'ad-hint-next', key: 'intake-err', role: 'status' }, (artifactResult.fixed ? '' : '入库失败：') + String(artifactResult.error || artifactResult.reason || '未知错误') + (artifactResult.fixed ? '' : '（不阻塞；可检查路径/URL 后重试）'))
                     : h('div', { className: 'ad-hits', key: 'intake-ok', role: 'status' },
                         h('div', { className: 'ad-hit' },
                           h('div', { className: 'ad-hit-path' }, '已入库：' + String(artifactResult.relative || artifactResult.name || '')),
-                          h('div', null, (artifactResult.bytes == null ? '' : String(artifactResult.bytes) + ' 字节 · ') + 'sha256 ' + String(artifactResult.sha256 || '').slice(0, 16) + '… · 资产 ' + String(artifactResult.assetId || '—') + '（可在「素材库」查看）'))))
+                          h('div', null, (artifactResult.bytes == null ? '' : String(artifactResult.bytes) + ' 字节 · ') + 'sha256 ' + String(artifactResult.sha256 || '').slice(0, 16) + '… · 资产 ' + String(artifactResult.assetId || '—') + '（可在「素材库」查看）')),
+                          artifactResult.fallbackCategory
+                            ? h('div', { className: 'ad-hint-next', key: 'artifact-category-fallback' }, '当前插件未支持「生成」分类，已导入默认分类（可在素材库查看）')
+                            : null))
                 : null,
               h('div', { className: 'ad-path', key: 'intake-note' },
-                '仅登记已产出文件：本地文件拷入 / URL 下载（大小与超时上限由宿主控制）；写入 素材/生成/ 新文件并更新素材清单与资产索引；不触发生成、不调用模型。'),
+                '本地文件经「素材库导入」复制入项目（单文件 ≤50MB，不移动源文件，不关联生成任务）；项目内路径/URL 经产物入库（URL 仅 http(s) 直链、≤64MB、禁内网/重定向最多 5 次）写入 素材/生成/ 并保持任务关联；不触发生成、不调用模型。'),
             ),
           )
         }
@@ -7453,8 +9622,6 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
           const { draftPending, receipts, episodeSceneCount, episodeLineCount, episodeCharCount } = toolcardsDerived
           body.push(
             h('div', { key: 'tc' },
-              h('div', { className: 'ad-sec', style: { marginTop: 0 } }, '创作流水线（数据源 progress-get，与 drama_get_progress 一致）'),
-              renderPipelineBar(progress, refreshProgress),
               h('div', { className: 'ad-sec' }, '结构化卡片（当前项目实时数据 · 对齐 drama_* 工具形态）'),
               h('div', { className: 'ad-toolcards' },
                 listCard({
@@ -7802,6 +9969,120 @@ body[data-ds-dark-theme] .ad-shell select,body[data-ds-dark-theme] .ad-settings-
                 disabled: handoffBusy || !handoffInstr,
               }, handoffBusy ? '准备中…' : (handoffCopyError ? '重试复制' : (handoffCopied ? '再次复制' : '复制交接指令'))),
               h('button', { className: 'ad-btn', onClick: closeHandoff }, '关闭')))))
+      }
+      // v0.16.6（C2-C / E15+H-7）：视觉圣经定向/冻结确认对话框
+      if (styleDialog) {
+        const styleDialogTitle = styleDialog === 'direct' ? '定向确认' : styleDialog === 'freeze' ? '冻结风格' : styleDialog === 'unfreeze' ? '解冻风格' : '保存微调'
+        const styleDialogDesc = styleDialog === 'direct'
+          ? '将当前五维风格确认为项目定向基准；定向后进入受控微调，冻结后不可修改。'
+          : styleDialog === 'freeze'
+            ? '冻结后风格不可修改，需解冻才能改。'
+            : styleDialog === 'unfreeze'
+              ? '解冻后回到「已定向」可微调状态；请填写原因并确认。'
+              : '微调会影响下游风格基准；将基于当前 revision 提交（expectedHash 并发保护）。'
+        const reasonNeeded = styleDialog === 'unfreeze' || styleDialog === 'freeze'
+        children.push(h('div', {
+          className: 'ad-modal-backdrop',
+          key: 'style-dialog',
+          onMouseDown: (event) => { if (event.target === event.currentTarget) closeStyleDialog() },
+        },
+          h('div', {
+            className: 'ad-modal',
+            id: 'ad-style-dialog',
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-labelledby': 'ad-style-dialog-title',
+            'aria-describedby': 'ad-style-dialog-desc',
+            'aria-busy': styleBusy ? 'true' : 'false',
+            'aria-keyshortcuts': 'Escape',
+          },
+            h('div', { className: 'ad-modal-title', id: 'ad-style-dialog-title' }, styleDialogTitle),
+            h('div', { className: 'ad-modal-desc', id: 'ad-style-dialog-desc' }, styleDialogDesc),
+            reasonNeeded
+              ? h('div', { className: 'ad-field' },
+                  h('label', null, styleDialog === 'unfreeze' ? '解冻原因（必填 10–300 字）' : '冻结备注（可选，≤300 字）'),
+                  h('textarea', {
+                    className: 'ad-area',
+                    rows: 3,
+                    maxLength: STYLE_REASON_MAX,
+                    value: styleReason,
+                    disabled: styleBusy,
+                    'aria-label': styleDialog === 'unfreeze' ? '解冻原因' : '冻结备注',
+                    onChange: (event) => {
+                      setStyleReason(event.target.value)
+                      if (styleReasonError) setStyleReasonError('')
+                    },
+                  }),
+                  styleDialog === 'unfreeze'
+                    ? h('div', { className: 'ad-style-count' }, String(styleReason.trim().length) + '/' + String(STYLE_REASON_MAX) + '（至少 ' + String(STYLE_REASON_MIN) + ' 字）')
+                    : null,
+                  styleReasonError ? h('div', { className: 'ad-err', role: 'alert' }, styleReasonError) : null)
+              : null,
+            styleError
+              ? h('div', { className: 'ad-err-box', role: 'alert' },
+                  h('div', { className: 'ad-err-head' }, '操作失败'),
+                  h('div', { className: 'ad-err' }, styleError))
+              : null,
+            h('div', { className: 'ad-modal-actions' },
+              h('button', { className: 'ad-btn ad-primary', onClick: confirmStyleDialog, disabled: styleBusy }, styleBusy ? '处理中…' : '确认'),
+              h('button', { className: 'ad-btn', onClick: closeStyleDialog, disabled: styleBusy }, '取消')))))
+      }
+      // v0.16.9（C3-C / E16+H-8）：审核动作确认对话框（驳回原因 / 定稿二次确认 / 重打开原因+二次确认）
+      if (assetReviewDialog) {
+        const assetReviewDialogType = assetReviewDialog.type
+        const assetReviewDialogTitle = assetReviewDialogType === 'reject' ? '驳回审核'
+          : assetReviewDialogType === 'finalize' ? '定稿确认'
+            : '重打开'
+        const assetReviewDialogDesc = assetReviewDialogType === 'reject'
+          ? '驳回后审核状态变为「已驳回」，需修改提示词后重新提交。请填写驳回原因（4–300 字，必填）。'
+          : assetReviewDialogType === 'finalize'
+            ? '定稿后提示词锁定为只读（final），之后写操作会被拒绝（423 asset-locked）；如需修改必须先「重打开」。确认定稿？'
+            : '重打开后审核状态回到「草稿」，可继续修改提示词并重新提交；历史轮次与定稿提示词保留。请填写重打开原因（4–300 字，必填）并确认。'
+        const assetReviewNeedReason = assetReviewDialogType === 'reject' || assetReviewDialogType === 'reopen'
+        children.push(h('div', {
+          className: 'ad-modal-backdrop',
+          key: 'review-dialog',
+          onMouseDown: (event) => { if (event.target === event.currentTarget) closeAssetReviewDialog() },
+        },
+          h('div', {
+            className: 'ad-modal',
+            id: 'ad-review-dialog',
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-labelledby': 'ad-review-dialog-title',
+            'aria-describedby': 'ad-review-dialog-desc',
+            'aria-busy': assetReviewBusy ? 'true' : 'false',
+            'aria-keyshortcuts': 'Escape',
+          },
+            h('div', { className: 'ad-modal-title', id: 'ad-review-dialog-title' }, assetReviewDialogTitle),
+            h('div', { className: 'ad-modal-desc', id: 'ad-review-dialog-desc' }, assetReviewDialogDesc),
+            assetReviewNeedReason
+              ? h('div', { className: 'ad-field' },
+                  h('label', null, assetReviewDialogType === 'reject' ? '驳回原因（必填 4–300 字）' : '重打开原因（必填 4–300 字）'),
+                  h('textarea', {
+                    className: 'ad-area',
+                    rows: 3,
+                    maxLength: ASSET_REVIEW_REASON_MAX,
+                    value: assetReviewReason,
+                    disabled: assetReviewBusy,
+                    'aria-label': assetReviewDialogType === 'reject' ? '驳回原因' : '重打开原因',
+                    onChange: (event) => {
+                      setAssetReviewReason(event && event.target ? event.target.value : '')
+                      if (assetReviewReasonError) setAssetReviewReasonError('')
+                    },
+                  }),
+                  h('div', { className: 'ad-style-count' }, `${String(assetReviewReason || '').trim().length}/${ASSET_REVIEW_REASON_MAX}（至少 ${ASSET_REVIEW_REASON_MIN} 字）`),
+                  assetReviewReasonError ? h('div', { className: 'ad-err', role: 'alert' }, assetReviewReasonError) : null)
+              : null,
+            assetReviewError
+              ? h('div', { className: 'ad-err-box', role: 'alert' },
+                  h('div', { className: 'ad-err-head' }, '操作失败'),
+                  h('div', { className: 'ad-err' }, assetReviewError))
+              : null,
+            h('div', { className: 'ad-modal-actions' },
+              h('button', { className: 'ad-btn ad-primary', onClick: confirmAssetReviewDialog, disabled: assetReviewBusy },
+                assetReviewBusy ? '处理中…' : (assetReviewDialogType === 'finalize' ? '确认定稿' : assetReviewDialogType === 'reject' ? '确认驳回' : '确认重打开')),
+              h('button', { className: 'ad-btn', onClick: closeAssetReviewDialog, disabled: assetReviewBusy }, '取消')))))
       }
       // v0.15.5（task-121）：lightbox 提升到面板根层级（.ad-body 滚动容器之外；关闭三方式：按钮 / Esc / 背景）
       if (visualLightboxNode) children.push(visualLightboxNode)

@@ -355,9 +355,9 @@ check('还原后产品 verifyExport 恢复通过', productRestored.ok === true &
 group('[7] 工具层 strict 导出 + 清单缺失/不留产物失败路径')
 const defs = toolsMod.createToolDefs({ rootOf: () => workspace, backendOf: () => null })
 const runTool = (name, args) => defs.find((d) => d.name === name).execute(args || {}, {})
-check('工具数仍为 34（T10 不新增工具）', defs.length === 34, String(defs.length))
+check('工具数仍为 34（T10 不新增工具）', defs.length === 35, String(defs.length))
 // 契约随工件演进：旧 v0.4.0=64 条；E1 落地后=67 条（doc-read/doc-save/doc-notify）；E5 落地后=68 条（sources-list）。export-project 形状不变。
-const expectedMethods = METHODS.includes('media-read') ? 69 : METHODS.includes('sources-list') ? 68 : METHODS.includes('doc-read') ? 67 : 64
+const expectedMethods = METHODS.includes('asset-save') ? 72 : METHODS.includes('assets-import') ? 70 : METHODS.includes('media-read') ? 69 : METHODS.includes('sources-list') ? 68 : METHODS.includes('doc-read') ? 67 : 64
 check(`METHODS = ${expectedMethods}（E1 后 67 / E5 后 68 / v0.15.1 task-110 media-read 后 69；export-project 形状不变）`, METHODS.length === expectedMethods, String(METHODS.length))
 const strictOk = await runTool('drama_export', { title: TITLE, format: 'csv', strict: true })
 check('drama_export strict 对通过项目导出成功', strictOk.ok === true && strictOk.checks && strictOk.checks.ok === true, JSON.stringify({ ok: strictOk.ok, checks: strictOk.checks && strictOk.checks.ok }).slice(0, 160))

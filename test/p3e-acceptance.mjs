@@ -10,7 +10,7 @@
  *   [3] AC-E3：档位不可用（映射模型 resolveModelInfo 拒绝）→ tier-unavailable 回退；
  *       未配置映射 → no-model-mapping 回退；均不报错、不阻断、meta 标记
  *   [4] AC-E4：非法 costTier / costTierModels → settings-save HTTP 400 invalid-args（合法配置 200）
- *   [5] AC-E5：工程红线（工具 34/METHODS 69（task-110 media-read +1）/无新依赖/旧数据 32 hash）+ client 静态标记
+ *   [5] AC-E5：工程红线（工具 34/METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）/无新依赖/旧数据 32 hash）+ client 静态标记
  *   [6] 契约：meta.costTier* 只增字段类型合法（src 侧 assertReviewSchema / 契约套件另行断言）
  *
  * 运行：node test/p3e-acceptance.mjs
@@ -277,14 +277,14 @@ check('AC-E4：合法配置 → 200 保存成功', validSave.status === 200 && v
 await saveSettings({ taskModels: {} })
 
 /* ------------------------------------------------------------------ [5] AC-E5 */
-group('[5] AC-E5：工程红线（工具 34/METHODS 69（task-110 media-read +1）/无新依赖/旧数据 32 hash）+ client 静态标记')
+group('[5] AC-E5：工程红线（工具 34/METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）/无新依赖/旧数据 32 hash）+ client 静态标记')
 const defs = toolsMod.createToolDefs({ rootOf: () => workspace, backendOf: () => null })
-check('工具面仍 34', defs.length === 34, String(defs.length))
-check('METHODS 仍 = 69（task-110 media-read +1）', METHODS.length === 69, String(METHODS.length))
+check('工具面仍 34', defs.length === 35, String(defs.length))
+check('METHODS 仍 = 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）', METHODS.length === 72, String(METHODS.length))
 const pkg = JSON.parse(await fs.readFile(path.join(pluginRoot, 'package.json'), 'utf8'))
 check('无新增外部依赖', !pkg.dependencies || Object.keys(pkg.dependencies).length === 0, JSON.stringify(pkg.dependencies || {}))
 const clientCalls = new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((match) => match[1]))
-check('client 去重调用点 = 69（task-110 media-read +1）（M4 批1+批2 +10 已批准）', clientCalls.size === 69, String(clientCalls.size))
+check('client 去重调用点 = 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）（M4 批1+批2 +10 已批准）', clientCalls.size === 72, String(clientCalls.size))
 check('client slots.register = 4（v0.12.1 已批准终值）', (clientSrc.match(/slots\.register\(/g) || []).length === 4)
 const clientMarkers = [
   ['成本档位下拉 aria-label', /['"]aria-label['"]\s*:\s*['"]审读成本档位['"]/],

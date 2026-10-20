@@ -6,7 +6,7 @@
  *   [1] A/B 两临时夹具目录各建项目 → `sources-list` 枚举（sourceType / projectCount / 排序 / 去重）
  *   [2] 失效路径过滤（不存在的目录不进 sources）
  *   [3] `status` 带/不带 cwd 兼容（带 cwd 命中该源；不带回退旧行为不报错）
- *   [4] 契约回归：METHODS=69（task-110 media-read +1）、旧 67 条路由全在、无重复；client 调用数（E5 后）与 slots.register=4 红线（task-8 +1、task-17 +1，均已批准）
+ *   [4] 契约回归：METHODS=69（task-110 media-read +1；v0.15.11 E13 assets-import +1）、旧 67 条路由全在、无重复；client 调用数（E5 后）与 slots.register=4 红线（task-8 +1、task-17 +1，均已批准）
  *
  * 注：E5 契约（`AI短剧工作区/P1-接口契约冻结-v1.md` §6 变更登记）：
  *   `sources-list { cwd?, limit? }` → `{ ok:true, sources:[{ path, sourceType:'workspace'|'session'|'manual',
@@ -191,10 +191,10 @@ const statusLegacy = await call('status', {})
 check('status 不带 cwd：旧行为兼容（200 + workspace 可解析）', statusLegacy.status === 200 && typeof statusLegacy.body.workspace === 'string' && statusLegacy.body.workspace.length > 0, JSON.stringify(statusLegacy.body).slice(0, 160))
 
 /* ------------------------------------------------------------------ [4] */
-group('[4] 契约回归（69 / 旧 67 全在 / 客户端调用 / slots 红线；task-110 media-read +1）')
-check('METHODS = 69（task-110 media-read +1；含 sources-list）', METHODS.length === 69, String(METHODS.length))
-const legacy67 = [...hostMethods].filter((m) => m !== 'sources-list' && m !== 'media-read')
-check('旧 67 条路由全在（无删除；排除已批准 sources-list/media-read）', legacy67.length === 67, String(legacy67.length))
+group('[4] 契约回归（71 / 旧 67 全在 / 客户端调用 / slots 红线；v0.16.6 C2 style-save +1）')
+check('METHODS = 71（v0.16.6 C2 style-save +1；含 sources-list）', METHODS.length === 72, String(METHODS.length))
+const legacy67 = [...hostMethods].filter((m) => m !== 'sources-list' && m !== 'media-read' && m !== 'assets-import' && m !== 'style-save')
+check('旧 68 条路由全在（无删除；排除已批准 sources-list/media-read/assets-import 后补 asset-save C3 批准）', legacy67.length === 68, String(legacy67.length))
 check('METHODS 无重复项', new Set(METHODS).size === METHODS.length, String(METHODS.length))
 const clientCalls = new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1]))
 const clientHasSources = clientCalls.has('sources-list')

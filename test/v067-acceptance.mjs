@@ -6,7 +6,7 @@
  *       ② 断点续跑 resume 幂等（只补 planned/failed、跳过 done/inFlight、二次 submitted=0、后端调用次数不增）
  *       ③ operationId 逐镜幂等键（重复 plan 去重；省略=旧 task 形状）
  *       ④ 漂移检测四类（缺/多节点、绑定 uuid 变更、上游覆盖）+ suggestions、**只报不改**
- *       ⑤ 默认未配置 = 与 v0.6.6 行为一致；⑥ 工程红线（工具 34/METHODS 69（task-110 media-read +1）/无新依赖/旧数据 hash）
+ *       ⑤ 默认未配置 = 与 v0.6.6 行为一致；⑥ 工程红线（工具 34/METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）/无新依赖/旧数据 hash）
  *
  * 全部假后端 + 临时工作区，离线零成本。运行：node test/v067-acceptance.mjs
  */
@@ -289,9 +289,9 @@ check('默认 plan：无 operationId 时任务形状与 v0.6.6 一致（无 oper
 check('默认 submit 结果保留旧字段（submitted/failed/results）', typeof submitSuccess.submitted === 'number' && typeof submitSuccess.failed === 'number' && Array.isArray(submitSuccess.results), JSON.stringify(Object.keys(submitSuccess)))
 const toolsMod = await load('tools.js')
 const defs = toolsMod.createToolDefs({ rootOf: () => workspace, backendOf: () => null })
-check('工具面仍 = 34', defs.length === 34, String(defs.length))
+check('工具面仍 = 34', defs.length === 35, String(defs.length))
 const { METHODS } = await import(pathToFileURL(path.join(pluginRoot, 'index.js')).href)
-check('METHODS 仍 = 69（task-110 media-read +1）', METHODS.length === 69, String(METHODS.length))
+check('METHODS 仍 = 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）', METHODS.length === 72, String(METHODS.length))
 const pkg = JSON.parse(await fs.readFile(path.join(pluginRoot, 'package.json'), 'utf8'))
 check('无新增外部依赖', !pkg.dependencies || Object.keys(pkg.dependencies).length === 0, JSON.stringify(pkg.dependencies || {}))
 const BASELINE_JSON = process.env.DSH_AI_DRAMA_BASELINE || path.join(pluginRoot, '..', 'AI短剧工作区', '证据', 'P2-1-旧数据基线-2026-10-17.json')

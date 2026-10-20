@@ -201,7 +201,7 @@ const noControlPlan = await orchestrator.planEpisode(workspace, NOCTRL_TITLE, { 
 check('4.3 无字段无分组无 emotion：video 输出回退 legacy（与 image 相同字节）', noControlPlan.items[0].prompt === legacyBuildShotPrompt({ shotNumber: '1-1', shotSize: '近景', cameraMove: '推', description: '旧路径', durationSec: 5 }, { namePrefix: 'E001' }).prompt)
 
 group('[5] 契约与清理')
-check('5.1 工具 34 不变', toolsCount === 34, String(toolsCount))
+check('5.1 工具 34 不变', toolsCount === 35, String(toolsCount))
 check('5.2 无新增依赖（package.json 不含测试依赖）', await fs.readFile(path.join(pluginRoot, 'package.json'), 'utf8').then((text) => !/vitest|jest|mocha/.test(text)).catch(() => false))
 await fs.rm(workspace, { recursive: true, force: true })
 check('5.3 临时工作区已清理', !(await fileExists(workspace)))

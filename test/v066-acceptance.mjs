@@ -4,7 +4,7 @@
  * 范围（Lead 2026-10-18 裁定）：v0.6.6 = task-44 子集（①成本预估 + ③预算三级闸门）+ R-P2-11 门禁；
  * 原 ②分类重试/断点续跑、④漂移检测 → task-48（v0.6.7，不在本版验收）。
  * AC：① 成本预估输出可观测（tokens/费用区间）；② 单次/单集/项目三级闸门超限拒绝 + 明细（哪个闸门/当前用量/上限）；
- *     ③ 默认未配置 = 与 v0.6.5 行为一致；④ 假后端/既有套件不回归、工具 34/METHODS 69（task-110 media-read +1）/无新依赖/旧数据 hash 不变。
+ *     ③ 默认未配置 = 与 v0.6.5 行为一致；④ 假后端/既有套件不回归、工具 34/METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）/无新依赖/旧数据 hash 不变。
  *
  * 当前状态：host task-44 实现中 → 特征探测（成本预估/三级闸门标记）未命中时显式 SKIP；
  * 交付后按实际 API 校准并并入 all.mjs（第 24 套件）。
@@ -206,12 +206,12 @@ const budget = await generation.getBudget(workspace, TITLE)
 check('预算台账形状保留（limitPoints/spentPoints/remainingPoints）', ['limitPoints', 'spentPoints', 'remainingPoints'].every((k) => k in budget), JSON.stringify(budget).slice(0, 240))
 
 /* ------------------------------------------------------------------ [4] 红线 */
-group('[4] 工程红线（工具 34 / METHODS 69（task-110 media-read +1） / 无新依赖 / 旧数据 hash）')
+group('[4] 工程红线（工具 34 / METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） / 无新依赖 / 旧数据 hash）')
 const toolsMod = await load('tools.js')
 const defs = toolsMod.createToolDefs({ rootOf: () => workspace, backendOf: () => null })
-check('生产工具面仍 34', defs.length === 34, String(defs.length))
+check('生产工具面仍 34', defs.length === 35, String(defs.length))
 const { METHODS } = await import(pathToFileURL(path.join(pluginRoot, 'index.js')).href)
-check('METHODS 仍 = 69（task-110 media-read +1）', METHODS.length === 69, String(METHODS.length))
+check('METHODS 仍 = 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）', METHODS.length === 72, String(METHODS.length))
 const pkg = JSON.parse(await fs.readFile(path.join(pluginRoot, 'package.json'), 'utf8'))
 check('无新增外部依赖', !pkg.dependencies || Object.keys(pkg.dependencies).length === 0, JSON.stringify(pkg.dependencies || {}))
 const BASELINE_JSON = process.env.DSH_AI_DRAMA_BASELINE || path.join(pluginRoot, '..', 'AI短剧工作区', '证据', 'P2-1-旧数据基线-2026-10-17.json')

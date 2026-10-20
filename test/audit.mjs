@@ -2,7 +2,7 @@
  * P2-3 AI 审读（AC-R1…R8）· 用例骨架
  *
  * 需求：`AI短剧工作区/需求/需求叙述-P2-3-AI审读-v1.md`（v0.6.0）
- * Q1–Q7 裁定（Lead 2026-10-18）：B 方案 = `drama_check_consistency {deep:true}`；工具仍 34、METHODS 69（task-110 media-read +1）；
+ * Q1–Q7 裁定（Lead 2026-10-18）：B 方案 = `drama_check_consistency {deep:true}`；工具仍 34、METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）；
  *   单集；维度含钩子/节奏、人设、可拍性、台词、平台红线、记忆/伏笔、时间线；默认不阻断；
  *   预算 tokens≤60k / ≤60s 可配置，超限/模型不可用 → `degraded:true` + 确定性结果；结果落 `.aidrama/reviews/`；误报可忽略记录。
  * 技术可行性条件：host 先确认插件能否直调宿主模型；**允许两种实现**（直调模型 / agent-mediated 两段式），
@@ -636,9 +636,9 @@ const exportRes = await call('export-project', { title: ALL_SAMPLES[0].title, fo
 check('AC-R7：存在审读 findings 时导出仍成功', Boolean(exportRes) && exportRes.status === 200 && exportRes.body?.ok !== false, JSON.stringify(exportRes && exportRes.body).slice(0, 200))
 
 /* ------------------------------------------------------------------ [8] AC-R8 工程 */
-group('[8] AC-R8：工程门禁（34 工具 / METHODS=69（task-110 media-read +1） / slots=4（task-8+task-17 已批准终值）/ 旧数据 hash / 无新增依赖）')
+group('[8] AC-R8：工程门禁（34 工具 / METHODS=69（task-110 media-read +1；v0.15.11 E13 assets-import +1） / slots=4（task-8+task-17 已批准终值）/ 旧数据 hash / 无新增依赖）')
 const defs = toolsMod.createToolDefs({ rootOf: () => workspace, backendOf: () => null })
-check('AC-R8：生产工具面仍 34（方案 B 不新增工具）', defs.length === 34, String(defs.length))
+check('AC-R8：生产工具面仍 34（方案 B 不新增工具）', defs.length === 35, String(defs.length))
 const deepParam = (() => {
   const def = defs.find((d) => d.name === 'drama_check_consistency')
   if (!def) return false
@@ -648,7 +648,7 @@ check('AC-R8：drama_check_consistency 有 deep 参数（默认 false 向后兼�
 check('AC-R8：deep:true 时并发不安全（index.js isConcurrencySafe 动态接线）', /drama_check_consistency[\s\S]{0,200}deep === true/.test(hostSrc) && /isConcurrencySafe\s*=/.test(hostSrc), 'host wiring')
 check('AC-R8：默认（无 deep/saveReview）只读检查可并发（与 v0.4.3 一致）', /!\(args && \(args\.deep === true \|\| args\.saveReview\)\)/.test(hostSrc), 'host wiring')
 check('AC-R8：saveReview 路径同样不允许并行', /args\.saveReview/.test(hostSrc), 'host wiring')
-check('AC-R8：METHODS 仍 = 69（task-110 media-read +1）', METHODS.length === 69, String(METHODS.length))
+check('AC-R8：METHODS 仍 = 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）', METHODS.length === 72, String(METHODS.length))
 check('AC-R8：client slots.register = 4（v0.12.1 已批准终值）', (clientSrc.match(/slots\.register\(/g) || []).length === 4)
 // AC-R8 client 侧：检查页审读区块展示/跳转/裁决/降级/空态/只读路径（client task-27 最终态静态断言）
 const clientReviewMarkers = [
@@ -669,7 +669,7 @@ check('AC-R8：client 审读区块展示/跳转/裁决/降级/空态文案齐全
 check('AC-R8：client 读取审读报告仅经 doc-read .aidrama/reviews/latest.json（E6.1）', /reviews\/latest\.json/.test(clientSrc) && !/doc-save[\s\S]{0,80}reviews\/latest\.json/.test(clientSrc), 'read-only')
 check('AC-R8：client 跳转复用 storyboard-get / episode-read（不新增调用点）', /storyboard-get/.test(clientSrc) && /episode-read/.test(clientSrc))
 const clientCalls = new Set([...clientSrc.matchAll(/api\(\s*'([a-z][a-z0-9-]+)'/g)].map((m) => m[1]))
-check('AC-R8：client 去重调用点 = 69（task-110 media-read +1）（M4 批1+批2 +10，已批准登记）', clientCalls.size === 69, String(clientCalls.size))
+check('AC-R8：client 去重调用点 = 70（task-110 media-read +1；v0.15.11 E13 assets-import +1）（M4 批1+批2 +10，已批准登记）', clientCalls.size === 72, String(clientCalls.size))
 const pkg = JSON.parse(await fs.readFile(path.join(pluginRoot, 'package.json'), 'utf8'))
 check('AC-R8：无新增外部依赖（dependencies 仍为空/未增加）', !pkg.dependencies || Object.keys(pkg.dependencies).length === 0, JSON.stringify(pkg.dependencies || {}))
 // 旧数据 32 文件 hash 不变（复用 P2-1 基线）

@@ -1,5 +1,5 @@
 /**
- * D-10 回归门禁：34 个 drama_* 工具定义的 `parameters` + `output.schema`
+ * D-10 回归门禁：35 个 drama_* 工具定义的 `parameters` + `output.schema`
  * 必须全部通过 **DSH 运行时** `@deepseek-ai/dsh-tools` 的 `assertSupportedJsonSchema()`。
  *
  * ## 为什么要有这条门禁（D-10 / 2026-10-17）
@@ -9,7 +9,7 @@
  * 第一步就是 `assertSupportedJsonSchema(output.schema)`，对它抛
  * `JsonSchemaError: ... required names "sha256" which is not in properties`；
  * 主插件 `index.js` 逐工具 try/catch 把错误静默吞掉（仅 0 注册时才落
- * `drama-attach-diagnostic.json`）→ 运行期工具面 32/34（缺 `drama_list_assets` /
+ * `drama-attach-diagnostic.json`）→ 运行期工具面 32/35（缺 `drama_list_assets` /
  * `drama_add_asset`），且所有短剧会话（含 GUI 普通会话）都受影响。
  * 本门禁在离线阶段直接调用**同一个运行时校验器**，把「schema 非法 → 注册被拒 →
  * 工具静默消失」这一整类回归挡在发布前。
@@ -35,7 +35,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const pluginRoot = path.join(here, '..')
-const EXPECTED_TOOL_COUNT = 34
+const EXPECTED_TOOL_COUNT = 35
 
 let passed = 0
 let failed = 0
@@ -143,9 +143,9 @@ console.log(`  via: ${runtime.via}`)
 check('运行时校验器已加载', typeof runtime.fn === 'function')
 
 /* ------------------------------------------------- [1] 工具定义完整性 */
-console.log('\n[1] 工具定义完整性（34 个生产工具）')
-check('createToolDefs 返回 34 个工具', defs.length === EXPECTED_TOOL_COUNT, `实际 ${defs.length}`)
-check('DRAMA_TOOL_NAMES 长度 = 34', DRAMA_TOOL_NAMES.length === EXPECTED_TOOL_COUNT, `实际 ${DRAMA_TOOL_NAMES.length}`)
+console.log('\n[1] 工具定义完整性（35 个生产工具）')
+check('createToolDefs 返回 35 个工具', defs.length === EXPECTED_TOOL_COUNT, `实际 ${defs.length}`)
+check('DRAMA_TOOL_NAMES 长度 = 35', DRAMA_TOOL_NAMES.length === EXPECTED_TOOL_COUNT, `实际 ${DRAMA_TOOL_NAMES.length}`)
 const defNames = defs.map((def) => def.name)
 const expectedNames = [...DRAMA_TOOL_NAMES].sort()
 const actualNames = [...defNames].sort()
@@ -162,7 +162,7 @@ check(
   defNames.includes('drama_list_assets') && defNames.includes('drama_add_asset'),
 )
 const missingOutputs = DRAMA_TOOL_NAMES.filter((name) => !TOOL_OUTPUTS[name])
-check('TOOL_OUTPUTS 覆盖全部 34 个工具（不依赖 genericOutput 兜底）', missingOutputs.length === 0, `缺 ${missingOutputs.join(',')}`)
+check('TOOL_OUTPUTS 覆盖全部 35 个工具（不依赖 genericOutput 兜底）', missingOutputs.length === 0, `缺 ${missingOutputs.join(',')}`)
 
 /* --------------------------------- [2] parameters + output.schema 逐个校验 */
 console.log('\n[2] parameters + output.schema 逐个调用 assertSupportedJsonSchema')
@@ -206,11 +206,11 @@ const rejectedCount = rejectedTools.size
 console.log('\n[3] 汇总')
 console.log(`  validated=${defs.length} parametersRejected=${parameterRejected} outputRejected=${outputRejected} rejectedCount=${rejectedCount}`)
 if (rejectedCount > 0) {
-  console.log('  被 DSH 拒绝的工具（真机上会静默缺失 → 运行期工具面 < 34）：')
+  console.log('  被 DSH 拒绝的工具（真机上会静默缺失 → 运行期工具面 < 35）：')
   for (const detail of rejectedTools.values()) console.log(`    · ${detail}`)
   console.log('  修复方向：让全部 output.schema/parameters 通过 assertSupportedJsonSchema（D-10：assetItem.sha256 应为字符串 schema）。')
 }
-check('rejectedCount = 0（34 个工具均可被 DSH registry.register 接受）', rejectedCount === 0, [...rejectedTools.keys()].join(','))
+check('rejectedCount = 0（35 个工具均可被 DSH registry.register 接受）', rejectedCount === 0, [...rejectedTools.keys()].join(','))
 
 console.log(`\n结果：${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

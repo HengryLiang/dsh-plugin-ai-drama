@@ -8,7 +8,7 @@
  *   [D] 覆盖：无 overwrite → conflict；overwrite 后成功；无分组输入不触碰既有 sidecar；
  *   [E] 事务回滚：构造分镜 MD 写失败 → storyboard/groups 恢复原内容；
  *   [F] 只读：三样本源文件/真实项目只读 hash 前后不变；非法输入 → invalid-args；
- *   [G] 契约：工具 34 / METHODS 69（task-110 media-read +1） 不变；EXPORT_FORMATS 只增 vcs；README 含用法。
+ *   [G] 契约：工具 34 / METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） 不变；EXPORT_FORMATS 只增 vcs；README 含用法。
  *
  * 版本自适应：v0.10.0 及更早安装副本无 lib/import-bridge.js → 整个套件 SKIP（exit 0，不红）。
  * 运行：node test/import-bridge.mjs
@@ -71,8 +71,8 @@ const toolNames = Array.isArray(toolsModule.DRAMA_TOOL_NAMES) ? toolsModule.DRAM
 check('lib/import-bridge.js 存在且导出 parseShotPromptMarkdown/previewImport/applyImport', typeof bridge.parseShotPromptMarkdown === 'function' && typeof bridge.previewImport === 'function' && typeof bridge.applyImport === 'function')
 check('EXPORT_FORMATS 只增 vcs（markdown/json/csv 仍在）', Array.isArray(exporter.EXPORT_FORMATS) && ['markdown', 'json', 'csv', 'vcs'].every((format) => exporter.EXPORT_FORMATS.includes(format)), JSON.stringify(exporter.EXPORT_FORMATS))
 check('exporter.buildVcsView 可用', typeof exporter.buildVcsView === 'function')
-check('METHODS 含 import-preview/import-apply（且总数 68 不变）', methods.has('import-preview') && methods.has('import-apply') && methods.size === 69, String(methods.size))
-check('工具面 34 不变且含 drama_import_script', toolNames.length === 34 && toolNames.includes('drama_import_script'), String(toolNames.length))
+check('METHODS 含 import-preview/import-apply（且总数 68 不变）', methods.has('import-preview') && methods.has('import-apply') && methods.size === 72, String(methods.size))
+check('工具面 34 不变且含 drama_import_script', toolNames.length === 35 && toolNames.includes('drama_import_script'), String(toolNames.length))
 check('README 含 shot-prompt / vcs 用法说明', /shot-prompt/.test(readmeSrc) && /vcs|VCS/.test(readmeSrc))
 
 const TITLE = 'import-bridge-test'
@@ -251,8 +251,8 @@ check('F5 非法输入 → invalid-args（空内容/无镜头/类型错误）', 
 
 /* ------------------------------------------------------ [G] 契约 + 清理 */
 group('[G] 契约与清理')
-check('G1 METHODS 69（task-110 media-read +1） 且新增 import-preview/import-apply 为 only-add', methods.size === 69 && methods.has('import-preview') && methods.has('import-apply'))
-check('G2 工具面 34 不变（无新增工具）', toolNames.length === 34, String(toolNames.length))
+check('G1 METHODS 70（task-110 media-read +1；v0.15.11 E13 assets-import +1） 且新增 import-preview/import-apply 为 only-add', methods.size === 72 && methods.has('import-preview') && methods.has('import-apply'))
+check('G2 工具面 34 不变（无新增工具）', toolNames.length === 35, String(toolNames.length))
 check('G3 EXPORT_FORMATS = markdown/json/csv/vcs（旧格式不变）', JSON.stringify(exporter.EXPORT_FORMATS) === JSON.stringify(['markdown', 'json', 'csv', 'vcs']), JSON.stringify(exporter.EXPORT_FORMATS))
 await fs.rm(workspace, { recursive: true, force: true })
 check('G4 测试临时工作区已清理', !(await fileExists(workspace)))
