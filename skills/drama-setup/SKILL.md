@@ -17,6 +17,8 @@ user-invocable: true
 4. `drama_get_project` 复核，把契约读回来念给用户确认。
 5. （可选，不强制）新项目可顺带建议填 3 项核心世界设定：`soulDeath`（死亡权重）、`powerSystem`（战力天花板）、`worldSpace`（舞台/通行成本）；其余 5 项可后补；旧项目只提示「可补」，不得强制。
 
+**世界观 v3（v0.16.279）**：读写用 `drama_get_project(includeWorld:true)` 的 `worldDoc`（`categories[]`：`kind/summary/rules/tertiaryTags/entries`，entry 的 `extension` 为二级、`tertiary` 为三级自由文本）与 `worldLegacy`；保存用 `drama_save_world` 的 `categories`（整表覆盖），旧 `world[]` 仍兼容（首次保存自动升 v3，读不写）。三级标签注册表 `tertiaryTags[{extension,labels[]}]` 按二级分组，空 labels 也保留；entry.tertiary 非空但未注册时自动补注册。规则 name 类内唯一；总述≤4000、规则/条目 detail≤2000、extension/三级标签≤20；空类保留，「其他」仅在有内容时输出。
+
 ## 平台惯例参考（先建议、后确认，不要当默认事实）
 
 | 平台 | 单集时长 | 画幅 | 常见集数 |
@@ -33,6 +35,8 @@ user-invocable: true
 - 不要把用户的临时口述当最终契约，必须回读确认。
 - **无明确建项意图时不得自动立项**：用户未明确表达建项意图（建立项目 / 创建新项目 / 新建短剧 / 开个新短剧 / 立项 / 我想做一部短剧 / 新项目等）时，不得主动加载立项指引、不得主动追问平台 / 单集时长 / 目标集数、不得调用 `drama_create_project`。
 - **已有项目但无有效契约**：只提示「可补契约」（先用 `drama_get_project` / `drama_check_consistency` 展示缺口），不得自动新建项目或另立新项；新建须用户明确确认。
+- **间接需求同样禁止自动立项**：用户只是讨论团队、圆桌、评审、方案、文档、工作流、任务、整理思路或「开个小组」等，即使出现「短剧 / 项目」字样，也不得推断为建项意图，不得主动加载立项指引、不得调用 `drama_create_project`、不得创建项目或写入项目文件夹；只有用户明确下达建项指令并确认后才可执行。
+- **不确定时先问**：用户意图模糊（例如只说「做一个项目/搞个小组」）时，只问一个澄清问题，不得先建项目再解释。
 
 ## 写入稳健性（大参数/长文本，2026-10-20 补充）
 

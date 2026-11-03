@@ -29,4 +29,4 @@ user-invocable: true
 
 ## 交付
 
-`drama_save_draft`（`kind: "characters"`，`content` 为角色数组的 JSON 字符串）写入草稿区。
+`drama_write_content`（`kind: "characters"`，`content` 为角色数组的 JSON 字符串）写入正式稿。

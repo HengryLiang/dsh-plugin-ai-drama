@@ -1,8 +1,8 @@
 {
   "name": "dsh-plugin-ai-drama",
-  "version": "0.16.10",
+  "version": "0.16.279",
   "type": "module",
-  "description": "DeepSeek Harness 插件：AI 短剧工作区（立项/总纲/人物/剧本/分镜/导出）+「短剧模式」Agent 预设（35 个 drama_* 工具、10 个随包技能、13 页签面板）",
+  "description": "DeepSeek Harness 插件：AI 短剧工作区（立项 / 总纲 / 人物 / 剧本 / 分镜 / 素材 / 导出）+「短剧模式」Agent 预设（33 个 drama_* 工具、19 个随包技能、14 页签面板）",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
@@ -23,7 +23,7 @@
     "CHANGELOG.md"
   ],
   "license": "MIT",
-  "author": "dsh-plugin-ai-drama contributors",
+  "author": "HengryLiang",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/HengryLiang/dsh-plugin-ai-drama.git"
@@ -53,10 +53,7 @@
     "node": "^22.19.0 || ^24.0.0"
   },
   "scripts": {
-    "test": "node test/all.mjs",
-    "test:host": "node test/smoke.mjs",
-    "test:client": "node test/client.mjs",
-    "test:agent": "node test/agent-tools.mjs",
+    "test": "node test/public-smoke.mjs",
     "check": "node --check index.js && node --check client.js && node --check preset.js"
   },
   "peerDependencies": {

@@ -30,5 +30,5 @@ user-invocable: true
 
 ## 交付
 
-用 `drama_save_draft`（`kind: "outline"`，`content` 为大纲数组的 JSON 字符串）写入草稿区，
+用 `drama_write_content`（`kind: "outline"`，`content` 为大纲数组的 JSON 字符串）写入正式稿，
 再调 `drama_check_consistency` 自检并把问题清单一并报给用户。**不要直接调 `drama_save_outline` 覆盖正式稿。**

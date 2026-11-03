@@ -23,7 +23,7 @@
       "inputs": ["assets[].id", "assets[].type"],
       "skipIfMissing": true,
       "code": "asset-id-format",
-      "message": "资产编号非法：{卡ID}（{原因}）；合法编号为 9 类前缀（CHR/SPC/PRP/SHT/CST/EXP/SFX/VOX/MUS）+ 3 位序号，可选 _01–_99 变体，且 type 必须与编号前缀一致",
+      "message": "资产编号非法：{卡ID}（{原因}）；合法编号为 10 类前缀（CHR/SPC/PRP/SHT/CST/VEH/EXP/SFX/VOX/MUS）+ 3 位序号，可选 _01–_99 变体，且 type 必须与编号前缀一致",
       "rules": [{ "type": "idFormat", "action": "warn" }],
       "lifecycle": { "addedIn": "v0.11.0", "retireCandidate": "AST-06" }
     },

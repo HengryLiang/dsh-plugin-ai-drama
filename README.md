@@ -7,14 +7,16 @@
 **交流与支持**：[联系作者（微信）](#联系与交流) · [赞助支持](#赞助支持) · [商业合作与定制](#商业合作与定制)
 
 > DeepSeek Harness（DSH）插件：把 AI 短剧的 **立项 → 总纲 → 人物 → 世界观 → 剧本 → 分镜 → 生成 → 导出** 收进侧栏工作区，
-> 并附带「短剧模式」Agent 预设——**35 个 `drama_*` 工具**、**10 个随包技能**、**72 个宿主路由**、**13 页签面板**，
+> 并附带「短剧模式」Agent 预设——**33 个 `drama_*` 工具**、**19 个随包技能**、**79 个宿主路由**、**14 页签面板**，
 > 以及与 LibTV / NeoWoW 画布 CLI 对接的生成编排适配层。
 
 > English: An AI short-drama workspace plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 > Sidebar + main-panel workspace covering the full short-drama pipeline, a dedicated `drama` agent preset with
-> 35 agent tools, 10 bundled skills, a `/drama` slash command, criteria/quality gates, an asset & style system,
+> 33 agent tools, 19 bundled skills, a `/drama` slash command, criteria/quality gates, an asset & style system,
 > safe local media access, asset import / cross-project reuse / multi-round review, shot-prompt import / VCS export,
 > and adapters that drive external canvas CLIs (LibTV / NeoWoW). UI and docs are in Chinese.
+
+> 当前版本：**v0.16.279**（本地最新开发线同步构建）。个人使用免费；企业定制 / 专属支持见文末「商业合作与定制」。
 
 ---
 
@@ -37,21 +39,21 @@
 
 | 模块 | 能力 |
 |---|---|
-| 工作区 | 侧栏「AI 短剧」入口 + 中央面板（**13 页签 / 4 组**：创作、资料、交付、高级），不遮蔽内置工作区浏览器，可与其它工作区插件共存 |
+| 工作区 | 侧栏「AI 短剧」入口 + 中央面板（**14 页签 / 4 组**：创作、资料、交付、高级），不遮蔽内置工作区浏览器，可与其它工作区插件共存 |
 | 项目 | 新建 / 打开 / 重命名 / 删除；固定中文目录结构；全文检索；目录树子节点展开折叠并持久化 |
 | 内容 | 剧集契约（含**八大基本设定**）、分集总纲、人物设定卡、世界观、分集剧本、分镜表、本剧记忆（伏笔/已用桥段/时间线/待回收） |
 | 分镜增强 | 情绪与强度、光影、现场声、禁令、起止体态、衔接、自然语言段、焦段、主体、分组；**情绪总控分组 sidecar**（不改分镜数组形状） |
 | 台词与音效 | 台词视图并入「剧本」、配音稿迁至「交付 / 导出」；角色卡音频（`media.audio`）与 `<audio>` 试听；旧 `dialogue` 深链自动重定向 |
 | 素材与媒体 | **本地安全只读媒体通道**（`media-read`）；素材登记**仅项目内**；素材目录扫描 + 批量登记；**一键导入**（≤50MB/件、SHA 去重）；**跨项目资产复用**与**跨对象复制**（资产卡/场景卡/风格 DNA）；**素材库 2.0** 统一卡片视图、**视觉圣经专区**（图墙按类型分组、定向/冻结） |
 | 资产审核 | 资产多轮审核状态机（`asset-save`，轮次上限 20）、场景卡审核、审核哈希、导出仅 `final` 状态带最终提示词 |
-| AI 能力 | 35 个 `drama_*` Agent 工具（仅在「短剧模式」会话注册）；检索增强；一致性检查；草稿区与采纳/丢弃 |
+| AI 能力 | 33 个 `drama_*` Agent 工具（仅在「短剧模式」会话注册）；检索增强；一致性检查；草稿区与采纳/丢弃 |
 | 质量体系 | 创作判据（写作侧 + 结构侧，默认 WARN 不阻断）、判据规则单一源 `presets/rules/*.json`、评测门禁、资产质量门禁 |
 | 资产与风格 | 9 类资产编号（CHR/SPC/PRP/SHT/CST/EXP/SFX/VOX/MUS）、资产卡与 `{{Asset_*}}` 占位符、场景卡、五维风格 DNA、风格定向 / 冻结 / 解冻（`style-save`） |
 | 成本与路由 | 成本预估 + 三级闸门；按任务选择 `fast / standard / strong` 成本档位；预算台账，同一任务只计费一次 |
 | 批量生成 | 多集批量：规划 → 提交（可部分失败）→ 收敛；幂等提交、断点 resume、漂移检测；产物入库 URL/本地文件安全硬化 |
 | 导入导出 | 剧本导入（预览 → 落盘）；**分镜提示词 MD 导入桥（`format=shot-prompt`）**；导出 Markdown / JSON / CSV / **VCS 视图**；导入导出互通 |
 | 预设 | 「短剧模式」Agent 预设：短剧编剧/制片/分镜导演/合规顾问人格，**移除 shell 类工具**（工具白名单） |
-| 技能 | 10 个随包技能：立项、总纲、人物、剧本、分镜、导演/镜头语言、润色、审读、导出、**分镜提示词兜底** |
+| 技能 | 19 个随包技能：立项、总纲、人物、剧本、分镜、导演/镜头语言、润色、审读、导出、**分镜提示词兜底** |
 | 命令 | `/drama`（项目 / 进度 / 检查 / 草稿 / 导出 / 定稿 / 大纲 / 人物 / 世界观 / 剧本 / 分镜 / 润色） |
 | 交付 | 导出 Markdown 全本 / JSON 结构化包 / CSV 拍摄用分镜表（UTF-8 with BOM）/ VCS 视图；定稿快照与回滚 |
 
@@ -68,7 +70,7 @@
 ### 方式一：直接从 GitHub 安装（推荐）
 
 ```sh
-dsh plugin --profile <profile> add github:HengryLiang/dsh-plugin-ai-drama#v0.16.10
+dsh plugin --profile <profile> add github:HengryLiang/dsh-plugin-ai-drama#v0.16.279
 ```
 
 `<profile>` 换成你的 profile 名（`dsh web` 对应 `web`，桌面端通常是 `desktop`）。首次使用 `dsh plugin` 会自动创建 profile。
@@ -114,8 +116,8 @@ dsh --profile <profile> --dump-config    # 应出现 "# == dsh-plugin-ai-drama" 
 /drama 定稿 3                # 冻结第 3 集剧本与分镜为快照，可回滚
 ```
 
-4. 面板 **13 个页签 / 4 组**：
-   - **创作**：世界观（含八大基本设定）、总纲、人物、剧本、分镜；
+4. 面板 **14 个页签 / 4 组**：
+   - **创作**：世界观（含八大基本设定）、总纲、人物、剧本、分镜、视觉圣经；
    - **资料**：素材库、本剧记忆、草稿、账本；
    - **交付**：生成、检查 / 导出；
    - **高级**：目录、工具卡片。
@@ -135,26 +137,32 @@ dsh --profile <profile> --dump-config    # 应出现 "# == dsh-plugin-ai-drama" 
 
 > 模板变量只使用跨版本保守变量（`provider` / `model`），不使用 `cwd` 等段落局部变量（原因见「Harness 兼容性」）。
 
-## `drama_*` 工具（35 个）
+## `drama_*` 工具（33 个）
 
 | 分组 | 工具 |
 |---|---|
 | 项目 | `drama_list_projects` / `drama_create_project` / `drama_get_project` |
 | 文档写入 | `drama_save_contract`（含八大基本设定）/ `drama_save_outline` / `drama_save_characters` / `drama_save_world` / `drama_save_memory` / `drama_read_episode` |
 | 进度与检索 | `drama_get_progress` / `drama_search_context` / `drama_get_ledger` |
-| 台词与素材 | `drama_get_dialogue` / `drama_export_voice_script` / `drama_list_assets` / `drama_add_asset` / `drama_asset_save`（资产多轮审核） |
-| 草稿与定稿 | `drama_save_draft` / `drama_list_drafts` / `drama_resolve_draft` / `drama_finalize_episode` / `drama_list_finalized` |
+| 台词与素材 | `drama_get_dialogue` / `drama_export_voice_script` / `drama_list_assets` / `drama_add_asset` / `drama_asset_save` |
+| 内容写作 | `drama_write_content`（正文 / 草稿等内容写入） |
+| 定稿 | `drama_finalize_episode` / `drama_list_finalized` |
 | 导入 / 导出 / 质检 | `drama_import_script`（剧本、`format=shot-prompt` 分镜提示词）/ `drama_check_consistency` / `drama_export`（markdown / json / csv / vcs） |
 | 生成编排 | `drama_budget` / `drama_bind_canvas` / `drama_canvas_status` / `drama_reconcile_canvas` / `drama_plan_generation` / `drama_record_generation` / `drama_intake_artifact` / `drama_plan_batch` / `drama_submit_batch` / `drama_collect_batch` |
 
 工具全部是**确定性实现**（读写文件、结构化校验、检索、渲染、编排），生成类操作交给 Agent 调模型，
-插件只负责把结果安全落盘。测试用工具（`drama_test_*`）只在 `DSH_AI_DRAMA_TEST_TOOLS=1` 时注册，生产工具面保持 35 个。
+插件只负责把结果安全落盘。测试用工具（`drama_test_*`）只在 `DSH_AI_DRAMA_TEST_TOOLS=1` 时注册，生产工具面保持 33 个。
 
-## 随包技能（10 个）
+## 随包技能（19 个）
 
 `drama-setup`（立项）、`drama-outline`（总纲）、`drama-characters`（人物）、`drama-episode`（剧本）、
-`drama-storyboard`（分镜）、`drama-director`（导演 / 镜头语言）、`drama-polish`（润色）、
-`drama-review`（审读）、`drama-export`（导出）、`drama-shot-prompt`（分镜提示词兜底写作）。
+`drama-script`（剧本写作）、`drama-storyboard`（分镜）、`drama-shot-prompt`（分镜提示词兜底）、
+`drama-seedance-prompt`（Seedance 视频提示词）、`storyboard-seedance`（分镜 → Seedance 链路）、
+`drama-director`（导演 / 镜头语言）、`drama-polish`（润色）、`drama-review`（审读）、`drama-export`（导出）、
+`drama-music`（音乐 / 音频）、`drama-asset`（资产体系）、`drama-asset-analysis`（资产分析）、
+`drama-visual-bible`（视觉圣经）、`drama-vsc-brief`（VSC 视图 / 交接简报）、`roundtable`（多角色圆桌）。
+
+技能通过 `@deepseek-ai/dsh-skill-filesystem` 的 `bundledSkillDir` 随包发现，「短剧模式」会话内自动可用。
 
 ## 斜杠命令 `/drama`
 
@@ -181,7 +189,7 @@ dsh --profile <profile> --dump-config    # 应出现 "# == dsh-plugin-ai-drama" 
 - **视觉圣经**：场景卡（`.aidrama/scenes/cards.json`，零相机锁合）、五维风格 DNA（`.aidrama/style.json`）；
   风格支持 **定向 → 冻结 → 解冻** 状态机（`style-save`：423 硬锁、409 expectedHash 冲突检测、解冻审计）。
 
-## 素材与媒体（v0.15.8 – v0.16.10）
+## 素材与媒体（v0.15.8 – v0.16.279）
 
 - **登记仅项目内**：新登记只接受项目内路径；项目外绝对路径 / `..` / UNC / symlink 逃逸一律拒绝且不写盘；
   历史外部登记在迁移期只读兼容（客户端标注「外部路径（待迁移）」，并提供扫描/一键导入迁移路径）；
@@ -261,7 +269,7 @@ dsh --profile <profile> --dump-config    # 应出现 "# == dsh-plugin-ai-drama" 
 dsh-plugin-ai-drama/
   package.json            # dsh.manifestVersion / dsh.bundle.patch[2] / dsh.client
   cordis.patch.yml        # 把主插件插入组合树
-  index.js                # 宿主半：72 个 POST /api/ai-drama/<method> 路由 + 工具白名单挂载 + /drama
+  index.js                # 宿主半：79 个 POST /api/ai-drama/<method> 路由 + 工具白名单挂载 + /drama
   preset.js               # 预设伴生入口：provide('dramaMode') + 挂载随包技能
   presets/drama.patch.yml # 「短剧模式」Agent 预设声明
   presets/rules/*.json    # 判据 / 阈值 / 词表 / 资产规则（单一事实源）
@@ -269,7 +277,9 @@ dsh-plugin-ai-drama/
   lib/media.js            # 本地图片 / 音频安全只读通道（路径与 MIME 白名单、≤8MB）
   lib/contract-world.js   # 八大基本设定（8 字段 schema / 校验 / MD 段 / context 摘要）
   lib/import-assets.js    # 素材导入 / 跨项目复用 / 跨对象复制
-  lib/tools.js            # 35 个 drama_* Agent 工具
+  lib/asset-*.js          # 资产绑定 / 抽取 / 生成 / 迁移 / 调度
+  lib/skill-config.js, lib/skill-managed.js  # 技能配置与托管
+  lib/tools.js            # 33 个 drama_* Agent 工具
   lib/checks.js           # 确定性检查（分级 schema：pass/fail/warn/skipped）
   lib/consistency.js      # 一致性检查
   lib/retrieval.js        # 本地词法检索（中文单字 + 二元组 + BM25 风格打分）
@@ -285,9 +295,9 @@ dsh-plugin-ai-drama/
   lib/orchestrator.js     # 生成编排：规划 → 提交 → 收敛
   lib/backends/           # LibTV / NeoWoW CLI 适配层
   lib/exporter.js         # 导出 Markdown / JSON / CSV / VCS
-  skills/drama-*/SKILL.md # 10 个随包技能
-  client.js               # 客户端半：侧栏入口 + 13 页签面板（4 组）
-  test/                   # 53 个测试套件，纯 Node 运行，无外部依赖
+  skills/drama-*/SKILL.md # 19 个随包技能
+  client.js               # 客户端半：侧栏入口 + 14 页签面板（4 组）
+  test/public-smoke.mjs   # 公开仓库结构 smoke（CI 运行）
 ```
 
 宿主半提供 `POST /api/ai-drama/<method>` 精确路由（请求头 `x-ai-drama-request: 1`），
@@ -307,14 +317,16 @@ dsh-plugin-ai-drama/
 ## 开发与测试
 
 ```sh
-npm run check     # node --check 三个入口
-npm test          # 53 个测试套件
+npm run check   # node --check 三个入口
+npm test        # 公开仓库结构 smoke（test/public-smoke.mjs，不依赖本机夹具）
 ```
 
-测试全部是纯 Node 脚本，使用假 CLI / 假 React，**不需要 API Key、不消耗任何生成积分**。
-依赖本机样例数据 / 夹具 / 历史基线包的套件在数据缺失时会自动 SKIP（例如部分基线对比套件），
-不影响公共 CI：CI 上 53 个套件全部通过（其中 1 个基线对比套件在无该基线包的环境打印 SKIP）。
-CI：GitHub Actions 上跑 Node 22 / 24 × Windows / Ubuntu 组合（见 `.github/workflows/ci.yml`）。
+公开仓库只携带**结构 smoke**：包契约、组合树引用、客户端 bundle、技能/规则完整性、
+内部路径泄漏与运行时导出检查，可在任意机器与 CI 上运行
+（GitHub Actions：Node 22 / 24 × Windows / Ubuntu）。
+
+> 完整插件行为测试套件（166 个套件，含真实样例数据与历史基线夹具）在作者开发环境中运行，
+> 依赖本机样例与证据目录，因此不随公开仓库分发。安装后的实际体验以你所在环境的运行结果为准。
 
 ## 兼容性
 

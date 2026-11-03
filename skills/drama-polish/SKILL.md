@@ -23,5 +23,5 @@ user-invocable: true
 
 ## 交付
 
-修改后的完整剧本用 `drama_save_draft`（`kind: "episode"`）写草稿区，
+修改后的完整剧本用 `drama_write_content`（`kind: "episode"`）写正式稿，
 并在回复里用**对照表**给出改动点：`原句 → 改后 → 为什么`。不要只丢一份新稿。

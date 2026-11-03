@@ -32,6 +32,14 @@ user-invocable: true
 3. **伏笔回收**：本剧记忆里登记的未回收伏笔是否已经断线。
 4. **信息差**：观众知道的和角色知道的，是否按设计推进。
 
+## v0.16.40 P0 审核工作流（文本适配；工具调用/参数不变）
+
+1. **四档处置**（annotation resolution 唯一枚举）：`open` / `fixed_in_draft` / `accepted_known_issue` / `rejected`；每条附 `resolvedBy/resolvedAt/note?`。
+2. **通过门槛（AC-31）**：仅 `open` 状态的 blocker/major 阻断；`fixed_in_draft`/`accepted_known_issue`/`rejected` 不阻断；**blocker 无 accepted_known_issue 通道**（必须修复或驳回）。
+3. **提交与记录**：面板通过必须人工点击，写 `review.approver` + `review.approvedAt`；锁定写 `lockedBy/lockedAt`，解锁写 `unlockLog[]`（PRD 名 `approver`，不新增 `approvedBy`）。
+4. **位置**：审核记录存 `构想/审核/<集>.review.json`（overlay，不改旧 JSON/MD）；diff/跨版本不自动迁移。
+5. **已知限制（A-24/LIM-1）**：episode accept 的 history 快照为 no-op，不要承诺「版本历史回滚」；P1 修复。
+
 ## 交付
 
 输出问题清单，每条含：**严重级别 / 位置（集·场·镜）/ 问题 / 建议改法**。

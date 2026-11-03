@@ -12,20 +12,30 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import * as store from './lib/store.js'
+import { buildBundledSkillInventory } from './lib/skill-managed.js'
 import { assertSafeRelPath } from './lib/names.js'
 import * as drafts from './lib/drafts.js'
 import { checkConsistency } from './lib/consistency.js'
 import { searchContext } from './lib/retrieval.js'
-import { EXPORT_FORMATS, exportProject } from './lib/exporter.js'
+import { EXPORT_FORMATS, exportProject, isExportFormat } from './lib/exporter.js'
+import { listBackups, previewRestore, restoreBackup } from './lib/backup.js'
 import { createToolDefs, classifyToolFailure, DRAMA_TEST_TOOL_NAMES, DRAMA_TOOL_NAMES } from './lib/tools.js'
 import * as txn from './lib/txn.js'
 import { buildDramaContextCard, summarizeWriteFeedback } from './lib/context-card.js'
+import { resolveCurrentProject } from './lib/context-project.js'
 import { listDataSources } from './lib/sources.js'
 import * as flowState from './lib/flow-state.js'
 import * as styleDna from './lib/style-dna.js'
+import * as styleInjection from './lib/style-injection.js'
 import * as assetReview from './lib/assets.js'
+import * as assetExtract from './lib/asset-extract.js'
+import * as assetMigration from './lib/asset-migration.js'
+import * as assetMedia from './lib/asset-media.js'
+import * as assetGenerate from './lib/asset-generate.js'
+import { createAssetGenerationScheduler } from './lib/asset-scheduler.js'
 import * as audit from './lib/audit.js'
 import { createBackendRegistry } from './lib/backends/index.js'
 import * as generation from './lib/generation.js'
@@ -33,12 +43,24 @@ import * as orchestrator from './lib/orchestrator.js'
 import * as guard from './lib/guard.js'
 import * as importBridge from './lib/import-bridge.js'
 import * as media from './lib/media.js'
+import * as audioBindings from './lib/audio-bindings.js'
 import * as importAssets from './lib/import-assets.js'
 
 export const name = 'ai-drama'
 
 /** 需要 `connection` 服务（Fetch 路由注册表）存在后才注册路由。 */
 export const inject = ['connection']
+
+/**
+ * v0.16.156：apply() 内的运行期上下文刷新桥。
+ * dispatch() 为模块级函数，settings-save 路由通过此桥刷新对应 Agent 的 context 卡（不新增 API）。
+ */
+let runtimeContextBridge = null
+
+/** 只判断桥中是否有该 Agent 的 context 状态（不触碰 systemPrompt）。 */
+function contextByAgentHas(bridge, agent) {
+  return Boolean(bridge && bridge.contextByAgent && agent && agent.id && typeof bridge.contextByAgent.has === 'function' && bridge.contextByAgent.has(agent.id))
+}
 
 /**
  * 版本号以包自身 `package.json` 为准（单点维护，避免出现 v0.3.2 安装却报 0.3.0 的旧问题）。
@@ -54,6 +76,9 @@ const VERSION = (() => {
 })()
 const API_PATH = '/api/ai-drama/'
 const DRAMA_PRESET_SERVICE = 'dramaMode'
+/** v0.16.63（D-0034 残留）：host 兜底 inventory 扫描插件自带 skills/。 */
+const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url))
+const SKILLS_DIR = path.join(PLUGIN_DIR, 'skills')
 
 const METHODS = [
   'ping',
@@ -94,6 +119,13 @@ const METHODS = [
   'assets-add',
   'assets-remove',
   'asset-save',
+  'asset-extract',
+  // v0.16.24（Phase1 / H-11）：角色卡对标音色手动绑定写入口（METHODS 73→74）
+  'asset-audio-save',
+  // RC-26（v0.16.132，Lead 批准）：旧项目资产卡图片自动迁移（METHODS 77→78；read 方法不自动写）
+  'asset-cards-migrate',
+  // RC-30（v0.16.136，Lead 批准方案 A）：宿主直连画布单资产生图（METHODS 78→79；工具面不变）
+  'asset-generate',
   'finalized-list',
   'finalize-episode',
   'finalized-restore',
@@ -126,11 +158,17 @@ const METHODS = [
   'search-context',
   'consistency-check',
   'export-project',
+  // v0.16.38（M8 阶段2，用户批准 METHODS 74→75）：备份恢复 apply；不注册 Agent 工具。
+  'backup-restore',
   'agents-status',
   // v0.15.1（task-110，H 契约，Lead 批准）：本地图片只读通道；68→69，工具面仍 34。
   'media-read',
+  // v0.16.96（D-0042，Lead 批准 A 方案）：站位图上传（add-only）；METHODS 76→77，工具面仍 35。
+  'media-upload',
   // v0.15.11（task-134 / IMP-H，E13，Lead 批准）：一键导入素材；69→70，工具面仍 34。
   'assets-import',
+  // v0.16.59（Skill 管理 P0 / H-12r1，Lead 批准）：只读内置技能清单；METHODS 75→76，工具面仍 35。
+  'skills-inventory',
 ]
 
 /* ------------------------------------------------------------------ 工具 */
@@ -139,6 +177,76 @@ const METHODS = [
 function episodeStem(order) {
   const n = Math.round(Number(order))
   return Number.isFinite(n) && n > 0 ? `第${String(n).padStart(3, '0')}集` : '第000集'
+}
+
+/** R-24（v0.16.35）：assets-get add-only 分页/projection 白名单版本与纯函数。 */
+const R24_PROJECTION_WHITELIST_VERSION = 1
+const R24_ASSET_FIELDS = Object.freeze([
+  'id', 'name', 'kind', 'source', 'bytes', 'mtime', 'sha256', 'note', 'linkedShots', 'addedAt',
+  'assetCategory', 'origin', 'backend', 'model', 'sourceUrl', 'taskId', 'episode', 'downloadedAt', 'importedFrom',
+])
+const R24_CARD_FIELDS = Object.freeze([
+  'id', 'type', 'name', 'variantOf', 'aliases', 'status', 'version', 'fields', 'relations', 'prompts',
+  'media', 'history', 'review', 'importedFrom', 'extractedFrom',
+])
+
+/** 解析并严格校验 assets-get 的 R-24 add-only 参数；无分页/projection 时 active=false。 */
+function normalizeAssetsGetPage(input) {
+  let collection = 'assets'
+  if (Object.hasOwn(input, 'collection')) {
+    if (input.collection !== 'assets' && input.collection !== 'cards') {
+      throw new Error('collection 必须是 assets 或 cards')
+    }
+    collection = input.collection
+  }
+  const hasLimit = Object.hasOwn(input, 'limit')
+  const hasOffset = Object.hasOwn(input, 'offset')
+  const hasPage = hasLimit || hasOffset
+  const hasFields = Object.hasOwn(input, 'fields')
+  const hasOmit = Object.hasOwn(input, 'omit')
+  const hasProjection = hasFields || hasOmit
+  if (!hasPage && !hasProjection) return { active: false, collection, hasPage: false, projection: null }
+  if (hasFields && hasOmit) throw new Error('fields 与 omit 不能同时提供')
+  const limit = hasPage ? (hasLimit ? input.limit : 50) : null
+  const offset = hasPage ? (hasOffset ? input.offset : 0) : 0
+  if (hasPage) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('limit 必须是 1..1000 的整数')
+    if (!Number.isInteger(offset) || offset < 0 || offset > 10_000_000) throw new Error('offset 必须是 0..10000000 的整数')
+  }
+  const allowed = collection === 'cards' ? R24_CARD_FIELDS : R24_ASSET_FIELDS
+  const allowedSet = new Set(allowed)
+  const normalizeFields = (value, label) => {
+    if (!Array.isArray(value) || value.length < 1 || value.length > 32) throw new Error(`${label} 必须是 1..32 项的字符串数组`)
+    const seen = new Set()
+    const out = []
+    for (const field of value) {
+      if (typeof field !== 'string' || !field || !allowedSet.has(field)) throw new Error(`${label} 含未知字段：${String(field)}`)
+      if (seen.has(field)) continue
+      seen.add(field)
+      out.push(field)
+    }
+    return out
+  }
+  const projection = hasProjection
+    ? (hasFields ? { mode: 'fields', fields: normalizeFields(input.fields, 'fields') } : { mode: 'omit', fields: normalizeFields(input.omit, 'omit') })
+    : null
+  return { active: true, collection, hasPage, limit, offset, projection }
+}
+
+function projectR24Entries(entries, projection) {
+  if (!projection || !Array.isArray(entries)) return entries
+  return entries.map((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry
+    if (projection.mode === 'fields') {
+      const out = {}
+      for (const field of projection.fields) if (Object.hasOwn(entry, field)) out[field] = entry[field]
+      return out
+    }
+    const omit = new Set(projection.fields)
+    const out = {}
+    for (const key of Object.keys(entry)) if (!omit.has(key)) out[key] = entry[key]
+    return out
+  })
 }
 
 /**
@@ -154,7 +262,8 @@ const WRITE_TARGETS = {
     `分镜/${episodeStem(input.order)}.分镜.md`,
     `.aidrama/storyboard/${episodeStem(input.order)}.md.json`,
     // v0.10.0（0-4b）：可选 groups sidecar（add-only；不传=旧行为）
-    ...(input.groups !== undefined ? [`.aidrama/storyboard-groups/${episodeStem(input.order)}.md.json`] : []),
+    // v0.16.39（task-233）：groupIdEdits 也写 groups sidecar（双向同步）。
+    ...((input.groups !== undefined || input.groupIdEdits !== undefined) ? [`.aidrama/storyboard-groups/${episodeStem(input.order)}.md.json`] : []),
   ],
   'memory-save': () => ['本剧记忆/本剧记忆.md', '.aidrama/memory.json'],
   'world-save': () => ['世界观/世界观.md', '.aidrama/world.json'],
@@ -175,14 +284,28 @@ const WRITE_TARGETS = {
     '.aidrama/finalized.json',
   ],
   'draft-resolve': () => ['.aidrama/drafts'],
+  // v0.16.20（C1）：分类写同步渲染 素材/素材清单.md → 目标与登记一致（txn/审计 targets 含 md、前后 hash）。
   'assets-add': () => ['.aidrama/assets.json', '素材/素材清单.md'],
   'assets-remove': () => ['.aidrama/assets.json', '素材/素材清单.md'],
   // C3（E16/H-8）：资产/场景卡审核写入口；按 kind 只写目标文件，双文件静态登记（审计前后 hash）
   'asset-save': () => ['.aidrama/assets/cards.json', '.aidrama/scenes/cards.json'],
+  // C4a（E16/H-8 A）：资产剥离 apply 只写 assets/cards.json；preview 只读不进事务
+  'asset-extract': (input) => (input && input.mode === 'apply' ? ['.aidrama/assets/cards.json'] : null),
+  // v0.16.24（Phase1 / H-11）：对标音色绑定 sidecar（只写新文件；旧数据零写回）
+  'asset-audio-save': () => ['.aidrama/assets/voice-bindings.json'],
   // v0.15.11（task-134 / IMP-H）：一键导入写素材文件 + 登记；包项目事务与审计。
   // v0.16.8（task-151 / I5-1）：source 模式卡片/场景/风格目标文件按入参条件加入同一事务（锁+审计）。
   'assets-import': (input) => {
-    const targets = ['.aidrama/assets.json', '素材/素材清单.md']
+    // v0.16.13（M1-a-H）：导入历史纳入同一项目事务（锁/审计覆盖）。
+    // v0.16.15（M1-b-H）：模板保存/删除只写模板文件；审计/锁覆盖该目标。
+    // v0.16.29（TPL-H / M6）：模板配方包导入只写模板文件（全有或全无单次写；txn/锁/审计覆盖）。
+    if (input && input.templatePackBase64 !== undefined) {
+      return ['.aidrama/import-templates.json']
+    }
+    if (input && (input.saveTemplate !== undefined || input.deleteTemplate !== undefined || input.overwriteTemplate !== undefined)) {
+      return ['.aidrama/import-templates.json']
+    }
+    const targets = ['.aidrama/assets.json', '素材/素材清单.md', '.aidrama/import-history.json']
     if (input && input.sourceCardIds !== undefined) targets.push('.aidrama/assets/cards.json')
     if (input && input.sourceSceneIds !== undefined) targets.push('.aidrama/scenes/cards.json')
     if (input && input.copyStyleDNA === true) targets.push('.aidrama/style.json')
@@ -190,7 +313,35 @@ const WRITE_TARGETS = {
   },
   // v0.16.1（task-138 / C-6）：产物回流写素材文件 + 登记/任务；包项目事务与审计（锁+审计）。
   'intake-artifact': () => ['.aidrama/assets.json', '素材/素材清单.md', '.aidrama/tasks.json'],
+  // v0.16.96（D-0042）：站位图上传目标（audit/lock；精确路径按 episode/shotKey/filename 推导）
+  'media-upload': (input) => {
+    // RC-29（v0.16.135 add-only）：资产图接受 → 目标文件名/去重由 route 内部 runProjectTxn 动态决定。
+    if (input && input.purpose === 'asset') return null
+    // RC-24（v0.16.121 add-only）：项目封面 → 固定 素材/封面/cover.<ext>（移除时列出全部候选变体）。
+    if (input && input.purpose === 'cover') {
+      return ['素材/封面/cover.png', '素材/封面/cover.jpg', '素材/封面/cover.jpeg', '素材/封面/cover.webp']
+    }
+    const episode = Number(input && (input.episode ?? input.order))
+    if (!Number.isInteger(episode) || episode < 1 || episode > 9999) return null
+    const rawKey = String((input && (input.shotKey ?? input.shotNumber ?? input.shotId)) || '').trim()
+    const match = /(\d+)\s*$/u.exec(rawKey)
+    if (!match) return null
+    const shot = Number(match[1])
+    if (!Number.isSafeInteger(shot) || shot < 1) return null
+    const filename = String((input && input.filename) || '')
+    const filenameExt = path.extname(filename).toLowerCase()
+    const ext = ['.png', '.jpg', '.jpeg', '.webp'].includes(filenameExt)
+      ? filenameExt
+      : (input && input.mime === 'image/png' ? '.png' : input && input.mime === 'image/jpeg' ? '.jpg' : input && input.mime === 'image/webp' ? '.webp' : '.png')
+    return [`素材/站位图/${episodeStem(episode)}/EP${episode}-Shot${shot}${ext}`]
+  },
   'budget-set': () => ['.aidrama/budget.json', '账本/消耗台账.md'],
+  // RC-26（v0.16.132 add-only）：配音稿导出迁到 导出/（单集可精确给出 target；全量导出动态文件由 store 内部 guard 写）。
+  'voice-script-export': (input) => {
+    const order = Number(input && input.order)
+    if (!Number.isInteger(order) || order < 1 || order > 9999) return null
+    return [`导出/配音稿-第${String(order).padStart(3, '0')}集.md`]
+  },
   // v0.16.10（task-157 / M2）：账本默认纯读；仅在 renderFile:true 时显式写文件并进入事务/审计。
   'ledger-get': (input) => (input && input.renderFile === true ? ['账本/账本.md'] : null),
   'task-create': () => ['.aidrama/tasks.json'],
@@ -204,6 +355,12 @@ const WRITE_TARGETS = {
     }
   },
   'doc-notify': () => ['.aidrama/editor-notifications.jsonl'],
+  // v0.16.38（M8 阶段2）：恢复 targets 依赖 manifest，route 内部 runProjectTxn 动态传入；不包外层事务。
+  'backup-restore': () => null,
+  // RC-26（v0.16.132）：资产卡图片迁移 targets 依赖扫描计划，route 内部 runProjectTxn 动态传入。
+  'asset-cards-migrate': () => null,
+  // RC-30（v0.16.136）：submit 写任务 sidecar；status 只读；collect 目标文件动态由 route 内部事务传入。
+  'asset-generate': (input) => (input && String(input.action || 'submit') === 'submit' ? ['.aidrama/asset-generation.json'] : null),
 }
 
 /**
@@ -262,6 +419,8 @@ function fail(status, code, error) {
 
 /** v0.15.11（task-134 / IMP-H）：assets-import 请求体上限 70MB（50MB 文件 base64 约 66.7M 字符 + JSON 余量）。 */
 const IMPORT_REQUEST_MAX_BYTES = 70 * 1024 * 1024
+/** v0.16.96（D-0042）：media-upload 请求体上限 12MB（8MB 图片 base64 约 10.7M 字符 + JSON 余量）。 */
+const MEDIA_UPLOAD_REQUEST_MAX_BYTES = 12 * 1024 * 1024
 
 function requestTooLargeError() {
   const error = new Error('请求体过大（上限约 70MB）')
@@ -378,7 +537,7 @@ async function applyDraft(root, title, draft) {
       if (!draft.path) throw new Error('草稿缺少目标路径')
       return { applied: 'file', result: await store.writeEntryFile(root, title, draft.path, draft.content) }
     case 'batch-artifact': {
-      // P2-7（v0.7.1）：批量生成产物草稿采纳 —— 才把批次暂存产物拷入 素材/生成 + 记资产。
+      // P2-7（v0.7.1）：批量生成产物草稿采纳 —— 图片/音频等拷入 素材/生成；video 由 intakeArtifact 落 素材/视频/S01-EP<集>。
       const meta = JSON.parse(draft.content)
       if (meta.draftKind && meta.draftKind !== 'batch-artifact') throw new Error('批量产物草稿元数据不匹配')
       const result = await generation.adoptBatchArtifact(root, title, { ...meta.target, batchId: meta.batchId, stagedRelative: meta.stagedRelative, draftId: draft.id })
@@ -394,20 +553,75 @@ async function applyDraft(root, title, draft) {
 async function dispatch(method, input, root, scope, context = {}) {
   switch (method) {
     case 'ping':
-      return { ok: true, name, version: VERSION }
+      return { ok: true, name, version: VERSION, contentWriteSupported: true }
 
     case 'status': {
       const base = store.projectsBase(root)
       const exists = await store.isDirectory(base)
       const projects = exists ? await store.listProjects(root) : []
-      return { ok: true, version: VERSION, root: base, exists, projectCount: projects.length }
+      // RC-24（v0.16.121 add-only）：封面能力标记（旧客户端忽略）。
+      // RC-26（v0.16.132 add-only）：资产库 v2 / 旧项目自动迁移能力标记（旧客户端忽略）。
+      // RC-29（v0.16.135 add-only）：资产图写回 / 评估写入门控标记（旧客户端忽略）。
+      // RC-30（v0.16.136 add-only）：宿主直连资产生图能力标记（旧客户端忽略）。
+      // RC-32（v0.16.138 add-only / Q9）：asset-generate status/collect 支持按 assetId 取最新任务（旧宿主缺省→client 可降级）。
+      return {
+        ok: true,
+        version: VERSION,
+        root: base,
+        exists,
+        projectCount: projects.length,
+        coverSupported: true,
+        contentWriteSupported: true,
+        assetLibraryV2Supported: true,
+        assetCardsMigrateSupported: true,
+        assetMediaWriteSupported: true,
+        assetEvaluationSupported: true,
+        assetGenerateSupported: true,
+        assetGenerateLatestSupported: true,
+        // RC-48 / v0.16.170（add-only）：host 后台取回 worker 能力标记（client 读插件 status 门控；
+        // 旧版只在 asset-generate 响应内，导致误报「宿主版本过旧」）。asset-generate 响应通道保持。
+        assetGenerateHostWorkerSupported: true,
+        // v0.16.208（D-0092 视频）：add-only 能力标记；视频仅 LibTV 后端，neowow 不声明支持。
+        videoGenSupported: true,
+        videoBackends: ['libtv'],
+      }
     }
 
-    case 'shelf':
-      return { ok: true, root: store.projectsBase(root), projects: await store.listProjects(root) }
+    case 'shelf': {
+      // RC-24（v0.16.121 add-only）：有封面文件的项目附加 coverPath/coverUpdatedAt；无封面项目字节不变。
+      const listed = await store.listProjects(root)
+      const projects = []
+      for (const project of listed) {
+        const cover = await store.projectCoverInfo(project.path)
+        projects.push(cover ? { ...project, ...cover } : project)
+      }
+      return { ok: true, root: store.projectsBase(root), projects }
+    }
 
-    case 'create-project':
-      return { ok: true, project: await store.createProject(root, input.title) }
+    case 'create-project': {
+      const project = await store.createProject(root, input.title)
+      // RC-22（v0.16.100）：面板创建 → client 传 sessionId，host 用 agents 服务解析会话头（best-effort，失败不阻断）
+      const transportSessionId = typeof input.sessionId === 'string' ? input.sessionId.trim() : ''
+      if (transportSessionId && project && project.title) {
+        try {
+          const agents = safeGet(scope, 'agents')
+          const agent = agents && typeof agents.get === 'function' ? agents.get(transportSessionId) : undefined
+          const header = agent && agent.session && agent.session.header
+          const sessionId = header && typeof header.id === 'string' ? header.id.trim() : ''
+          if (sessionId) {
+            await store.bindProjectSession(root, project.title, {
+              sessionId,
+              cwd: typeof header.cwd === 'string' ? header.cwd : '',
+              preset: typeof header.agentPreset === 'string' ? header.agentPreset : '',
+              source: 'created',
+            })
+          }
+        } catch {
+          /* best-effort：绑定失败不阻断创建 */
+        }
+      }
+      return { ok: true, project }
+    }
 
     case 'tree':
       return { ok: true, tree: await store.readTree(root, input.title) }
@@ -567,16 +781,45 @@ async function dispatch(method, input, root, scope, context = {}) {
       return { ok: true, path: rel, action: record.action, notifiedAt: record.at }
     }
 
-    case 'storyboard-get':
-      return { ok: true, ...(await store.getStoryboardReadView(root, input.title, input.order)) }
+    case 'storyboard-get': {
+      // v0.16.39（client 并发保护 add-only）：includeHashes 默认不传 → 旧响应字节不变。
+      if (input.includeHashes !== undefined && typeof input.includeHashes !== 'boolean') {
+        return fail(400, 'invalid-args', 'includeHashes 必须是布尔值')
+      }
+      return { ok: true, ...(await store.getStoryboardReadView(root, input.title, input.order, { includeHashes: input.includeHashes === true })) }
+    }
 
     case 'storyboard-save': {
+      // v0.16.39（task-233）：add-only 单镜 groupId 编辑；与 shots/groups 互斥。
+      if (input.groupIdEdits !== undefined) {
+        if (input.shots !== undefined || input.groups !== undefined) {
+          return fail(400, 'invalid-args', 'groupIdEdits 不能与 shots/groups 同时提供')
+        }
+        if (!Number.isInteger(Number(input.order)) || Number(input.order) < 1) {
+          return fail(400, 'invalid-args', 'groupIdEdits 需要正整数 order')
+        }
+        if (!input.expectedHash || typeof input.expectedHash !== 'object' || Array.isArray(input.expectedHash)) {
+          return fail(400, 'invalid-args', 'groupIdEdits 需要 expectedHash 对象（建议覆盖 storyboard+groups）')
+        }
+        try {
+          const saved = await store.editStoryboardGroupIds(root, input.title, input.order, input.groupIdEdits)
+          return { ok: true, ...saved, hashes: await store.readStoryboardHashes(root, input.title, input.order) }
+        } catch (error) {
+          if (error && error.code === 'group-inconsistent') {
+            return reply(409, { ok: false, code: 'group-inconsistent', error: error.message })
+          }
+          if (error && error.code === 'invalid-args') return fail(400, 'invalid-args', error.message)
+          throw error
+        }
+      }
       // v0.10.0（0-4b）：可选 groups（add-only）；不传=旧行为，传 [] = 清空 sidecar。
       if (input.groups !== undefined) {
         const saved = await store.saveStoryboardWithGroups(root, input.title, input.order, input.shots, input.groups)
-        return { ok: true, shots: saved.shots, groups: saved.groups, groupsSaved: saved.groups.length > 0 }
+        return { ok: true, shots: saved.shots, groups: saved.groups, groupsSaved: saved.groups.length > 0, hashes: await store.readStoryboardHashes(root, input.title, input.order) }
       }
-      return { ok: true, shots: await store.saveStoryboard(root, input.title, input.order, input.shots) }
+      // v0.16.95（P0 写面 add-only）：普通 shots 走事务保存（JSON+MD 失败回滚），并返回新 hashes。
+      const shots = await store.saveStoryboardTransactional(root, input.title, input.order, input.shots)
+      return { ok: true, shots, hashes: await store.readStoryboardHashes(root, input.title, input.order) }
     }
 
     case 'drafts-list': {
@@ -630,11 +873,32 @@ async function dispatch(method, input, root, scope, context = {}) {
     case 'memory-save':
       return { ok: true, memory: await store.saveMemory(root, input.title, input.memory) }
 
-    case 'world-get':
-      return { ok: true, world: await store.getWorld(root, input.title) }
+    case 'world-get': {
+      // RC-84（v0.16.279）：v3 doc + v1 兼容 world 数组；v1/v2 只读适配不写盘。
+      const compat = await store.readWorldCompat(root, input.title)
+      return {
+        ok: true,
+        schemaVersion: 3,
+        doc: compat.doc,
+        world: compat.world,
+        secondaryDefaults: store.WORLD_SUBTABS,
+        migrated: compat.migrated === true,
+        ...(compat.migration ? { migration: compat.migration } : {}),
+      }
+    }
 
-    case 'world-save':
-      return { ok: true, world: await store.saveWorld(root, input.title, input.world) }
+    case 'world-save': {
+      // RC-84：doc(v3) 或 legacy world 数组均写 v3（整表覆盖）；返回同 world-get 形状。
+      const saved = await store.saveWorldCompat(root, input.title, input)
+      return {
+        ok: true,
+        schemaVersion: 3,
+        doc: saved.doc,
+        world: saved.world,
+        secondaryDefaults: store.WORLD_SUBTABS,
+        migrated: saved.migrated === true,
+      }
+    }
 
     case 'style-save': {
       // C2（E15/H-7）：视觉圣经定向/冻结写入口（METHODS 70→71；无 path 入参；expectedHash 方法内处理，不交 txn object 分支）
@@ -673,6 +937,10 @@ async function dispatch(method, input, root, scope, context = {}) {
       const doc = saved ? saved.doc : plan.doc || current.doc || { schemaVersion: 1, style: styleDna.normalizeStyleDNA(null), state: styleDna.buildDefaultStyleState() }
       const state = styleDna.normalizeStyleState(doc.state)
       const hash = saved ? saved.hash : currentHash
+      const referenceExtras = {}
+      if (Object.hasOwn(doc, 'references')) referenceExtras.references = styleDna.normalizeStyleReferences(doc.references)
+      if (Object.hasOwn(doc, 'referenceFilms')) referenceExtras.referenceFilms = styleDna.normalizeStyleReferenceFilms(doc.referenceFilms)
+      if (Object.hasOwn(doc, 'directorStyles')) referenceExtras.directorStyles = styleDna.normalizeStyleDirectorStyles(doc.directorStyles)
       return {
         ok: true,
         path: '.aidrama/style.json',
@@ -680,6 +948,7 @@ async function dispatch(method, input, root, scope, context = {}) {
         state: styleDna.styleResponseState(state, hash),
         hash: hash || null,
         bytes: saved ? saved.bytes : Buffer.byteLength(current.text || '', 'utf8'),
+        ...referenceExtras,
       }
     }
 
@@ -692,9 +961,23 @@ async function dispatch(method, input, root, scope, context = {}) {
     case 'assets-get': {
       // v0.15.1（task-107）：add-only cards（资产卡 media 读侧；旧 assets 字段不变）
       // v0.16.10（task-157 / M3）：registryOk/registryWarning add-only；损坏时只读降级（不写盘）。
+      // v0.16.35（R-24）：add-only 分页/projection；默认无参分支零改动。
+      // RC-47：资产接口被调用时把该项目 in-flight 任务重新入队（懒恢复；不阻塞读）。
+      try {
+        const schedulerHost = scope ? safeGet(scope, 'aiDramaHost') : undefined
+        if (schedulerHost && schedulerHost.assetScheduler && typeof input?.title === 'string' && input.title.trim()) {
+          void schedulerHost.assetScheduler.enqueueProject(root, input.title.trim())
+        }
+      } catch { /* 入队失败不影响只读 */ }
+      let pageOptions
+      try {
+        pageOptions = normalizeAssetsGetPage(input)
+      } catch (error) {
+        return fail(400, 'invalid-args', error instanceof Error ? error.message : '分页参数非法')
+      }
       const assetsState = await store.readAssetsState(root, input.title)
       const assets = assetsState.assets
-      const cards = await store.getAssetCards(root, input.title)
+      const cards = (await store.getAssetCards(root, input.title)).map((card) => assetReview.deriveAssetMediaReadView(card))
       // v0.15.3（task-114 / 迭代3 VB-H）：add-only scenes/styleDNA（E 类；仅存在数据时出现；损坏视为无）
       let scenes = []
       try {
@@ -711,7 +994,7 @@ async function dispatch(method, input, root, scope, context = {}) {
       const styleDNA = styleDoc && styleDoc.doc ? styleDna.normalizeStyleDoc(styleDoc.doc).style : null
       const style = styleDNA && typeof styleDNA === 'object'
         ? Object.fromEntries(
-            ['palette', 'lighting', 'texture', 'composition', 'motion'].map((dimension) => {
+            styleDna.STYLE_DIMENSIONS.map((dimension) => {
               const value = styleDNA[dimension]
               return [dimension, String(value == null ? '' : value)]
             }),
@@ -722,6 +1005,9 @@ async function dispatch(method, input, root, scope, context = {}) {
       const styleDirection = styleDoc && styleDoc.doc && styleDoc.doc.state && typeof styleDoc.doc.state === 'object' && !Array.isArray(styleDoc.doc.state)
         ? styleDna.styleDirectionFromState(styleDoc.doc.state, styleDoc.hash)
         : null
+      // C2b（E16 add-only）：仅 style.json 已冻结且五维非空时返回只读风格章节；非 frozen/旧项目不出现该键、响应字节不变
+      const stylePrompt = styleInjection.stylePromptFor(styleDoc)
+      const styleExtras = styleDoc && styleDoc.doc ? styleDna.styleExtrasForRead(styleDoc.doc) : {}
       // C3（E16/H-8）：可选 includeReviewHashes:true 时返回 cardsHash/scenesHash（供 client 传 asset-save.expectedHash）；
       // 缺省/ false 时响应逐字节不变（旧客户端/旧项目兼容）；仅在对应卡文件存在时出现。
       if (input.includeReviewHashes !== undefined && typeof input.includeReviewHashes !== 'boolean') {
@@ -737,17 +1023,174 @@ async function dispatch(method, input, root, scope, context = {}) {
       if (input.scanMaterials !== undefined && typeof input.scanMaterials !== 'boolean') {
         return fail(400, 'invalid-args', 'scanMaterials 必须是布尔值')
       }
+      // v0.16.13（M1-a-H）：可选 includeImportHistory:true（add-only；缺省不读文件、响应字节不变）。
+      if (input.includeImportHistory !== undefined && typeof input.includeImportHistory !== 'boolean') {
+        return fail(400, 'invalid-args', 'includeImportHistory 必须是布尔值')
+      }
+      let importHistoryExtra = {}
+      if (input.includeImportHistory === true) {
+        const importHistoryState = await importAssets.readImportHistory(root, input.title)
+        importHistoryExtra = {
+          // 文件按“新在前”存储；响应按“旧→新”返回，client 侧 slice(-50).reverse() 后展示新在前。
+          importHistory: [...importHistoryState.entries].reverse(),
+          ...(importHistoryState.corrupted ? { importHistoryCorrupted: true } : {}),
+        }
+      }
+      // v0.16.15（M1-b-H）：可选 includeImportTemplates:true（add-only；缺省不读文件、响应字节不变）。
+      if (input.includeImportTemplates !== undefined && typeof input.includeImportTemplates !== 'boolean') {
+        return fail(400, 'invalid-args', 'includeImportTemplates 必须是布尔值')
+      }
+      let importTemplatesExtra = {}
+      if (input.includeImportTemplates === true) {
+        const importTemplatesState = await importAssets.readImportTemplates(root, input.title)
+        importTemplatesExtra = {
+          importTemplates: Array.isArray(importTemplatesState.templates) ? importTemplatesState.templates : [],
+          ...(importTemplatesState.corrupted ? { importTemplatesCorrupted: true } : {}),
+          ...(importTemplatesState.error ? { importTemplatesError: { code: importTemplatesState.error.code, message: importTemplatesState.error.message } } : {}),
+        }
+      }
+      // v0.16.19（N1-H）：可选 includeAssetsHash:true（add-only；缺省不读文件、响应字节不变）。
+      // 返回 assetsHash = `.aidrama/assets.json` 当前字节 sha256（不存在 → null），同时作为新宿主稳定能力 marker。
+      if (input.includeAssetsHash !== undefined && typeof input.includeAssetsHash !== 'boolean') {
+        return fail(400, 'invalid-args', 'includeAssetsHash 必须是布尔值')
+      }
+      let assetsHashExtra = {}
+      if (input.includeAssetsHash === true) {
+        let assetsHash = null
+        try {
+          assetsHash = (await store.readAssetsRegistryDoc(root, input.title)).hash
+        } catch {
+          assetsHash = null
+        }
+        assetsHashExtra = { assetsHash }
+      }
+      // v0.16.19（N1-H）：可选 includeAssetCategory:true → 稳定能力 marker `assetCategorySupported:true`
+      // （add-only；缺省/false 不出现 → 默认响应逐字节不变；旧宿主忽略入参 → 无键，client 据此门控）。
+      if (input.includeAssetCategory !== undefined && typeof input.includeAssetCategory !== 'boolean') {
+        return fail(400, 'invalid-args', 'includeAssetCategory 必须是布尔值')
+      }
+      const assetCategoryExtra = input.includeAssetCategory === true ? { assetCategorySupported: true } : {}
+      // v0.16.24（Phase1 / E17a+E17b，E 类 add-only）：缺省/false 响应逐字节不变
+      if (input.includeProjectAudio !== undefined && typeof input.includeProjectAudio !== 'boolean') {
+        return fail(400, 'invalid-args', 'includeProjectAudio 必须是布尔值')
+      }
+      if (input.includeAudioBindings !== undefined && typeof input.includeAudioBindings !== 'boolean') {
+        return fail(400, 'invalid-args', 'includeAudioBindings 必须是布尔值')
+      }
+      let projectAudioExtra = {}
+      if (input.includeProjectAudio === true) {
+        try {
+          const scan = await audioBindings.scanProjectAudio(root, input.title, { depth: 4, limit: 500 })
+          projectAudioExtra = {
+            projectAudioSupported: true,
+            projectAudio: scan.files,
+            projectAudioTotal: scan.total,
+            projectAudioTruncated: scan.truncated,
+          }
+        } catch {
+          projectAudioExtra = { projectAudioSupported: true, projectAudio: [], projectAudioTotal: 0, projectAudioTruncated: false }
+        }
+      }
+      let audioBindingsExtra = {}
+      if (input.includeAudioBindings === true) {
+        try {
+          const described = await audioBindings.describeBindings(root, input.title)
+          audioBindingsExtra = {
+            audioBindingsSupported: true,
+            audioBindingsHash: described.hash,
+            ...(described.entries.length ? { audioBindings: described.entries } : {}),
+          }
+        } catch {
+          // 文件损坏/不可读 → 只读降级（不写盘、不报错误码）
+          audioBindingsExtra = { audioBindingsSupported: true, audioBindingsHash: null }
+        }
+      }
+      if (input.includeSchemaMeta !== undefined && typeof input.includeSchemaMeta !== 'boolean') {
+        return fail(400, 'invalid-args', 'includeSchemaMeta 必须是布尔值')
+      }
+      let schemaMetaExtra = {}
+      if (input.includeSchemaMeta === true) {
+        let metaState
+        try {
+          metaState = await store.readRegistryMeta(root, input.title)
+        } catch {
+          metaState = { source: 'default', schemas: { ...store.DATA_SCHEMA_VERSIONS } }
+        }
+        let assetCardsSchemaVersion = 1
+        let sceneCardsSchemaVersion = 1
+        try {
+          const assetDoc = await store.readCardsDoc(root, input.title, 'asset')
+          if (assetDoc && assetDoc.doc && Number.isInteger(assetDoc.doc.schemaVersion) && assetDoc.doc.schemaVersion >= 1) assetCardsSchemaVersion = assetDoc.doc.schemaVersion
+        } catch { /* 卡文件损坏/缺失 → 默认 v1；不改变 assets-get 既有行为 */ }
+        try {
+          const sceneDoc = await store.readCardsDoc(root, input.title, 'scene')
+          if (sceneDoc && sceneDoc.doc && Number.isInteger(sceneDoc.doc.schemaVersion) && sceneDoc.doc.schemaVersion >= 1) sceneCardsSchemaVersion = sceneDoc.doc.schemaVersion
+        } catch { /* 同上 */ }
+        schemaMetaExtra = {
+          registrySchemaVersion: Number.isInteger(metaState.schemas?.assetsRegistry) ? metaState.schemas.assetsRegistry : 1,
+          assetCardsSchemaVersion,
+          sceneCardsSchemaVersion,
+          schemaMetaSource: metaState.source || 'default',
+          ...(assetsState.registryOk === false && assetsState.registryDamage ? { registryDamage: assetsState.registryDamage } : {}),
+        }
+      }
+      // v0.16.17（M4-c-H）：项目数据目录存在性 —— 纯 lstat 一次；缺失/非目录/symlink/junction/异常保守 false，仅 false 时输出。
+      let dataDirPresent = true
+      try {
+        const dataDirStat = await fs.lstat(path.join(store.projectDir(root, input.title), '.aidrama'))
+        dataDirPresent = dataDirStat.isDirectory() && !dataDirStat.isSymbolicLink()
+      } catch {
+        dataDirPresent = false
+      }
+      let responseAssets = assets
+      let responseCards = cards
+      let pageExtra = {}
+      if (pageOptions.active) {
+        const target = pageOptions.collection === 'cards' ? cards : assets
+        if (pageOptions.hasPage) {
+          const total = target.length
+          const paged = target.slice(pageOptions.offset, pageOptions.offset + pageOptions.limit)
+          const projected = projectR24Entries(paged, pageOptions.projection)
+          if (pageOptions.collection === 'cards') responseCards = projected
+          else responseAssets = projected
+          const hasMore = pageOptions.offset + pageOptions.limit < total
+          pageExtra = {
+            page: {
+              total,
+              limit: pageOptions.limit,
+              offset: pageOptions.offset,
+              hasMore,
+              nextOffset: hasMore ? pageOptions.offset + pageOptions.limit : null,
+            },
+          }
+        } else {
+          const projected = projectR24Entries(target, pageOptions.projection)
+          if (pageOptions.collection === 'cards') responseCards = projected
+          else responseAssets = projected
+        }
+      }
       const result = {
         ok: true,
-        assets,
-        cards,
+        assets: responseAssets,
+        cards: responseCards,
         registryOk: assetsState.registryOk,
         ...(assetsState.registryWarning ? { registryWarning: assetsState.registryWarning } : {}),
+        ...importHistoryExtra,
+        ...importTemplatesExtra,
+        ...assetsHashExtra,
+        ...assetCategoryExtra,
+        ...projectAudioExtra,
+        ...audioBindingsExtra,
+        ...schemaMetaExtra,
+        ...(dataDirPresent ? {} : { dataDirPresent: false }),
         ...(Array.isArray(scenes) && scenes.length ? { scenes } : {}),
         ...(hasStyle ? { styleDNA: style } : {}),
         ...(styleDirection ? { styleDirection } : {}),
+        ...(stylePrompt ? { stylePrompt } : {}),
+        ...styleExtras,
         ...(cardsHash ? { cardsHash } : {}),
         ...(scenesHash ? { scenesHash } : {}),
+        ...pageExtra,
       }
       if (input.scanMaterials === true) {
         let scan
@@ -774,6 +1217,14 @@ async function dispatch(method, input, root, scope, context = {}) {
         throw assetReview.reviewError('too-large', 'asset-save 请求体超过 64KB')
       }
       const parsed = assetReview.parseAssetSaveInput(businessInput)
+      if (parsed.mode === 'fields') {
+        const saved = await store.applyAssetFieldEdit(root, input.title, {
+          card: parsed.card,
+          expectedHash: parsed.expectedHash,
+          expectedVersion: parsed.expectedVersion,
+        })
+        return { ok: true, ...saved }
+      }
       const saved = await store.applyAssetReview(root, input.title, {
         kind: parsed.kind,
         id: parsed.id,
@@ -787,9 +1238,147 @@ async function dispatch(method, input, root, scope, context = {}) {
       return { ok: true, ...saved }
     }
 
+    case 'asset-cards-migrate': {
+      // RC-26（v0.16.132，Lead 批准）：旧项目资产卡图片迁移（METHODS 77→78）。
+      // dryRun 默认 true（零写）；实际写路径：plan（只读）→ runProjectTxn(动态 targets) → copy + 一次原子写 cards.json。
+      const dryRun = input.dryRun === undefined ? true : input.dryRun
+      if (typeof dryRun !== 'boolean') return fail(400, 'invalid-args', 'dryRun 必须是布尔值')
+      const rewriteRefs = input.rewriteRefs === undefined ? true : input.rewriteRefs
+      if (typeof rewriteRefs !== 'boolean') return fail(400, 'invalid-args', 'rewriteRefs 必须是布尔值')
+      let limit
+      if (input.limit !== undefined) {
+        if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > assetMigration.MIGRATION_MAX_LIMIT) {
+          return fail(400, 'invalid-args', `limit 必须是 1..${assetMigration.MIGRATION_MAX_LIMIT} 的整数`)
+        }
+        limit = input.limit
+      }
+      const plan = await assetMigration.planAssetCardMediaMigration(root, input.title, { rewriteRefs, ...(limit === undefined ? {} : { limit }) })
+      if (dryRun) return { ok: true, dryRun: true, ...plan.report }
+      const applied = await txn.runProjectTxn(root, input.title, {
+        action: 'asset-cards-migrate',
+        actor: 'panel',
+        targets: plan.targets,
+      }, async () => assetMigration.applyAssetCardMediaMigration(root, input.title, plan))
+      return { ok: true, dryRun: false, ...applied }
+    }
+
+    case 'asset-generate': {
+      // RC-30（v0.16.136，Lead 批准方案 A）：宿主直连画布单资产生图（METHODS 78→79）。
+      // submit 外层 txn 由 WRITE_TARGETS 提供；status 只读；collect 下载动态文件由 lib 内部 txn 写入/审计。
+      const host = scope ? safeGet(scope, 'aiDramaHost') : undefined
+      try {
+        const result = await assetGenerate.runAssetGenerate({ root, input, registry: host && host.backends })
+        // RC-47：submit 入队；status 调用时把该项目 in-flight 任务重新入队（懒恢复，不阻塞响应）。
+        const action = String(input && input.action == null ? 'submit' : input.action).trim()
+        const title = typeof input?.title === 'string' ? input.title.trim() : ''
+        if (host && host.assetScheduler && title) {
+          if (result && result.status === 'submitted' && result.taskId) {
+            host.assetScheduler.enqueue({ root, title, taskId: result.taskId })
+          } else if (action === 'status') {
+            void host.assetScheduler.enqueueProject(root, title)
+          }
+        }
+        return result
+      } catch (error) {
+        const code = error && typeof error.code === 'string' ? error.code : ''
+        const message = error instanceof Error ? error.message : '资产直连生成失败'
+        if (code === 'asset-locked') {
+          return reply(423, { ok: false, code: 'asset-locked', error: message, review: error.review || null, currentHash: error.currentHash || null, expectedHash: error.expectedHash || null })
+        }
+        if (code === 'canvas-unbound') {
+          return reply(400, { ok: false, code: 'canvas-unbound', error: message, backend: error.backend || null, reason: error.reason || null, detail: error.detail || null, fix: error.fix || null })
+        }
+        if (code === 'backend-unavailable') {
+          return reply(502, { ok: false, code: 'backend-unavailable', error: message, backend: error.backend || null, detail: error.detail || null })
+        }
+        if (code === 'upstream-unavailable') {
+          return reply(502, { ok: false, code: 'upstream-unavailable', error: message, backend: error.backend || null, nodeName: error.nodeName || null })
+        }
+        if (code === 'conflict') {
+          return reply(409, { ok: false, code: 'conflict', error: message, currentHash: error.currentHash || null, ...(error.currentVersion !== undefined ? { currentVersion: error.currentVersion } : {}) })
+        }
+        if (code === 'not-found') return fail(404, 'not-found', message)
+        if (code === 'invalid-args') return fail(400, 'invalid-args', message)
+        throw error
+      }
+    }
+
+    case 'asset-extract': {
+      // C4a（E16/H-8 A）：资产剥离（METHODS 72→73）；transport cwd/sessionId 先剔除；body ≤64KB
+      const { cwd: _transportCwd, sessionId: _transportSessionId, ...businessInput } = input
+      if (Buffer.byteLength(JSON.stringify(businessInput), 'utf8') > 64 * 1024) {
+        throw assetExtract.extractError('too-large', 'asset-extract 请求体超过 64KB')
+      }
+      const parsed = assetExtract.parseAssetExtractInput(businessInput)
+      const result = await assetExtract.runAssetExtract(root, parsed)
+      return { ok: true, ...result }
+    }
+
+    case 'asset-audio-save': {
+      // v0.16.24（Phase1 / H-11）：角色卡对标音色手动绑定（METHODS 73→74；transport cwd/sessionId 先剔除；body ≤64KB）
+      const { cwd: _transportCwd, sessionId: _transportSessionId, ...businessInput } = input
+      if (Buffer.byteLength(JSON.stringify(businessInput), 'utf8') > 64 * 1024) {
+        throw audioBindings.bindingsError('too-large', 'asset-audio-save 请求体超过 64KB')
+      }
+      const saved = await audioBindings.saveBindings(root, input.title, businessInput)
+      return { ok: true, ...saved }
+    }
+
     case 'assets-add': {
       // v0.16.10（task-157 / M3）：repairRegistry:true + 无 source → 仅重建登记（客户端修复按钮）。
+      // v0.16.19（N1-H）：add-only 分类写通道 —— 单条 `{id, assetCategory}` / 批量 `{categoryUpdates}`（均无 source）。
+      // R-01b/R-25（v0.16.34 add-only）：normalizeSources / writeSchemaMeta / dryRun；默认路径完全不变。
       const hasSource = (input.asset && input.asset.source != null) || input.source != null
+      for (const key of ['normalizeSources', 'writeSchemaMeta', 'dryRun']) {
+        if (input[key] !== undefined && typeof input[key] !== 'boolean') {
+          return fail(400, 'invalid-args', `${key} 必须是布尔值`)
+        }
+      }
+      const normalizeSources = input.normalizeSources === true
+      const writeSchemaMeta = input.writeSchemaMeta === true
+      const dryRun = input.dryRun === true
+      if (store.isAssetCategoryUpdateInput(input)) {
+        if (hasSource || input.repairRegistry === true || normalizeSources || writeSchemaMeta || dryRun) {
+          return fail(400, 'invalid-args', 'assets-add 分类更新不能与 source / repairRegistry / normalizeSources / writeSchemaMeta / dryRun 同时提供')
+        }
+        const result = await store.setAssetCategories(root, input.title, input)
+        return { ok: true, ...result }
+      }
+      if (normalizeSources || writeSchemaMeta) {
+        if (hasSource) return fail(400, 'invalid-args', 'normalizeSources/writeSchemaMeta 不能与 source 同时提供')
+        const extra = { ok: true, dryRun }
+        if (normalizeSources) {
+          if (input.repairRegistry === true && dryRun) {
+            // dryRun 与 repair 组合：损坏时不写/不备份，直接返回既有 409 语义。
+            const state = await store.readAssetsState(root, input.title)
+            if (state.registryOk !== true) {
+              return fail(409, 'registry-corrupt', '素材登记损坏；dryRun 下不执行 repair（会备份/写盘），请去掉 repairRegistry 或先正式 repair')
+            }
+          } else if (input.repairRegistry === true) {
+            const readiness = await store.ensureRegistryReady(root, input.title, { repairRegistry: true })
+            if (readiness.registryRepaired) {
+              extra.registryRepaired = true
+              extra.rebuiltCount = readiness.rebuiltCount
+              extra.backup = readiness.backup || null
+            }
+          }
+          const normalized = await store.normalizeRegistrySources(root, input.title, { dryRun })
+          Object.assign(extra, {
+            registryNormalized: true,
+            normalizedCount: normalized.normalizedCount,
+            alreadyRelativeCount: normalized.alreadyRelativeCount,
+            total: normalized.total,
+            wrote: normalized.wrote,
+            backup: normalized.backup || extra.backup || null,
+          })
+        }
+        if (writeSchemaMeta) {
+          const written = await store.writeRegistryMeta(root, input.title, { dryRun })
+          extra.schemaMetaWritten = written.wrote
+          extra.schemaMeta = written.meta
+        }
+        return extra
+      }
       if (input.repairRegistry === true && !hasSource) {
         const readiness = await store.ensureRegistryReady(root, input.title, { repairRegistry: true })
         return {
@@ -800,7 +1389,9 @@ async function dispatch(method, input, root, scope, context = {}) {
           registryOk: true,
         }
       }
-      return { ok: true, asset: await store.addAsset(root, input.title, input.asset || input, { repairRegistry: input.repairRegistry === true }) }
+      const addInput = input.asset ? { ...input.asset } : { ...input }
+      if (Object.hasOwn(input, 'assetCategory') && !Object.hasOwn(addInput, 'assetCategory')) addInput.assetCategory = input.assetCategory
+      return { ok: true, asset: await store.addAsset(root, input.title, addInput, { repairRegistry: input.repairRegistry === true }) }
     }
 
     case 'assets-remove': {
@@ -837,6 +1428,40 @@ async function dispatch(method, input, root, scope, context = {}) {
             existing: (error && error.existing) || null,
           })
         }
+        if (code === 'template-exists') {
+          return reply(409, {
+            ok: false,
+            code: 'template-exists',
+            error: message,
+            existingTemplate: (error && error.existingTemplate) || null,
+            next: (error && error.next) || '如需覆盖请显式传 overwriteTemplate:true，或换一个名称',
+          })
+        }
+        if (code === 'template-limit') {
+          return reply(409, {
+            ok: false,
+            code: 'template-limit',
+            error: message,
+            limit: (error && error.limit) || 20,
+            next: (error && error.next) || '请先删除一个旧模板后再保存',
+          })
+        }
+        if (code === 'templates-corrupt') {
+          return reply(409, {
+            ok: false,
+            code: 'templates-corrupt',
+            error: message,
+            next: (error && error.next) || '请检查或删除项目内 .aidrama/import-templates.json 后重试（不自动覆盖）',
+          })
+        }
+        if (code === 'templates-save-failed' || code === 'templates-delete-failed' || code === 'templates-read-failed') {
+          return reply(500, {
+            ok: false,
+            code,
+            error: message,
+            next: (error && error.next) || '请确认项目 .aidrama 可写/可读后重试',
+          })
+        }
         if (code === 'too-large') return fail(413, 'too-large', message)
         if (code === 'invalid-args') return fail(400, 'invalid-args', message)
         if (code === 'not-found') return fail(404, 'not-found', message)
@@ -848,11 +1473,100 @@ async function dispatch(method, input, root, scope, context = {}) {
     // v0.15.1（task-110，H 类契约，Lead 批准）：本地图片只读通道（media-read，METHODS 68→69）
     case 'media-read': {
       try {
+        // v0.16.95（P0 / N1b/N2 add-only）：mode:'stream' 返回短期票据 URL；action:'reveal' 调原生 opener。METHODS 不变。
+        const hasMode = input.mode !== undefined
+        const hasAction = input.action !== undefined
+        if (hasMode || hasAction) {
+          if (hasMode && hasAction) return fail(400, 'invalid-args', 'mode 与 action 不能同时提供')
+          if (hasMode && input.mode !== 'stream') return fail(400, 'invalid-args', 'mode 仅支持 stream')
+          if (hasAction && input.action !== 'reveal') return fail(400, 'invalid-args', 'action 仅支持 reveal')
+          if (input.assetId != null) return fail(400, 'invalid-args', 'stream/reveal 仅支持项目内 path')
+          let title = typeof input.title === 'string' ? input.title.trim() : ''
+          if (!title) {
+            const projects = await store.listProjects(root)
+            if (projects.length === 1) title = projects[0].title
+            else return fail(400, 'invalid-args', projects.length ? '工作区有多个短剧项目，请指定 title' : '工作区没有短剧项目，请先创建项目')
+          }
+          if (hasMode) {
+            const hostGet = context && context.mediaStream && typeof context.mediaStream.getHostService === 'function'
+              ? context.mediaStream.getHostService
+              : () => undefined
+            const webServer = hostGet('webServer')
+            const connection = hostGet('connection')
+            if (!webServer || typeof connection?.authenticatedUrl !== 'function' || !webServer.port) {
+              return fail(501, 'unsupported', '当前宿主无浏览器 HTTP 服务，视频预览不可用（可打开文件夹）')
+            }
+            const ensureRoute = context && context.mediaStream && typeof context.mediaStream.ensureMediaStreamRoute === 'function'
+              ? context.mediaStream.ensureMediaStreamRoute
+              : () => false
+            if (!ensureRoute()) return fail(501, 'unsupported', '视频流路由不可用（webServer 未注册）')
+            const ticket = await media.issueMediaStreamTicket(root, title, { path: input.path })
+            const protocol = String(webServer.protocol || 'http:').replace(/:$/u, '')
+            const origin = `${protocol}://127.0.0.1:${webServer.port}`
+            const url = connection.authenticatedUrl(`${origin}${media.MEDIA_STREAM_PATH}?ticket=${encodeURIComponent(ticket.token)}`)
+            return { ok: true, stream: { url, token: ticket.token, mime: ticket.mime, size: ticket.size, name: ticket.name, expiresAt: ticket.expiresAt } }
+          }
+          const resolved = await media.resolveRevealMedia(root, title, { path: input.path })
+          const hostGet = context && context.mediaStream && typeof context.mediaStream.getHostService === 'function'
+            ? context.mediaStream.getHostService
+            : () => undefined
+          const sessionController = hostGet('sessionController')
+          let revealed = false
+          let reason = ''
+          let openerError = ''
+          if (sessionController && typeof sessionController.openWorkspacePath === 'function' &&
+            (typeof sessionController.canOpenWorkspacePath !== 'function' || sessionController.canOpenWorkspacePath() !== false)) {
+            // v0.16.267：Host 的 openWorkspacePath 需要 (request, signal)；缺 signal 会抛错 → 之前一律 opener-failed。
+            const openerController = new AbortController()
+            const openerTimer = setTimeout(() => { try { openerController.abort() } catch (error) { /* 忽略 */ } }, 8000)
+            try {
+              await sessionController.openWorkspacePath({ action: 'reveal', path: resolved.realTarget }, openerController.signal)
+              revealed = true
+            } catch (error) {
+              reason = 'opener-failed'
+              openerError = error && (error.message || error.code) ? String(error.message || error.code) : ''
+            } finally {
+              clearTimeout(openerTimer)
+            }
+          } else {
+            reason = 'unsupported'
+          }
+          return revealed ? { ok: true, revealed: true } : { ok: true, revealed: false, path: resolved.path, reason, openerError }
+        }
         return { ok: true, ...(await media.readMedia(root, input)) }
       } catch (error) {
         const code = error && typeof error.code === 'string' ? error.code : 'invalid-args'
-        const status = code === 'forbidden' ? 403 : code === 'not-found' ? 404 : code === 'too-large' ? 413 : 400
+        const status = code === 'forbidden' ? 403 : code === 'not-found' ? 404 : code === 'too-large' ? 413 : code === 'unsupported' ? 501 : 400
         return fail(status, code, error instanceof Error ? error.message : '读取图片失败')
+      }
+    }
+
+    case 'media-upload': {
+      // v0.16.96（D-0042）：站位图上传（add-only）；RC-24（v0.16.121 add-only）：项目封面 purpose:'cover'（remove:true 恢复默认）。
+      // RC-29（v0.16.135 add-only）：purpose:'asset' 接受候选图 → 素材/短剧资产 + 原子绑定 card.media（内部 txn）。
+      try {
+        if (input && input.purpose === 'asset') return { ok: true, ...(await assetMedia.uploadAssetImage(root, input)) }
+        if (input && input.purpose === 'cover') {
+          if (input.remove === true) return { ok: true, removed: (await media.removeProjectCover(root, input)).removed }
+          return { ok: true, ...(await media.uploadProjectCover(root, input)) }
+        }
+        return { ok: true, ...(await media.uploadStagingImage(root, input)) }
+      } catch (error) {
+        const code = error && typeof error.code === 'string' ? error.code : 'invalid-args'
+        const message = error instanceof Error ? error.message : '上传图片失败'
+        if (code === 'asset-locked') {
+          return reply(423, { ok: false, code: 'asset-locked', error: message, review: error.review || null, currentHash: error.currentHash || null, expectedHash: error.expectedHash || null })
+        }
+        if (code === 'conflict') {
+          return reply(409, { ok: false, code: 'conflict', error: message, currentHash: error.currentHash || null, ...(error.currentVersion !== undefined ? { currentVersion: error.currentVersion } : {}) })
+        }
+        const status = code === 'forbidden' ? 403
+          : code === 'not-found' ? 404
+            : code === 'exists' ? 409
+              : code === 'too-large' ? 413
+                : 400
+        if (code === 'exists') return reply(409, { ok: false, code: 'exists', error: message, next: '客户端确认覆盖后带 overwrite:true 重试' })
+        return fail(status, code, message)
       }
     }
 
@@ -954,6 +1668,7 @@ async function dispatch(method, input, root, scope, context = {}) {
         sha256: r.sha256,
         assetId: r.asset.id,
         asset: r.asset,
+        ...(r.versions ? { versions: r.versions } : {}),
         ...(r.registryRepaired ? { registryRepaired: true, rebuiltCount: r.rebuiltCount, backup: r.backup || null } : {}),
       }
     }
@@ -1056,8 +1771,65 @@ async function dispatch(method, input, root, scope, context = {}) {
     case 'settings-get':
       return { ok: true, settings: await store.getSettings(root) }
 
-    case 'settings-save':
-      return { ok: true, settings: await store.saveSettings(root, input.settings) }
+    case 'settings-save': {
+      const saved = await store.saveSettings(root, input.settings)
+      // v0.16.59（H-13r2 / S2）：保存后通知托管 provider invalidate → 下一次 Agent 步骤生效。
+      try { pluginHost?.notifySkillConfigChanged?.({ root, settings: saved }) } catch { /* 通知失败不阻断保存 */ }
+      // v0.16.156（P0-4）：面板 openProject 绑定后，按 transport sessionId 即时刷新对应 Agent 的上下文卡。
+      // 拿不到 agent/上下文桥时降级：绑定已保存，下一轮工具调用仍会按会话绑定生效。
+      try {
+        const transportSessionId = typeof input.sessionId === 'string' ? input.sessionId.trim() : ''
+        if (transportSessionId && runtimeContextBridge && typeof runtimeContextBridge.refreshAgentContext === 'function') {
+          const bindings = await store.readProjectSessions(root).catch(() => ({}))
+          const candidates = Object.entries(bindings)
+            .filter(([, entry]) => entry && String(entry.sessionId || '') === transportSessionId)
+            .sort((a, b) => {
+              const ta = Date.parse(a[1] && a[1].updatedAt) || Date.parse(a[1] && a[1].boundAt) || 0
+              const tb = Date.parse(b[1] && b[1].updatedAt) || Date.parse(b[1] && b[1].boundAt) || 0
+              return tb - ta
+            })
+          if (candidates.length) {
+            const agents = safeGet(scope, 'agents')
+            const agent = agents && typeof agents.get === 'function' ? agents.get(transportSessionId) : undefined
+            if (agent && contextByAgentHas(runtimeContextBridge, agent)) {
+              await runtimeContextBridge.refreshAgentContext(agent, candidates[0][0])
+            }
+          }
+        }
+      } catch { /* 刷新失败不阻断 settings-save */ }
+      return { ok: true, settings: saved }
+    }
+
+    case 'skills-inventory': {
+      // v0.16.59（H-12r1）：只读内置技能清单（无 sources）；provider 未就绪 → 降级 complete:false（不 5xx）。
+      // v0.16.63（D-0034 残留）：preset inventory 优先（挂载时含 active/enforced）；未挂载/已 dispose → host 自带兜底。
+      try {
+        const inventory = await context?.pluginHost?.skillInventory?.({ cwd: root })
+        if (inventory && typeof inventory === 'object') return { ok: true, inventory }
+      } catch { /* preset 未挂载或作用域已 dispose → 走 host 兜底 */ }
+      try {
+        const settings = await store.getSettings(root)
+        const inventory = await buildBundledSkillInventory({
+          skillsDir: SKILLS_DIR,
+          version: VERSION,
+          config: settings ? settings.skillConfig ?? null : null,
+        })
+        if (inventory) return { ok: true, inventory }
+      } catch { /* 兜底失败再落旧降级 */ }
+      return {
+        ok: true,
+        inventory: {
+          version: 4,
+          complete: false,
+          generatedAt: new Date().toISOString(),
+          package: null,
+          skills: [],
+          active: { story: null, asset: null, script: null },
+          recommended: { story: 'drama-episode', asset: 'drama-asset', script: 'drama-seedance-prompt' },
+          mode: 'unavailable',
+        },
+      }
+    }
 
     case 'progress-get':
       return { ok: true, progress: await store.getProgress(root, input.title) }
@@ -1089,13 +1861,133 @@ async function dispatch(method, input, root, scope, context = {}) {
 
     case 'export-project': {
       const format = input.format || 'markdown'
-      if (!EXPORT_FORMATS.includes(format)) throw new Error(`不支持的导出格式：${format}`)
-      const result = await exportProject(root, input.title, format)
+      if (!isExportFormat(format)) throw new Error(`不支持的导出格式：${format}`)
+      let backupOptions = {}
+      if (format === 'backup') {
+        for (const [key, label] of [['dryRun', 'dryRun'], ['includeMedia', 'includeMedia']]) {
+          if (input[key] !== undefined && typeof input[key] !== 'boolean') return fail(400, 'invalid-args', `${label} 必须是布尔值`)
+        }
+        const action = input.backupAction === undefined ? 'create' : String(input.backupAction)
+        if (!['create', 'verify'].includes(action)) return fail(400, 'invalid-args', 'backupAction 必须是 create/verify')
+        if (input.backupDir !== undefined && typeof input.backupDir !== 'string') return fail(400, 'invalid-args', 'backupDir 必须是字符串')
+        if (action === 'verify' && (!input.backupDir || !String(input.backupDir).trim())) return fail(400, 'invalid-args', 'verify 需要 backupDir')
+        backupOptions = { dryRun: input.dryRun === true, includeMedia: input.includeMedia === true, backupAction: action, backupDir: input.backupDir }
+      }
+      // C4b：manifest 透传 manifestFormat/字段开关；旧四格式 options 无副作用
+      let result
+      try {
+        result = await exportProject(root, input.title, format, {
+          manifestFormat: input.manifestFormat,
+          includeStyleChapter: input.includeStyleChapter,
+          includeAssets: input.includeAssets,
+          includeScenes: input.includeScenes,
+          includeTasks: input.includeTasks,
+          includeVoice: input.includeVoice,
+          // C5：SRT 按集导出（episode 必填正整数；由 exporter 校验并映射 400/404）
+          episode: input.episode,
+          ...backupOptions,
+        })
+      } catch (error) {
+        // v0.16.29（TPL-H / M6）：模板包导出的可读错误契约（其余格式/错误保持原路径）。
+        const code = error && typeof error.code === 'string' ? error.code : ''
+        const message = error instanceof Error ? error.message : '导出失败'
+        if (code === 'template-pack-empty') return fail(400, 'template-pack-empty', message)
+        if (code === 'templates-corrupt') {
+          return reply(409, {
+            ok: false,
+            code: 'templates-corrupt',
+            error: message,
+            next: '请检查或删除项目内 .aidrama/import-templates.json 后重试（不自动覆盖）',
+          })
+        }
+        if (code === 'forbidden') return fail(403, 'forbidden', message)
+        if (code === 'not-found') return fail(404, 'not-found', message)
+        if (code === 'templates-read-failed') {
+          return reply(500, { ok: false, code: 'templates-read-failed', error: message, next: '请确认项目 .aidrama 可读后重试' })
+        }
+        throw error
+      }
+      if (format === 'backup') {
+        if (result.verify) return { ok: true, export: { format: 'backup', verify: result.verify } }
+        return {
+          ok: true,
+          export: {
+            format: 'backup',
+            file: result.file,
+            bytes: result.bytes,
+            relative: result.file ? path.relative(root, result.file) : null,
+            backup: result.backup,
+          },
+        }
+      }
       // 契约冻结：route 响应只保留既有字段；T10 的 manifest/checks/verify 摘要只出现在
       // Agent 工具结果与内部 API 中，不改变已冻结的 HTTP 形状。
       return {
         ok: true,
         export: { format: result.format, file: result.file, bytes: result.bytes, relative: path.relative(root, result.file) },
+      }
+    }
+
+    case 'backup-restore': {
+      // v0.16.38（M8 阶段2，用户批准 METHODS 75）：list/preview/restore；不注册 Agent 工具。
+      const backupAction = input.backupAction === undefined ? 'preview' : String(input.backupAction)
+      if (!['list', 'preview', 'restore'].includes(backupAction)) {
+        return fail(400, 'invalid-args', 'backupAction 必须是 list/preview/restore')
+      }
+      for (const key of ['dryRun', 'confirm', 'includeMedia', 'summary', 'includeSummary']) {
+        if (input[key] !== undefined && typeof input[key] !== 'boolean') return fail(400, 'invalid-args', `${key} 必须是布尔值`)
+      }
+      if (input.expectedPlanHash !== undefined && typeof input.expectedPlanHash !== 'string') {
+        return fail(400, 'invalid-args', 'expectedPlanHash 必须是字符串')
+      }
+      if (backupAction === 'restore' && input.dryRun === false && !input.expectedPlanHash) {
+        return fail(400, 'plan-required', 'restore 需要先 preview 并传 expectedPlanHash')
+      }
+      try {
+        if (backupAction === 'list') {
+          const listed = await listBackups(root, input.title, { limit: input.limit, offset: input.offset })
+          return { ok: true, backupAction: 'list', ...listed }
+        }
+        if (backupAction === 'preview') {
+          return await previewRestore(root, input.title, {
+            backupDir: input.backupDir,
+            conflict: input.conflict,
+            includeMedia: input.includeMedia === true,
+            summary: input.summary,
+            includeSummary: input.includeSummary,
+          })
+        }
+        const restored = await restoreBackup(root, input.title, {
+          backupDir: input.backupDir,
+          conflict: input.conflict,
+          includeMedia: input.includeMedia === true,
+          confirm: input.confirm === true,
+          dryRun: input.dryRun === undefined ? true : input.dryRun,
+          expectedPlanHash: input.expectedPlanHash,
+          operationId: input.operationId,
+          summary: input.summary,
+          includeSummary: input.includeSummary,
+        })
+        return restored
+      } catch (error) {
+        const code = error && typeof error.code === 'string' ? error.code : 'failed'
+        const message = error instanceof Error ? error.message : '恢复失败'
+        const status = code === 'forbidden' ? 403
+          : code === 'not-found' ? 404
+            : code === 'plan-stale' || code === 'restore-conflict' || code === 'conflict' ? 409
+              : code === 'invalid-args' || code === 'plan-required' || code === 'media-restore-not-enabled' ? 400
+                : 500
+        return reply(status, {
+          ok: false,
+          code,
+          error: message,
+          ...(error && error.currentPlanHash ? { currentPlanHash: error.currentPlanHash } : {}),
+          ...(backupAction === 'restore' ? { rolledBack: error && error.rolledBack === true, preRestoreBackup: error && error.preRestoreBackup ? error.preRestoreBackup : null } : {}),
+          ...(error && Array.isArray(error.conflicts) ? { conflicts: error.conflicts } : {}),
+          ...(error && Array.isArray(error.missing) ? { missing: error.missing } : {}),
+          ...(error && Array.isArray(error.unexpected) ? { unexpected: error.unexpected } : {}),
+          ...(error && error.rollbackError ? { rollbackError: error.rollbackError } : {}),
+        })
       }
     }
 
@@ -1157,15 +2049,42 @@ async function resolveManagedWorkspaceRoots(scope, config, input, resolved) {
   return roots.slice(0, 20)
 }
 
-function createHandler(scope, config, pluginCtx) {
+function createHandler(scope, config, pluginCtx, pluginHost) {
+  const mediaStreamState = pluginHost && pluginHost.mediaStream ? pluginHost.mediaStream : { disposer: null, registered: false }
+  const getHostService = (serviceName) => safeGet(scope, serviceName) || safeGet(pluginCtx, serviceName)
+  // v0.16.95（N1b add-only）：webServer 原生 GET/HEAD 路由按需注册（headless/webServer 缺失时降级）。
+  const ensureMediaStreamRoute = () => {
+    if (mediaStreamState.registered) return true
+    const webServer = getHostService('webServer')
+    if (!webServer || typeof webServer.register !== 'function') return false
+    try {
+      mediaStreamState.disposer = webServer.register({
+        kind: 'exact',
+        path: media.MEDIA_STREAM_PATH,
+        handler: media.createMediaStreamHandler(),
+      })
+      mediaStreamState.registered = true
+      return true
+    } catch {
+      return false
+    }
+  }
   return async (request) => {
     if (request.method !== 'POST' || request.headers.get('x-ai-drama-request') !== '1') {
       return fail(403, 'forbidden', '请求来源不被允许')
     }
+    // v0.16.24（Phase1/H-11）：method/input/resolved 提到 try 外声明——409 currentHash 补读需在 catch 中读取 resolved.cwd
+    let method = ''
+    let input = {}
+    let resolved = null
     try {
       // v0.15.11（task-134 / IMP-H）：先取 method，仅 assets-import 走受限 body 读取（70MB 上限 → 413）
-      const method = new URL(request.url).pathname.slice(API_PATH.length)
-      const input = await readRequest(request, method === 'assets-import' ? { maxBytes: IMPORT_REQUEST_MAX_BYTES } : undefined)
+      method = new URL(request.url).pathname.slice(API_PATH.length)
+      input = await readRequest(request, method === 'assets-import'
+        ? { maxBytes: IMPORT_REQUEST_MAX_BYTES }
+        : method === 'media-upload'
+          ? { maxBytes: MEDIA_UPLOAD_REQUEST_MAX_BYTES }
+          : undefined)
       if (!METHODS.includes(method)) return fail(404, 'not-found', `未知方法：${method}`)
 
       if (method === 'ping') return reply(200, { ok: true, name, version: VERSION })
@@ -1193,7 +2112,7 @@ function createHandler(scope, config, pluginCtx) {
         return reply(200, { ok: true, sources: listed.sources, degraded: listed.degraded })
       }
 
-      const resolved = await resolveWorkspaceRoot(scope, input, config)
+      resolved = await resolveWorkspaceRoot(scope, input, config)
       if (!resolved.cwd) {
         return fail(409, 'no-workspace', '未能确定工作区目录。请在 DSH 中打开一个工作区后重试，或在插件配置中指定 root。')
       }
@@ -1228,6 +2147,19 @@ function createHandler(scope, config, pluginCtx) {
         }
       }
 
+      // v0.16.96（D-0042）：media-upload 项目不存在 → 404（先于写事务预检，保持契约错误码）。
+      if (method === 'media-upload' && typeof input.title === 'string' && input.title.trim()) {
+        let targetDir = null
+        try {
+          targetDir = store.projectDir(resolved.cwd, input.title)
+        } catch {
+          targetDir = null
+        }
+        if (targetDir && !(await store.isDirectory(targetDir).catch(() => false))) {
+          return fail(404, 'not-found', '短剧项目不存在')
+        }
+      }
+
       // P1-K / T2：写路由统一包项目事务（项目锁 + 审计；可选 operationId 幂等 / expectedHash 乐观锁）。
       // H-5（PM 登记、Lead 追认）：不传新字段时行为与旧版完全一致。
       // v0.16.7（task-144 / C2-H）：source 模式 assets-import 计算受管项目根（只读发现；不影响其它方法）。
@@ -1235,10 +2167,11 @@ function createHandler(scope, config, pluginCtx) {
         'sourceProjectId', 'sourceAssetIds', 'sourceCardIds', 'sourceSceneIds', 'copyStyleDNA',
       ].some((key) => input[key] !== undefined)
       const managedRoots = importedFromSourceMode ? await resolveManagedWorkspaceRoots(scope, config, input, resolved) : null
-      const dispatchContext = { config, managedRoots }
+      const dispatchContext = { config, managedRoots, pluginHost, mediaStream: { getHostService, ensureMediaStreamRoute } }
       const writeTargets = WRITE_TARGETS[method]
+      const readOnlyDryRun = method === 'assets-add' && input.dryRun === true && (input.normalizeSources === true || input.writeSchemaMeta === true)
       const txnTitle = typeof input.title === 'string' ? input.title.trim() : ''
-      const txnTargets = typeof writeTargets === 'function' ? writeTargets(input) : writeTargets
+      const txnTargets = readOnlyDryRun ? null : (typeof writeTargets === 'function' ? writeTargets(input) : writeTargets)
       let value
       if (txnTargets && txnTitle) {
         value = await txn.runProjectTxn(
@@ -1250,7 +2183,19 @@ function createHandler(scope, config, pluginCtx) {
             targets: txnTargets,
             operationId: typeof input.operationId === 'string' ? input.operationId : '',
             // doc-save 自己处理 expectedHash（冲突响应需要带 currentHash，形状与 H-5 通用 conflict 不同）
-            expectedHash: method === 'doc-save' ? undefined : input.expectedHash && typeof input.expectedHash === 'object' ? input.expectedHash : undefined,
+            // v0.16.24（Phase1 / H-11）：asset-audio-save 的 expectedHash 为 string|null（E17b audioBindingsHash）→ 映射为 txn 对象
+            // 非法类型不交给 txn（保持 400 invalid-args 而非 409）；合法值统一小写后比对。
+            expectedHash: method === 'doc-save'
+              ? undefined
+              : method === 'asset-audio-save'
+                ? (() => {
+                    const raw = input.expectedHash
+                    if (raw === undefined) return undefined
+                    if (raw === null) return { '.aidrama/assets/voice-bindings.json': null }
+                    if (typeof raw === 'string' && /^[0-9a-f]{64}$/i.test(raw.trim())) return { '.aidrama/assets/voice-bindings.json': raw.trim().toLowerCase() }
+                    return undefined
+                  })()
+                : input.expectedHash && typeof input.expectedHash === 'object' ? input.expectedHash : undefined,
           },
           () => dispatch(method, input, resolved.cwd, scope, dispatchContext),
         )
@@ -1276,7 +2221,9 @@ function createHandler(scope, config, pluginCtx) {
         }
         const flowStep =
           method === 'draft-resolve' ? deriveDraftFlowStepFromValue(value) : ROUTE_FLOW_STEPS[method] || ''
-        if (flowStep) {
+        // R-10：backup create/verify 都必须保持源 .aidrama 只读；不进入既有“导出→flow-state”路由副作用。
+        const backupNoFlow = method === 'export-project' && input && input.format === 'backup'
+        if (flowStep && !backupNoFlow) {
           const flowTitle = txnTitle || (typeof input.title === 'string' ? input.title.trim() : '')
           try {
             await flowState.syncAfterContentWrite(resolved.cwd, flowTitle, {
@@ -1296,7 +2243,30 @@ function createHandler(scope, config, pluginCtx) {
       // 其它参数/业务错误保持旧语义（HTTP 400 + code:'failed'），不改变既有行为。
       if (error && error.code === 'conflict') {
         const next = typeof error.next === 'string' && error.next ? `（下一步：${error.next}）` : ''
-        return reply(409, { ok: false, code: 'conflict', error: `${message}${next}`, currentHash: error.currentHash || null })
+        let currentHash = error.currentHash || null
+        let conflictHashes = null
+        // v0.16.24（Phase1 / H-11）：txn.conflictError 不附 currentHash → 补读 sidecar 当前 hash（仅 H-11）
+        if (!currentHash && method === 'asset-audio-save' && resolved && resolved.cwd && typeof input.title === 'string') {
+          try {
+            currentHash = (await audioBindings.readDoc(resolved.cwd, input.title)).hash
+          } catch {
+            currentHash = null
+          }
+        }
+        // v0.16.95（P0 写面 add-only）：storyboard 409 回读 currentHash + hashes，供 client 载入最新/合并。
+        if (method === 'storyboard-save' && resolved && resolved.cwd && typeof input.title === 'string') {
+          try {
+            conflictHashes = await store.readStoryboardHashes(resolved.cwd, input.title, input.order)
+            if (!currentHash) currentHash = conflictHashes.storyboard || null
+          } catch {
+            conflictHashes = null
+          }
+        }
+        return reply(409, { ok: false, code: 'conflict', error: `${message}${next}`, currentHash, ...(conflictHashes ? { hashes: conflictHashes } : {}), ...(error && error.currentVersion !== undefined ? { currentVersion: error.currentVersion } : {}) })
+      }
+      // v0.16.24（Phase1 / A3 裁定）：asset-audio-save 遇 registry 损坏 → 400 registry-corrupt 且不写盘（不沿用 assets-import 的 409 语义）
+      if (error && error.code === 'registry-corrupt' && method === 'asset-audio-save') {
+        return fail(400, 'registry-corrupt', message)
       }
       if (error && error.code === 'registry-corrupt') {
         return reply(409, {
@@ -1306,6 +2276,19 @@ function createHandler(scope, config, pluginCtx) {
           backup: error.backup || null,
           registryWarning: error.registryWarning || null,
           next: error.next || '可带 repairRegistry:true 重建后重试',
+        })
+      }
+      // v0.16.194（P0-③）：删除被镜头绑定的状态 → 409 state-in-use（附引用列表；零写）
+      if (error && error.code === 'state-in-use') {
+        const references = Array.isArray(error.references) ? error.references : []
+        return reply(409, {
+          ok: false,
+          code: 'state-in-use',
+          error: message,
+          cardId: error.cardId || null,
+          stateId: error.stateId || null,
+          references,
+          referencesCount: references.length,
         })
       }
       // P2-5（v0.6.6）：参数校验错误明确映射 invalid-args（如 settings.generationLimits 非法值）
@@ -1421,6 +2404,8 @@ function attachAgentTools(ctx, config, host) {
       backendOf: (id) => (host && host.backends ? host.backends.get(id) : null),
       // P2-3（task-26）：AI 审读测试注入缝 —— 生产环境返回宿主 llm 服务；QA 可用 fake llm 直接注入 createToolDefs。
       llmOf: () => getService('llm'),
+      // v0.16.128：会话附件 → 风格参考；仅 service 可用时 drama_add_asset attachmentId 分支生效。
+      attachmentsOf: () => getService('attachments'),
       modelSelectionOf: () => {
         const service = getService('agentDefaultModel')
         try {
@@ -1556,16 +2541,28 @@ function attachAgentTools(ctx, config, host) {
     const root = agentRootOf(agent)
     if (!root) return
     try {
-      let title = String(titleHint || state.project || '')
-      if (!title) {
-        const projects = await store.listProjects(root).catch(() => [])
-        title = projects.length ? projects[0].title : ''
-      }
-      if (!title) {
+      const header = agent && agent.session && agent.session.header ? agent.session.header : null
+      const sessionId = header && typeof header.id === 'string' ? header.id.trim() : ''
+      const projects = await store.listProjects(root).catch(() => [])
+      const bindings = await store.readProjectSessions(root).catch(() => ({}))
+      // v0.16.156（P0-1）：显式 title > 会话绑定 > 唯一项目 > unbound；禁止 listProjects()[0] mtime 回退。
+      const resolved = resolveCurrentProject({
+        titleHint: typeof titleHint === 'string' ? titleHint.trim() : '',
+        sessionId,
+        projects,
+        bindings,
+      })
+      if (!resolved.title) {
         state.project = ''
-        state.text = buildDramaContextCard({ lastWrite: state.lastWrite })
+        state.text = buildDramaContextCard({
+          source: resolved.source,
+          sessionId,
+          projectCount: resolved.projectCount,
+          lastWrite: state.lastWrite,
+        })
         return
       }
+      const title = resolved.title
       const [progress, contract, outline, characters, memory, episodes] = await Promise.all([
         store.getProgress(root, title).catch(() => ({})),
         store.getContract(root, title).catch(() => ({})),
@@ -1575,7 +2572,20 @@ function attachAgentTools(ctx, config, host) {
         store.listEpisodes(root, title).catch(() => []),
       ])
       state.project = title
-      state.text = buildDramaContextCard({ title, progress, contract, outline, characters, memory, episodes, lastWrite: state.lastWrite })
+      state.text = buildDramaContextCard({
+        title,
+        source: resolved.source,
+        sessionId,
+        projectCount: resolved.projectCount,
+        progress,
+        contract,
+        outline,
+        characters,
+        memory,
+        episodes,
+        activeWarnings: (await buildBundledSkillInventory({ skillsDir: SKILLS_DIR, version: VERSION, config: (await store.getSettings(root).catch(() => null))?.skillConfig ?? null }).catch(() => null))?.activeWarnings,
+        lastWrite: state.lastWrite,
+      })
     } catch {
       /* 上下文刷新失败不影响主流程 */
     }
@@ -1593,11 +2603,14 @@ function attachAgentTools(ctx, config, host) {
         summary: summarizeWriteFeedback(toolName, args || {}, result),
         at: new Date().toISOString(),
       }
-      await refreshAgentContext(agent, titleHint || state.project)
+      await refreshAgentContext(agent, titleHint)
       return
     }
     if (titleHint && titleHint !== state.project) await refreshAgentContext(agent, titleHint)
   }
+
+  // v0.16.156：暴露给模块级 dispatch（settings-save 后即时刷新对应会话卡；不新增 API）。
+  runtimeContextBridge = { refreshAgentContext, contextByAgent }
 
   function detachContext(agentId) {
     const state = contextByAgent.get(agentId)
@@ -1663,7 +2676,6 @@ function attachAgentTools(ctx, config, host) {
       'drama_list_projects',
       'drama_get_project',
       'drama_get_progress',
-      'drama_list_drafts',
       'drama_list_assets',
       'drama_list_finalized',
       'drama_get_ledger',
@@ -1734,8 +2746,16 @@ function attachAgentTools(ctx, config, host) {
       drama_save_characters: () => ['人物/人物设定卡.md', '.aidrama/characters.json'],
       drama_save_memory: () => ['本剧记忆/本剧记忆.md', '.aidrama/memory.json'],
       drama_save_world: () => ['世界观/世界观.md', '.aidrama/world.json'],
-      drama_save_draft: () => ['.aidrama/drafts'],
-      drama_resolve_draft: () => ['.aidrama/drafts'],
+      drama_write_content: (args) => {
+        const kind = args && args.kind
+        if (kind === 'contract') return ['剧集契约.md', '.aidrama/contract.json']
+        if (kind === 'outline') return ['总纲/分集大纲.md', '.aidrama/outline.json']
+        if (kind === 'characters') return ['人物/人物设定卡.md', '.aidrama/characters.json']
+        if (kind === 'episode') return ['分集剧本']
+        if (kind === 'storyboard') return ['分镜', '.aidrama/storyboard']
+        if (kind === 'file' && args && args.path) return [String(args.path)]
+        return null
+      },
       drama_finalize_episode: () => ['定稿/定稿记录.md', '.aidrama/finalized.json'],
       drama_import_script: (args) => (args && args.action === 'apply' ? ['分集剧本'] : null),
       drama_add_asset: () => ['.aidrama/assets.json', '素材/素材清单.md'],
@@ -1884,7 +2904,7 @@ function attachAgentTools(ctx, config, host) {
 const GENERATIVE = {
   大纲: '分集大纲（每集：标题 / 一句话梗概 / 开场钩子 / 中段反转 / 结尾悬念 / 预计时长）',
   人物: '人物设定卡（姓名 / 身份 / 性格关键词 / 小传 / 形象提示词 / 音色）',
-  世界观: '世界观设定（地点 / 组织 / 规则 / 道具 / 时间线）',
+  世界观: '世界观设定（8 大类：天地地理 / 时间历史 / 力量法则 / 种族物种 / 社会政体 / 文化信仰 / 资源物产 / 冲突矛盾；可加道具/服饰等 extension 标签）',
   剧本: '指定集数的场次化剧本',
   分镜: '指定集数的分镜表（镜号 / 景别 / 运镜 / 画面 / 台词 / 音效 / 时长 / 提示词）',
   润色: '选中范围的台词润色（只改表达，不改剧情）',
@@ -2035,7 +3055,7 @@ async function runDramaCommand(invocation, resolveRoot) {
         title ? `目标短剧：《${title}》。` : '',
         `需要产出：${GENERATIVE[sub]}。`,
         ask ? `补充要求：${ask}` : '',
-        '生成结果请先用 drama_save_draft 写入草稿区，再由我在面板中采纳；交付前用 drama_check_consistency 自检并把问题清单一并报给我。',
+        '生成结果请先用 drama_write_content 写入正式稿；交付前用 drama_check_consistency 自检并把问题清单一并报给我。',
       ].filter(Boolean).join('\n')
       await enqueuePrompt(agent, text)
       return { kind: 'success', text: `已把「${sub}」请求交给 Agent${title ? `（《${title}》）` : ''}，稍候查看草稿区。` }
@@ -2122,11 +3142,80 @@ export function apply(ctx, config = {}) {
       command: { name: 'drama', registered: host.commandRegistered },
       presetProbe: host.presetProbe ? host.presetProbe() : null,
     }),
+    // v0.16.95（N1b add-only）：media-stream 原生路由状态（按需注册/释放）。
+    mediaStream: { disposer: null, registered: false },
+    // v0.16.59（Skill 管理 P0）：预设托管 provider ↔ 主插件 的内部桥（非 HTTP 契约）。
+    skillListeners: new Set(),
+    skillInventory: null,
+    setSkillInventory: (fn) => {
+      host.skillInventory = typeof fn === 'function' ? fn : null
+    },
+    onSkillConfigChanged: (listener) => {
+      if (typeof listener !== 'function') return () => {}
+      host.skillListeners.add(listener)
+      return () => { host.skillListeners.delete(listener) }
+    },
+    notifySkillConfigChanged: (payload) => {
+      for (const listener of [...host.skillListeners]) {
+        try { listener(payload) } catch { /* 单个监听器异常不影响保存 */ }
+      }
+    },
+    getSkillConfig: async (cwd) => {
+      if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return null
+      try { return await store.getSettings(cwd) } catch { return null }
+    },
   }
   ctx.provide('aiDramaHost', host)
 
+  // RC-47（v0.16.168）：host 后台取回 worker。单 interval；初始化立即扫 sidecar；
+  // status/assets 接口会 enqueueProject 懒恢复；dispose 通过 effect 清理。测试/特殊上下文可 config 关闭。
+  if (config.assetGenerationBackground !== false) {
+    const pluginGet = (name) => {
+      try {
+        if (typeof ctx.get === 'function') return ctx.get(name)
+      } catch { /* ignore */ }
+      return undefined
+    }
+    const discoverRoots = async () => {
+      const roots = new Set()
+      if (typeof config.root === 'string' && path.isAbsolute(config.root)) roots.add(config.root)
+      const registry = pluginGet('workspaceRegistry') || (ctx && ctx.workspaceRegistry)
+      if (registry && typeof registry.list === 'function') {
+        try {
+          for (const record of await registry.list()) {
+            if (record && typeof record.path === 'string' && path.isAbsolute(record.path)) roots.add(record.path)
+          }
+        } catch { /* workspaceRegistry 暂不可用：等 interval 再试 */ }
+      }
+      const agentsService = pluginGet('agents') || (ctx && ctx.agents)
+      if (agentsService && typeof agentsService.list === 'function') {
+        try {
+          for (const agent of await agentsService.list()) {
+            const cwd = agent && agent.session && agent.session.header ? agent.session.header.cwd : undefined
+            if (typeof cwd === 'string' && path.isAbsolute(cwd)) roots.add(cwd)
+          }
+        } catch { /* ignore */ }
+      }
+      return [...roots]
+    }
+    try {
+      const scheduler = createAssetGenerationScheduler({
+        getRoots: discoverRoots,
+        registry: host.backends,
+        logger: ctx.logger,
+      })
+      host.assetScheduler = scheduler
+      scheduler.start()
+      try {
+        ctx.effect(() => () => scheduler.stop(), 'ai-drama: asset generation background worker')
+      } catch { /* 无 effect 能力的测试上下文 */ }
+    } catch (error) {
+      ctx.logger?.warn?.(`[ai-drama] 后台取回调度器启动失败：${error instanceof Error ? error.message : error}`)
+    }
+  }
+
   ctx.inject(['connection'], (scope) => {
-    const handler = createHandler(scope, config, ctx)
+    const handler = createHandler(scope, config, ctx, host)
     for (const method of METHODS) {
       scope.connection.fetch.register({
         path: API_PATH + method,
@@ -2160,6 +3249,17 @@ export function apply(ctx, config = {}) {
   } catch (error) {
     ctx.logger?.warn?.(`[ai-drama] 预设探针挂载失败：${error instanceof Error ? error.message : error}`)
   }
+
+  // v0.16.95（N1b add-only）：释放按需注册的 media-stream 原生路由。
+  try {
+    ctx.effect(() => () => {
+      const state = host.mediaStream
+      if (!state || typeof state.disposer !== 'function') return
+      try { state.disposer() } catch { /* 释放失败不影响卸载 */ }
+      state.disposer = null
+      state.registered = false
+    }, 'ai-drama: media-stream route')
+  } catch { /* 无 effect 能力的测试上下文忽略 */ }
 }
 
 export { METHODS, VERSION }
