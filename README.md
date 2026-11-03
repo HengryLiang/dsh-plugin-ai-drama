@@ -4,6 +4,8 @@
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![topic: dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-6f42c1)](https://github.com/topics/dsh-plugin)
 
+**交流与支持**：[联系作者（微信）](#联系与交流) · [赞助支持](#赞助支持) · [商业合作与定制](#商业合作与定制)
+
 > DeepSeek Harness（DSH）插件：把 AI 短剧的 **立项 → 总纲 → 人物 → 世界观 → 剧本 → 分镜 → 生成 → 导出** 收进侧栏工作区，
 > 并附带「短剧模式」Agent 预设——**35 个 `drama_*` 工具**、**10 个随包技能**、**72 个宿主路由**、**13 页签面板**，
 > 以及与 LibTV / NeoWoW 画布 CLI 对接的生成编排适配层。
@@ -330,6 +332,39 @@ CI：GitHub Actions 上跑 Node 22 / 24 × Windows / Ubuntu 组合（见 `.githu
 - **媒体只读且仅项目内**：`media-read` 只读项目内文件，不写盘、不缓存、不接受绝对路径；
 - **历史上传的外部登记**：迁移期只读兼容，新登记一律要求项目内路径。
 
+## 联系与交流
+
+使用问题、需求反馈、插件玩法交流，欢迎扫码添加作者微信（添加请备注「DSH 短剧」，方便通过）：
+
+<img src="assets/wechat-contact.jpg" alt="作者微信：xi2xi-AIGC" width="220">
+
+> 也可以直接在 GitHub 提 [Issue](https://github.com/HengryLiang/dsh-plugin-ai-drama/issues)，公开问题优先走 Issue，方便后来者检索。
+
+## 赞助支持
+
+如果这个插件对你有帮助，欢迎**自愿赞助**，支持后续维护、更新与文档完善：
+
+<img src="assets/sponsor-wechat-pay.jpg" alt="微信支付赞助（自愿）" width="260">
+
+- 赞助完全自愿，**不影响任何功能**，也不影响开源许可；
+- 个人使用始终免费；不想赞助也完全可以正常用全部开源功能。
+
+## 商业合作与定制
+
+本项目采用「**开源免费 + 付费支持**」并行模式：
+
+| 场景 | 说明 |
+|---|---|
+| 个人使用 | 免费，MIT 开源，保留版权与许可声明即可 |
+| 团队 / 企业内部使用 | 免费，可自行部署与修改 |
+| 企业商用定制 | 专属功能开发、私有化部署、与既有画布 / 资产库 / 工作流集成 |
+| 技术支持 | 紧急排障、版本升级适配、专属答疑与响应保障 |
+
+付费购买的是「**额外定制 + 响应保障**」，不是功能解锁——开源版本已经包含全部插件功能。
+有需要可通过上方微信联系（备注「DSH 短剧合作」）。
+
 ## 许可
 
 [MIT](LICENSE) © 2026 HengryLiang
+
+开源免费与付费定制并行：个人与内部使用免费，商业定制 / 专属支持为可选的付费服务，不影响开源自许可。
