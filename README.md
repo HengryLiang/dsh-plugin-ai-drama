@@ -79,7 +79,7 @@ dsh plugin --profile <profile> add github:HengryLiang/dsh-plugin-ai-drama#v0.16.
 
 ```sh
 curl -L -o dsh-plugin-ai-drama.tgz \
-  https://github.com/HengryLiang/dsh-plugin-ai-drama/releases/latest/download/dsh-plugin-ai-drama.tgz
+  https://github.com/HengryLiang/dsh-plugin-ai-drama/releases/download/v0.16.279/dsh-plugin-ai-drama-0.16.279.tgz
 dsh plugin --profile <profile> add ./dsh-plugin-ai-drama.tgz
 ```
 
