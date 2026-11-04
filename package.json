@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-ai-drama",
-  "version": "0.16.279",
+  "version": "0.16.281",
   "type": "module",
   "description": "DeepSeek Harness 插件：AI 短剧工作区（立项 / 总纲 / 人物 / 剧本 / 分镜 / 素材 / 导出）+「短剧模式」Agent 预设（33 个 drama_* 工具、19 个随包技能、14 页签面板）",
   "main": "index.js",

@@ -16,7 +16,7 @@
 > safe local media access, asset import / cross-project reuse / multi-round review, shot-prompt import / VCS export,
 > and adapters that drive external canvas CLIs (LibTV / NeoWoW). UI and docs are in Chinese.
 
-> 当前版本：**v0.16.279**（本地最新开发线同步构建）。个人使用免费；企业定制 / 专属支持见文末「商业合作与定制」。
+> 当前版本：**v0.16.281**（本地最新开发线同步构建）。个人使用免费；企业定制 / 专属支持见文末「商业合作与定制」。
 
 ---
 
@@ -70,7 +70,7 @@
 ### 方式一：直接从 GitHub 安装（推荐）
 
 ```sh
-dsh plugin --profile <profile> add github:HengryLiang/dsh-plugin-ai-drama#v0.16.279
+dsh plugin --profile <profile> add github:HengryLiang/dsh-plugin-ai-drama#v0.16.281
 ```
 
 `<profile>` 换成你的 profile 名（`dsh web` 对应 `web`，桌面端通常是 `desktop`）。首次使用 `dsh plugin` 会自动创建 profile。
@@ -79,7 +79,7 @@ dsh plugin --profile <profile> add github:HengryLiang/dsh-plugin-ai-drama#v0.16.
 
 ```sh
 curl -L -o dsh-plugin-ai-drama.tgz \
-  https://github.com/HengryLiang/dsh-plugin-ai-drama/releases/download/v0.16.279/dsh-plugin-ai-drama-0.16.279.tgz
+  https://github.com/HengryLiang/dsh-plugin-ai-drama/releases/download/v0.16.281/dsh-plugin-ai-drama-0.16.281.tgz
 dsh plugin --profile <profile> add ./dsh-plugin-ai-drama.tgz
 ```
 
@@ -189,7 +189,7 @@ dsh --profile <profile> --dump-config    # 应出现 "# == dsh-plugin-ai-drama" 
 - **视觉圣经**：场景卡（`.aidrama/scenes/cards.json`，零相机锁合）、五维风格 DNA（`.aidrama/style.json`）；
   风格支持 **定向 → 冻结 → 解冻** 状态机（`style-save`：423 硬锁、409 expectedHash 冲突检测、解冻审计）。
 
-## 素材与媒体（v0.15.8 – v0.16.279）
+## 素材与媒体（v0.15.8 – v0.16.281）
 
 - **登记仅项目内**：新登记只接受项目内路径；项目外绝对路径 / `..` / UNC / symlink 逃逸一律拒绝且不写盘；
   历史外部登记在迁移期只读兼容（客户端标注「外部路径（待迁移）」，并提供扫描/一键导入迁移路径）；
@@ -325,7 +325,7 @@ npm test        # 公开仓库结构 smoke（test/public-smoke.mjs，不依赖�
 内部路径泄漏与运行时导出检查，可在任意机器与 CI 上运行
 （GitHub Actions：Node 22 / 24 × Windows / Ubuntu）。
 
-> 完整插件行为测试套件（166 个套件，含真实样例数据与历史基线夹具）在作者开发环境中运行，
+> 完整插件行为测试套件（167 个套件，含真实样例数据与历史基线夹具）在作者开发环境中运行，
 > 依赖本机样例与证据目录，因此不随公开仓库分发。安装后的实际体验以你所在环境的运行结果为准。
 
 ## 兼容性
