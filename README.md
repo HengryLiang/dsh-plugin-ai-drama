@@ -13,10 +13,10 @@
 > English: An AI short-drama workspace plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 > Sidebar + main-panel workspace covering the full short-drama pipeline, a dedicated `drama` agent preset with
 > 33 agent tools, 19 bundled skills, a `/drama` slash command, criteria/quality gates, an asset & style system,
-> safe local media access, asset import / cross-project reuse / multi-round review, shot-prompt import / VCS export,
+> safe local media access, asset import / cross-project reuse / asset locking, shot-prompt import / VCS export,
 > and adapters that drive external canvas CLIs (LibTV / NeoWoW). UI and docs are in Chinese.
 
-> 当前版本：**v0.16.281**（本地最新开发线同步构建）。个人使用免费；企业定制 / 专属支持见文末「商业合作与定制」。
+> 当前版本：**v0.16.319**（本地最新开发线同步构建）。个人使用免费；企业定制 / 专属支持见文末「商业合作与定制」。
 
 ---
 
@@ -41,20 +41,20 @@
 |---|---|
 | 工作区与导航 | 侧栏「AI 短剧」+ 中央面板 **14 页签 / 4 组**：创作（世界观 / 总纲 / 人物 / 剧本 / 分镜 / **视觉圣经**）、资料（素材库 / 记忆 / 草稿 / 账本）、交付（生成 / 检查导出）、高级（目录 / 工具卡）；窄窗「更多」收纳、键盘导航、页签关闭兜底 |
 | 项目与工作台 | 新建 / 打开 / 重命名 / 删除；固定文件夹规范（v0.16.94）；**项目封面自定义**（`media-upload` cover）；目录树（展开折叠持久化）；全文检索；**多数据源**（工作区 / 会话 / 手动）；**项目 ↔ 会话绑定**；旧项目数据目录提示 |
-| 内容·契约与设定 | 剧集契约 + **八大基本设定**（地理与空间 / 时间与历史 / 力量体系 / 种族与生态 / 社会与势力 / 资源与经济 / 文化与信仰 / 灵魂·生死·因果，add-only、各有上限）；**世界观 v3 三级标签**（分类 chips / 搜索 / 分组 / 二级页签 / 删除 → 未分级）；**总纲分类**（分集主从 / 搜索 / 时长 / 表格） |
-| 内容·人物 / 剧本 / 分镜 | 人物设定卡（多状态卡 / 状态绑定 / 音色绑定）；分集剧本（台词视图、剧本页资产模块）；分镜可选字段 + **情绪总控分组 sidecar**；分镜删除（非阻塞）/ `groupIdEdits` 双向同步 / 结构化状态绑定 / 生成到状态；**拍摄组多镜 4–30s 技术校验 + Seedance 默认** |
+| 内容·契约与设定 | 剧集契约 + **八大基本设定**（地理与空间 / 时间与历史 / 力量体系 / 种族与生态 / 社会与势力 / 资源与经济 / 文化与信仰 / 灵魂·生死·因果，add-only、各有上限）；**世界观 v3 三级标签**（分类 chips / 搜索 / 分组 / 二级页签 / 删除 → 未分级）；**总纲分类**（分集主从 / 搜索 / 时长 / 表格）；世界观条目 / 规则 / 总述字数上限放宽至 **5000**（v0.16.294） |
+| 内容·人物 / 剧本 / 分镜 | 人物设定卡（多状态卡 / 状态绑定 / 音色绑定）；分集剧本（台词视图、剧本页资产模块）；分镜可选字段 + **情绪总控分组 sidecar**；分镜删除（非阻塞）/ `groupIdEdits` 双向同步 / 结构化状态绑定 / 生成到状态；**拍摄组多镜 4–30s 技术校验 + Seedance 默认**；**批注（含删除）+ 提交优化指令**；Agent 剧本草稿有实际改动自动落正式稿（无审核流程） |
 | 台词与音效 | 台词并入「剧本」视图；配音稿导出；角色卡音频（`media.audio`）与 `<audio>` 多段试听；角色音色手动绑定；`audio-bindings` 声音绑定；旧 `dialogue` 深链自动重定向 |
 | 素材库 | 素材登记**仅项目内**；`media-read` / `media-upload` 安全通道；扫描素材目录（分类过滤 / 惰性加载 / 批量登记）；**一键导入**（≤50MB/件、SHA 去重、同名 `(2)`、失败回滚）；**素材分类 19 类**（含载具 VEH）；按集目录 / 视频落点；导入历史；组合模板（保存 / 回填 / 删除）；**模板包导出 / 导入**（template-pack）；旧登记统一视图与迁移提示 |
 | 资产体系 | **10 类资产编号**（CHR 角色 / SPC 场景 / PRP 道具 / SHT 镜头资产 / CST 服装 / **VEH 载具** / EXP 表情 / SFX 特效 / VOX 配音 / MUS 音乐，含变体后缀）；资产卡（图 / 音频 / 缩略图 / prompts / **多状态**）；`{{Asset_*}}` 占位符；资产剥离 / 生成 / 调度 / 迁移 / 绑定；分页与 Projection；资产详情 / 预览 / 大图 |
-| 资产审核 | 资产多轮审核状态机（`asset-save`，轮次 ≤20、字段编辑模式、审核哈希）；场景卡审核；导出仅 `final` 状态带最终提示词 |
-| 视觉圣经 | 独立页签；视觉基调 + 场景卡区 + 角色卡区（音频多段试听）+ 关键参考图墙（按资产类型分组 / chips / 搜索 / lazy / lightbox）；参考 / 分析 / 锁定共享；风格分析路径与失败容错（保留上次结果、**六维「其他」**）；风格**定向 / 冻结 / 解冻**（`style-save`：423 硬锁、409 expectedHash、解冻审计） |
+| 资产保存与锁定 | 资产卡保存 / 状态与媒体管理（图 / 音频 / 缩略图 / prompts）；**「锁定 / 已锁定」**（原 final 锁；v0.16.292 起无审核流程）；旧审核字段只读兼容 |
+| 视觉圣经 | 独立页签；视觉基调 + 场景卡区 + 角色卡区（音频多段试听）+ 关键参考图墙（按资产类型分组 / chips / 搜索 / lazy / lightbox）；参考 / 分析 / 锁定共享；风格分析路径与失败容错（保留上次结果、**六维「其他」**）；风格**定向 / 冻结 / 解冻**（`style-save`：423 硬锁、409 expectedHash、解冻审计）；参考图**不设数量上限**（分析要求 ≥3 张；单文件 ≤50MB 等技术保护保留） |
 | 质量与安全 | 判据机器化（`presets/rules/*.json` 单一源）；分级检查（pass / fail / warn / skipped）；评测门禁；资产门禁；**写路径安全矩阵**（`..` / 绝对项目外 / UNC / 设备路径 / 编码穿越 / `.aidrama` / 保留名 / symlink 全拒）；原子写 + 事务锁 + 幂等 + 审计；**备份 / 恢复**（create / verify / restore / dry-run / 回滚 / 对象级 summary） |
-| 成本与生成编排 | 成本预估 + 三级闸门；`fast / standard / strong` 成本档位；预算台账（同一任务只计费一次）；多集批量（规划 → 提交 → 收敛）；幂等提交 / 断点 resume / 漂移检测；产物入库安全硬化（禁私网、重定向 ≤5 跳、流式 ≤64MB）；画布绑定 / 对账 / 状态；**宿主直连生图、自动取回 / 自动绑定、后台 worker 托管**；生成任务与素材回填追踪 |
+| 成本与生成编排 | 成本预估 + 三级闸门；`fast / standard / strong` 成本档位；预算台账（同一任务只计费一次）；多集批量（规划 → 提交 → 收敛）；幂等提交 / 断点 resume / 漂移检测；产物入库安全硬化（禁私网、重定向 ≤5 跳、流式 ≤64MB）；画布绑定 / 对账 / 状态；**宿主直连生图、自动取回 / 自动绑定、后台 worker 托管**；**submit 异步化 + status-all 快照对账 / 任务通知降噪**；生图提示词 MAIN / NEGATIVE / SCENESHEET 分段传递 |
 | 技能与工具 | **33 个 `drama_*` Agent 工具**（仅「短剧模式」会话注册）；**19 个随包技能**；技能管理（校验 / active·disabled / inventory / 「Skill 管理」四 tab UI）；`/drama` 斜杠命令；「短剧模式」预设（短剧编剧 / 制片 / 分镜导演 / 合规顾问人格，移除 shell 类工具） |
 | 导入导出与交付 | 剧本导入（预览 → 落盘）；**分镜提示词 MD 导入桥（`format=shot-prompt`）**；VCS 视图 / `drama-vsc-brief` 简报；导出 Markdown 全本 / JSON 结构化包 / CSV 分镜表 / **Manifest** / **SRT 字幕 / 剪辑清单 CSV**；定稿快照与回滚；账本（场景 / 内外景 / 镜头 / 时长 / 角色 / 地点 + 成本提示） |
 | 宿主契约与兼容 | **79 个宿主路由**（`POST /api/ai-drama/<method>`，覆盖项目 / 内容 / 素材 / 资产 / 风格 / 备份 / 技能等）；`dsh.bundle` 双补丁 + `dsh.client`；DSH 0.2.x 线兼容；preset 模板变量白名单 + peer 范围门禁 |
 
-> 口径：公开版 **v0.16.281**；33 个 Agent 工具 / 79 个宿主路由 / 19 个随包技能 / 14 页签。
+> 口径：公开版 **v0.16.319**；33 个 Agent 工具 / 79 个宿主路由 / 19 个随包技能 / 14 页签。
 
 ## 安装
 
@@ -69,7 +69,7 @@
 ### 方式一：直接从 GitHub 安装（推荐）
 
 ```sh
-dsh plugin --profile <profile> add github:HengryLiang/dsh-plugin-ai-drama#v0.16.281
+dsh plugin --profile <profile> add github:HengryLiang/dsh-plugin-ai-drama#v0.16.319
 ```
 
 `<profile>` 换成你的 profile 名（`dsh web` 对应 `web`，桌面端通常是 `desktop`）。首次使用 `dsh plugin` 会自动创建 profile。
@@ -78,7 +78,7 @@ dsh plugin --profile <profile> add github:HengryLiang/dsh-plugin-ai-drama#v0.16.
 
 ```sh
 curl -L -o dsh-plugin-ai-drama.tgz \
-  https://github.com/HengryLiang/dsh-plugin-ai-drama/releases/download/v0.16.281/dsh-plugin-ai-drama-0.16.281.tgz
+  https://github.com/HengryLiang/dsh-plugin-ai-drama/releases/download/v0.16.319/dsh-plugin-ai-drama-0.16.319.tgz
 dsh plugin --profile <profile> add ./dsh-plugin-ai-drama.tgz
 ```
 
@@ -188,7 +188,7 @@ dsh --profile <profile> --dump-config    # 应出现 "# == dsh-plugin-ai-drama" 
 - **视觉圣经**：场景卡（`.aidrama/scenes/cards.json`，零相机锁合）、六维风格 DNA（色板 / 光感 / 质感 / 构图偏好 / 运镜节奏 / 其他；`.aidrama/style.json`）；
   风格支持 **定向 → 冻结 → 解冻** 状态机（`style-save`：423 硬锁、409 expectedHash 冲突检测、解冻审计）。
 
-## 素材与媒体（v0.15.8 – v0.16.281）
+## 素材与媒体（v0.15.8 – v0.16.319）
 
 - **登记仅项目内**：新登记只接受项目内路径；项目外绝对路径 / `..` / UNC / symlink 逃逸一律拒绝且不写盘；
   历史外部登记在迁移期只读兼容（客户端标注「外部路径（待迁移）」，并提供扫描/一键导入迁移路径）；
@@ -206,11 +206,12 @@ dsh --profile <profile> --dump-config    # 应出现 "# == dsh-plugin-ai-drama" 
 - **写路径安全审计**：覆盖全部 HTTP / 工具写入口的路径负例矩阵（`..`、绝对项目外、UNC、设备路径、
   控制字符、`%2e%2e` 编码、`.aidrama`、保留名/尾随点空格、symlink 逃逸），非法输入零写盘。
 
-## 资产多轮审核（v0.16.9）
+## 资产保存与锁定（v0.16.292 起无审核流程）
 
-- `asset-save` 维护资产卡审核状态机（rounds ≤ 20），默认响应不变、旧卡零写回；
-- 支持按需返回审核哈希（`includeReviewHashes`）；场景卡同链路；
-- 导出时仅 `final` 状态附带最终提示词；跨项目复制会重置审核状态并给出 warning。
+- 剧本修订稿审阅、分镜审核、资产多轮审核 / 审核工作台、AI 审读（check deep / saveReview）等**全部审核流程已于 v0.16.292 删除**；
+- **保留**：批注（新增 / 删除 / 定位 / 解决历史）、提交优化指令；Agent 剧本草稿有实际改动自动写正式稿；
+- **保留** `final` 锁能力，改名为「锁定 / 已锁定」（导出仅锁定状态附带最终提示词）；
+- 旧项目里的 review / reviewStatus 字段**只读兼容**（不迁移、不自动删除、不阻断）；确定性检查与导出保留。
 
 ## 导入桥与 VCS 视图
 
@@ -324,7 +325,7 @@ npm test        # 公开仓库结构 smoke（test/public-smoke.mjs，不依赖�
 内部路径泄漏与运行时导出检查，可在任意机器与 CI 上运行
 （GitHub Actions：Node 22 / 24 × Windows / Ubuntu）。
 
-> 完整插件行为测试套件（167 个套件，含真实样例数据与历史基线夹具）在作者开发环境中运行，
+> 完整插件行为测试套件（173 个套件，含真实样例数据与历史基线夹具）在作者开发环境中运行，
 > 依赖本机样例与证据目录，因此不随公开仓库分发。安装后的实际体验以你所在环境的运行结果为准。
 
 ## 兼容性
@@ -340,6 +341,7 @@ npm test        # 公开仓库结构 smoke（test/public-smoke.mjs，不依赖�
 - **不猜测价格**：外部平台只给文字计价规则时如实返回原文；
 - **不自动改外部画布**：对账只报告差异，写画布由用户确认；
 - **判据默认不阻断**：默认 WARN，是否升级为 FAIL 由用户 / 评测门禁决定；
+- **不提供审核 / 审批流程**：v0.16.292 起全部删除，改用「批注 + 锁定」；旧审核字段只读兼容；
 - **媒体只读且仅项目内**：`media-read` 只读项目内文件，不写盘、不缓存、不接受绝对路径；
 - **历史上传的外部登记**：迁移期只读兼容，新登记一律要求项目内路径。
 

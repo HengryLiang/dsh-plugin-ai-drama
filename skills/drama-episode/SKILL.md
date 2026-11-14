@@ -1,4 +1,4 @@
----
+﻿---
 name: drama-episode
 description: 撰写单集剧本：以场次为单元，含场景标题、动作描述、角色、对白、旁白、转场。用于按大纲生成某一集，或按用户意见重写某一集。
 disable-model-invocation: false
@@ -40,9 +40,9 @@ user-invocable: true
 
 ## v0.16.40 P0 新流程（文本适配；工具调用/参数不变）
 
-1. **集下拉 + 三模式**：剧本页先定集；「文档/分段/审核」三模式切换（`aria-pressed` 记住上次模式）；分段模式按场景/关键画面出段（建议 3–8 段/集，一段不跨场，可后续编辑）。
-2. **分段与段状态**：段存 analysis overlay（`segments[]`）；段六态由面板工作流标记（pending_storyboard→approved），**执行事实以任务/素材为准**；拆分为 maxN+1、禁 -a/-b。
-3. **审核工作流**：批注/处置（open/fixed_in_draft/accepted_known_issue/rejected）+ 通过门槛 + 锁定记录存 `构想/审核/<集>.review.json`。
+1. **集下拉 + 两模式**：剧本页先定集；「文档/分段」两模式切换（`aria-pressed` 记住上次模式）；分段模式按场景/关键画面出段（建议 3–8 段/集，一段不跨场，可后续编辑）。
+2. **分段与段状态**：段存 analysis overlay（`segments[]`）；段六态仅表示制作进度；拆分为 maxN+1、禁 -a/-b。
+3. **无审核流程**：不再有批注处置/审核门槛/锁定记录/`构想/审核/<集>.review.json`；剧本写入、修改、定稿、导出都不要求审核状态。
 4. **导演 VSC（可拍性）**：剧本页 VSC 模式六区块（资产剥离/拍摄分析/镜头目的/情绪节拍/关键画面/构图建议）写入 `构想/导演剖析/<集>.analysis.json`；stale 提示不自动迁移。
 5. **写入边界**：正文仍走 `drama_write_content(kind=episode)` 正式稿写入；**不写** `.aidrama`/旧 MD/JSON；overlay 容量 ≤2MB/单条 ≤4KB。
 
@@ -54,3 +54,4 @@ user-invocable: true
 
 - 剧本正文用**一个长字符串 + `\n` 换行转义**，不要手写多层嵌套 JSON 对象。
 - 一次只交一集；若模型层报 `tool input is invalid JSON`，先查是否已落盘（正式稿/审计），再拆小重发。
+

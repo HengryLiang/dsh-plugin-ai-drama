@@ -3,7 +3,9 @@ name: drama-asset-analysis
 description: 只读分析本集剧本，产出资产清单表（含建卡基本信息/外观与 visualNeed）并写侧车 JSON（不建卡/提示词/媒体/剧本；清单 md 由客户端生成）。
 ---
 
-# 剧本资产分析（drama-asset-analysis v1.2）
+# 剧本资产分析（drama-asset-analysis v1.3）
+
+> v1.3（2026-11-12）：新增 **VEH 载具**类型——载具必须按 VEH 输出，不得落 PRP；客户端 0.16.314+ 已同步支持五类（CHR/SPC/PRP/VEH/SFX）。
 
 > 触发：用户明确要求「资产分析 / 剧本资产分析」，或收到「【资产分析任务】」指令并点名本技能。  
 > 定位：**只读分析层**。产出一份可展示、可导出的「资产清单表」，回答三件事：本集有哪些资产、每项的基本信息、哪些需要资产图。  
@@ -56,7 +58,7 @@ description: 只读分析本集剧本，产出资产清单表（含建卡基本�
     }
   ],
   "warnings": [],
-  "stats": {"CHR": 0, "SPC": 0, "PRP": 1, "SFX": 0, "textOnly": 0}
+  "stats": {"CHR": 0, "SPC": 0, "PRP": 1, "VEH": 0, "SFX": 0, "textOnly": 0}
 }
 ```
 
@@ -64,20 +66,20 @@ description: 只读分析本集剧本，产出资产清单表（含建卡基本�
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
-| type | 是 | `CHR/SPC/PRP/SFX`（仅这四类；其他类型不输出） |
+| type | 是 | `CHR/SPC/PRP/VEH/SFX`（仅这五类）。**载具必须归 VEH**（汽车/摩托/船/飞机/马车/坦克等可驾驶或可乘坐的运输工具），不得落 PRP；道具=手持/可携带/陈设物 |
 | name | 是 | 规范名，去时间后缀、去多余空白；1–80 字；同 type 下唯一 |
 | aliases | 否 | 别名/简称/称谓，去空去重，≤12 个 |
 | **description** | **是** | **建卡基本信息/描述定位**：角色定位、场景功能、道具描述、跨集用途等；≤500 字；不写提示词 |
 | appearance | 否（建议） | 外观要点：颜色/材质/形状/磨损/标志物等；≤300 字；不写生成提示词 |
 | visualNeed | 是 | `reference`（需要资产图）或 `text-only`（文字/声音生成即可） |
-| visualNeedReason | 是（PRP/SFX 必须） | 命中规则的简短理由，≤200 字；CHR/SPC 可写「角色定妆/场景空间需一致」 |
+| visualNeedReason | 是（PRP/VEH/SFX 必须） | 命中规则的简短理由，≤200 字；CHR/SPC 可写「角色定妆/场景空间需一致」 |
 | importance | 是 | `lead/support/background`，只影响排序，不替代 visualNeed |
 | reusable | 是 | 是否跨集/跨镜可复用 |
 | evidence | 是 | ≥1 条本集可定位证据：`{"line": 行号, "quote": 原文}`；无证据不要编造 |
 | confidence | 是 | 0–1；≥0.8 直接展示，0.6–0.8 待确认，<0.6 只提示、不进需制作计数 |
 | note | 否 | 状态/变化/复用提示；不写提示词 |
 
-- description 写法：角色=定位/身份/外形要点；场景=空间功能/材质/光位；道具=用途/外观/叙事意义；特效=视觉语言/触发条件。它用于资产库建卡，**不是生成提示词**。
+- description 写法：角色=定位/身份/外形要点；场景=空间功能/材质/光位；道具=用途/外观/叙事意义；载具=**动力类型（机动/非机动）**/外观与涂装/驾驶或操纵位关键特征（机动写仪表盘中控，非机动写桨/舵/鞍/把手）/用途；特效=视觉语言/触发条件。它用于资产库建卡，**不是生成提示词**。
 - 去重键：`type + normalize(name)`（normalize=去空白+小写）；aliases/description/appearance 并入首次出现项；不同 type 不合并。
 - 每类 ≤50 项、name ≤80 字；超限截断并在 `warnings` 说明。
 - `stats` 可写各类计数与 `textOnly` 数量（可选，但建议给）。
@@ -98,6 +100,8 @@ description: 只读分析本集剧本，产出资产清单表（含建卡基本�
 
 ### 4.2 PRP（道具）：命中任一即 reference
 
+> ⚠ 先判载具：能驾驶/乘坐的运输工具（车/船/飞机/摩托/马车等）→ **VEH**（§4.3），不得落 PRP；PRP 只收手持/可携带/陈设类物品。
+
 - 跨镜/跨集复现、需严格一致；
 - 剧情关键 / 需要特写 / 承载叙事信息；
 - 外观独特、非日常、品牌/IP、造型复杂；
@@ -106,7 +110,14 @@ description: 只读分析本集剧本，产出资产清单表（含建卡基本�
 
 **普通常见物 → text-only**：碗、手机、钥匙、纸巾、零钱、普通信封、日常杯子等（无特写/无跨镜一致性要求）。
 
-### 4.3 SFX（特效）：命中任一即 reference
+### 4.3 VEH（载具）：默认 reference
+
+- 判定优先于 PRP：**能驾驶/乘坐的运输工具 = VEH**（汽车/摩托/船/飞机/马车/坦克/自行车等），即使它是剧情「道具」也不得落 PRP；
+- 跨镜/跨集复现、主角座驾、关键剧情载具、需严格一致（外观/颜色/破损/内饰）→ reference；
+- 仅一句背景提及、无需视觉一致性 → text-only，须在 `visualNeedReason` 说明；
+- 载具卡后续制作走 drama-asset §4.2 载具分支：**必须先写明动力类型（机动/非机动）**——机动载具必含驾驶位仪表盘/中控细节，非机动载具必含操纵/乘坐位细节（桨/舵/鞍/把手/座板）；description/appearance 要带上这些关键特征，供下游选强制细节。
+
+### 4.4 SFX（特效）：命中任一即 reference
 
 - 复杂/非标准视觉特效：能量、法术、定制粒子、变形、风格化光效；
 - 跨镜一致性 / 主视觉签名 / 需与角色/场景光效联动；
@@ -119,7 +130,7 @@ description: 只读分析本集剧本，产出资产清单表（含建卡基本�
 ## 5. 执行步骤
 
 1. 读取项目/本集剧本（只读）；记录每项资产首次出现的行号/原文。
-2. 识别角色、场景、道具、特效（只列确实需要资产化的项；不要输出泛化词）。
+2. 识别角色、场景、道具、**载具**、特效（只列确实需要资产化的项；不要输出泛化词；载具一律 VEH）。
 3. 为每项写 `description` 建卡基本信息 + `appearance` 外观要点 + `visualNeed`/reason + `importance`/`reusable`/`confidence`。
 4. 去重、合并 aliases/description/appearance、截断超限，生成 `warnings`/`stats`。
 5. 写分析侧车：`构想/导演剖析/第NNN集.assets.json`（JSON）；核对返回 path。`素材/资产清单.md` 由客户端生成，本技能不写。）
@@ -136,7 +147,8 @@ description: 只读分析本集剧本，产出资产清单表（含建卡基本�
 ## 7. 质量自检（写文件前）
 
 - [ ] `schema`、`episode` 与指令一致；
-- [ ] 每项有非空 `description`（基本信息）；每个 PRP/SFX 都有 `visualNeed` + `visualNeedReason`；普通项没有滥用 reference；
+- [ ] 每项有非空 `description`（基本信息）；每个 PRP/VEH/SFX 都有 `visualNeed` + `visualNeedReason`；普通项没有滥用 reference；
+- [ ] 载具全部归 **VEH**（未落 PRP）；`stats` 含 VEH 计数；
 - [ ] 每项有 evidence≥1（line+quote），没有编造；
 - [ ] 同 type+name 已去重；aliases/description/appearance 已合并；
 - [ ] 没有调用任何写卡/提示词/媒体/剧本工具；

@@ -79,7 +79,7 @@ check('随包技能数量 >= 10', skills.length >= 10, String(skills.length))
 let skillWithHeader = 0
 for (const skill of skills) {
   const skillMd = path.join(root, 'skills', skill.name, 'SKILL.md')
-  const text = fs.existsSync(skillMd) ? fs.readFileSync(skillMd, 'utf8') : ''
+  const text = fs.existsSync(skillMd) ? fs.readFileSync(skillMd, 'utf8').replace(/^\uFEFF/, '') : ''
   if (text.startsWith('---') && text.includes(`name: ${skill.name}`)) skillWithHeader += 1
 }
 check('每个技能都有合法 SKILL.md 前置字段', skillWithHeader === skills.length, `${skillWithHeader}/${skills.length}`)

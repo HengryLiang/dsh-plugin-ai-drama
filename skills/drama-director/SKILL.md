@@ -60,7 +60,7 @@ user-invocable: true
 
 导演简报（director brief）六区块写入 `构想/导演剖析/<集>.analysis.json`（overlay，add-only，不改旧 JSON/MD）：
 
-1. **资产剥离清单**：人物/场景/道具/特效四类（name/firstSeen/count/建议前缀/hasCard/action），只读候选不自动建卡。
+1. **资产剥离清单**：人物/场景/道具/**载具**/特效五类（name/firstSeen/count/建议前缀（CHR/SPC/PRP/VEH/SFX）/hasCard/action），只读候选不自动建卡；**载具（能驾驶/乘坐的运输工具）必须归 VEH，不得并入道具 PRP**。
 2. **拍摄分析**：时间/光线/道具/风险/可行性 + `byScene[]`（按场派生，旧文件仅顶层摘要时只读展示，用户主动保存才写回派生）。
 3. **镜头目的**：`{sceneRef,shotRef,purpose}`，一镜一句「观众必须看到的那一个信息」。
 4. **情绪节拍**：`{range,beat,intensity}`（≤12），标注强度而非形容词。

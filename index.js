@@ -36,7 +36,6 @@ import * as assetMigration from './lib/asset-migration.js'
 import * as assetMedia from './lib/asset-media.js'
 import * as assetGenerate from './lib/asset-generate.js'
 import { createAssetGenerationScheduler } from './lib/asset-scheduler.js'
-import * as audit from './lib/audit.js'
 import { createBackendRegistry } from './lib/backends/index.js'
 import * as generation from './lib/generation.js'
 import * as orchestrator from './lib/orchestrator.js'
@@ -287,7 +286,7 @@ const WRITE_TARGETS = {
   // v0.16.20（C1）：分类写同步渲染 素材/素材清单.md → 目标与登记一致（txn/审计 targets 含 md、前后 hash）。
   'assets-add': () => ['.aidrama/assets.json', '素材/素材清单.md'],
   'assets-remove': () => ['.aidrama/assets.json', '素材/素材清单.md'],
-  // C3（E16/H-8）：资产/场景卡审核写入口；按 kind 只写目标文件，双文件静态登记（审计前后 hash）
+  // 资产/场景卡写入口（含锁定）；按 kind 只写目标文件，双文件静态登记（审计前后 hash）
   'asset-save': () => ['.aidrama/assets/cards.json', '.aidrama/scenes/cards.json'],
   // C4a（E16/H-8 A）：资产剥离 apply 只写 assets/cards.json；preview 只读不进事务
   'asset-extract': (input) => (input && input.mode === 'apply' ? ['.aidrama/assets/cards.json'] : null),
@@ -581,6 +580,9 @@ async function dispatch(method, input, root, scope, context = {}) {
         // RC-48 / v0.16.170（add-only）：host 后台取回 worker 能力标记（client 读插件 status 门控；
         // 旧版只在 asset-generate 响应内，导致误报「宿主版本过旧」）。asset-generate 响应通道保持。
         assetGenerateHostWorkerSupported: true,
+        // N1 add-only：sidecar 权威 revision/statusVersion v2 能力标记。
+        assetGenerationRevisionSupported: true,
+        assetGenerationStatusVersion: 2,
         // v0.16.208（D-0092 视频）：add-only 能力标记；视频仅 LibTV 后端，neowow 不声明支持。
         videoGenSupported: true,
         videoBackends: ['libtv'],
@@ -669,20 +671,6 @@ async function dispatch(method, input, root, scope, context = {}) {
     case 'doc-read': {
       const dir = store.projectDir(root, input.title)
       if (!(await store.isDirectory(dir))) throw new Error(`短剧《${input.title}》不存在`)
-      // P2-3（E6.1）：审读报告只读特例（仅精确路径 `.aidrama/reviews/latest.json`；doc-save 不扩）。
-      const reviewRel = audit.normalizeReviewReadPath(input.path)
-      if (reviewRel) {
-        const latest = await audit.readLatestReview(root, input.title)
-        if (!latest) return fail(404, 'not-found', '暂无审读报告（可让 Agent 用 drama_check_consistency(deep=true) 审读本集）')
-        return {
-          ok: true,
-          path: reviewRel,
-          text: latest.text,
-          hash: sha256Hex(latest.text),
-          bytes: latest.bytes,
-          updatedAt: latest.updatedAt,
-        }
-      }
       const rel = docRelativePath(input.path)
       // P2-2（E6）：flow-state 内部路径特例 —— 缺失时按内容推断并落盘，恒返回 200（AC-F7）
       if (rel === flowState.FLOW_INTERNAL_PATH) {
@@ -1211,7 +1199,7 @@ async function dispatch(method, input, root, scope, context = {}) {
     }
 
     case 'asset-save': {
-      // C3（E16/H-8）：资产/场景卡审核写入口（METHODS 71→72；transport cwd/sessionId 先剔除）
+      // 资产/场景卡写入口（含锁定）（METHODS 71→72；transport cwd/sessionId 先剔除）
       const { cwd: _transportCwd, sessionId: _transportSessionId, ...businessInput } = input
       if (Buffer.byteLength(JSON.stringify(businessInput), 'utf8') > 64 * 1024) {
         throw assetReview.reviewError('too-large', 'asset-save 请求体超过 64KB')
@@ -1223,7 +1211,7 @@ async function dispatch(method, input, root, scope, context = {}) {
           expectedHash: parsed.expectedHash,
           expectedVersion: parsed.expectedVersion,
         })
-        return { ok: true, ...saved }
+        return { ok: true, ...saved, locked: Boolean(saved.review && saved.review.status === 'final') }
       }
       const saved = await store.applyAssetReview(root, input.title, {
         kind: parsed.kind,
@@ -1235,7 +1223,8 @@ async function dispatch(method, input, root, scope, context = {}) {
         expectedReviewVersion: parsed.expectedReviewVersion,
         actor: 'panel',
       })
-      return { ok: true, ...saved }
+      const { review: _review, ...savedRest } = saved
+      return { ok: true, ...savedRest, locked: Boolean(saved.review && saved.review.status === 'final') }
     }
 
     case 'asset-cards-migrate': {
@@ -1272,7 +1261,7 @@ async function dispatch(method, input, root, scope, context = {}) {
         const action = String(input && input.action == null ? 'submit' : input.action).trim()
         const title = typeof input?.title === 'string' ? input.title.trim() : ''
         if (host && host.assetScheduler && title) {
-          if (result && result.status === 'submitted' && result.taskId) {
+          if (result && (result.status === 'queued' || result.status === 'submitted') && result.taskId) {
             host.assetScheduler.enqueue({ root, title, taskId: result.taskId })
           } else if (action === 'status') {
             void host.assetScheduler.enqueueProject(root, title)
@@ -3203,6 +3192,8 @@ export function apply(ctx, config = {}) {
         getRoots: discoverRoots,
         registry: host.backends,
         logger: ctx.logger,
+        ...(Number.isFinite(Number(config.assetBackendTimeoutMs)) ? { backendTimeoutMs: Number(config.assetBackendTimeoutMs) } : {}),
+        ...(Number.isFinite(Number(config.assetTaskMaxAgeMs)) ? { maxTaskAgeMs: Number(config.assetTaskMaxAgeMs) } : {}),
       })
       host.assetScheduler = scheduler
       scheduler.start()
@@ -3263,4 +3254,6 @@ export function apply(ctx, config = {}) {
 }
 
 export { METHODS, VERSION }
+
+
 

@@ -115,8 +115,12 @@ window.__ModuleLoader__.load({
     const TASK_CENTER_SUCCESS_MS = 6000
     const TASK_CENTER_PERSIST_PREFIX = 'ai-drama:task-center:v1:'
     const TASK_CENTER_RESTORE_STALE_MS = 10 * 60 * 1000
-    const taskCenterDiagnostics = { version: 'RC-80.2', lastResume: { at: 0, total: 0, handled: 0, reason: 'init' }, restore: { count: 0, staleMarked: 0 } }
-    const taskCenterState = { tasks: new Map(), hidden: new Set(), adapters: new Map(), listeners: new Set(), project: '', selectedCardId: '' }
+    const TASK_CENTER_MIGRATION_STALE_MS = 120000
+    const TASK_CENTER_RESTORE_TERMINAL_MS = 30 * 60 * 1000
+    const TASK_CENTER_BOOT_AT = Date.now()
+    const TASK_CENTER_FAILURE_VISIBLE_MAX = 3
+    const taskCenterDiagnostics = { version: 'N1-1', lastResume: { at: 0, total: 0, handled: 0, reason: 'init' }, restore: { count: 0, staleMarked: 0 }, sync: { lastOkAt: 0, lastAttemptAt: 0, inFlight: false, snapshotSeq: 0, rev: 0, failCount: 0, retryAttempt: 0, lastError: null, staleMs: 15000 }, polling: { active: false, taskIds: [], count: 0, skipped: [], lastError: '', lastSnapshotAt: 0, snapshotCount: 0, snapshotRevision: 0, lastSkipReason: '', lastApplyAt: 0, lastForcedApplyAt: 0 }, migration: { scanned: 0, pending: 0, adopted: 0, expired: 0, legacy: 0 }, lastStatusAt: 0 }
+    const taskCenterState = { tasks: new Map(), hidden: new Set(), adapters: new Map(), listeners: new Set(), project: '', selectedCardId: '', pollLimit: null, clearedAt: 0, batchDepth: 0, batchDirty: false, syncNow: null }
     const taskCenterCounters = { upsert: 0, dismiss: 0, registerAdapter: 0, remove: 0, reset: 0 }
     function taskCenterProject() {
       return String(taskCenterState.project || '')
@@ -143,39 +147,57 @@ window.__ModuleLoader__.load({
         for (const key of keys) {
           let parsed = null
           try { parsed = JSON.parse(window.localStorage.getItem(key) || 'null') } catch (error) { parsed = null }
-          const rows = parsed && Array.isArray(parsed.tasks) ? parsed.tasks : []
-          for (const row of rows) {
-            if (!row || typeof row !== 'object') continue
-            let task = { ...row, project: String(row.project || ''), restored: true }
-            if (!task.taskId) continue
-            taskCenterDiagnostics.restore.count += 1
-            const age = Date.now() - (Number(task.stageSince) || Number(task.updatedAt) || Date.now())
-            if ((task.stage === 'queued' || task.stage === 'running') && age > TASK_CENTER_RESTORE_STALE_MS) {
-              task = { ...task, stage: 'timeout', terminal: true, doneAt: Date.now(), error: '任务已过期（恢复时未在运行）', actions: [{ id: 'discard', label: '丢弃' }] }
-              taskCenterDiagnostics.restore.staleMarked += 1
-            }
-            taskCenterState.tasks.set(String(task.taskId), task)
-          }
           const hidden = parsed && Array.isArray(parsed.hidden) ? parsed.hidden : []
           for (const id of hidden) taskCenterState.hidden.add(String(id))
+          const rows = []
+          for (const row of (parsed && Array.isArray(parsed.tasks) ? parsed.tasks : [])) {
+            if (!row || typeof row !== 'object' || !row.taskId) continue
+            const taskId = String(row.taskId)
+            const stage = String(row.stage || row.status || '').toLowerCase()
+            const terminal = row.terminal === true || ['success', 'error', 'timeout'].includes(stage)
+            const updatedAt = Number(row.updatedAt) || 0
+            if (terminal && updatedAt > 0 && updatedAt < TASK_CENTER_BOOT_AT) continue
+            rows.push({ ...row, project: String(row.project || ''), restored: true })
+          }
+          try { window.localStorage.setItem(key, JSON.stringify({ hidden, tasks: rows })) } catch (error) { /* 忽略 quota */ }
+          for (const row of rows) taskCenterState.tasks.set(String(row.taskId), row)
         }
-        taskCenterPersist()
       } catch (error) { /* 忽略 */ }
     }
     function taskCenterSweepStale() {
       let changed = 0
       for (const [taskId, task] of [...taskCenterState.tasks.entries()]) {
         if (!task || task.restored !== true || (task.stage !== 'queued' && task.stage !== 'running')) continue
-        const age = Date.now() - (Number(task.stageSince) || Number(task.updatedAt) || Date.now())
+        const now = Date.now()
+        if (task.needsConfirm === true && task.migrationState === 'pending') {
+          const migrationAge = now - (Number(task.migrationSince) || Number(task.updatedAt) || now)
+          if (migrationAge < TASK_CENTER_MIGRATION_STALE_MS) continue
+          taskCenterState.tasks.set(taskId, { ...task, needsConfirm: false, migrationState: 'expired', stage: 'timeout', terminal: true, doneAt: now, error: '无法确认（宿主无记录）', actions: [{ id: 'discard', label: '丢弃' }] })
+          taskCenterDiagnostics.migration.pending = Math.max(0, Number(taskCenterDiagnostics.migration.pending) - 1)
+          taskCenterDiagnostics.migration.expired += 1
+          changed += 1
+          continue
+        }
+        const age = now - (Number(task.stageSince) || Number(task.updatedAt) || now)
         if (age <= TASK_CENTER_RESTORE_STALE_MS) continue
-        taskCenterState.tasks.set(taskId, { ...task, stage: 'timeout', terminal: true, doneAt: Date.now(), error: '任务已过期（恢复时未在运行）', actions: [{ id: 'discard', label: '丢弃' }] })
+        taskCenterState.tasks.set(taskId, { ...task, stage: 'timeout', terminal: true, doneAt: now, error: '任务已过期（恢复时未在运行）', actions: [{ id: 'discard', label: '丢弃' }] })
         taskCenterDiagnostics.restore.staleMarked += 1
         changed += 1
       }
       if (changed) taskCenterEmit()
       return changed
     }
+    function taskCenterBeginBatch() { taskCenterState.batchDepth = (Number(taskCenterState.batchDepth) || 0) + 1 }
+    function taskCenterEndBatch() {
+      taskCenterState.batchDepth = Math.max(0, (Number(taskCenterState.batchDepth) || 1) - 1)
+      if (taskCenterState.batchDepth === 0 && taskCenterState.batchDirty) {
+        taskCenterState.batchDirty = false
+        taskCenterPersist()
+        for (const listener of [...taskCenterState.listeners]) { try { listener() } catch (error) { /* 忽略订阅者异常 */ } }
+      }
+    }
     function taskCenterEmit() {
+      if (Number(taskCenterState.batchDepth) > 0) { taskCenterState.batchDirty = true; return }
       taskCenterPersist()
       for (const listener of [...taskCenterState.listeners]) {
         try { listener() } catch (error) { /* 忽略订阅者异常 */ }
@@ -206,6 +228,18 @@ window.__ModuleLoader__.load({
         artifact: source.artifact || null,
         actions: Array.isArray(source.actions) ? source.actions : (terminal ? [] : []),
         restored: source.restored === true,
+        authority: (() => { const raw = String(source.authority || '').toLowerCase(); if (raw === 'host' || raw === 'legacy' || raw === 'temp') return raw; if (/^ag-/.test(taskId)) return 'host'; if (/^batch-/.test(taskId) || /^legacy:/.test(taskId) || !taskId) return 'legacy'; return 'temp' })(),
+        hostStatus: String(source.hostStatus || stageRaw || ''),
+        revision: Number(source.revision) || 0,
+        taskRevision: Number(source.taskRevision) || 0,
+        lastSyncedAt: Number(source.lastSyncedAt) || 0,
+        needsConfirm: source.needsConfirm === true,
+        confirmReason: String(source.confirmReason || ''),
+        migrationState: String(source.migrationState || (source.needsConfirm === true ? 'pending' : 'none')),
+        mode: String(source.mode || ''),
+        migrationSince: Number(source.migrationSince) || 0,
+        lastStatusChangeAt: Number(source.lastStatusChangeAt) || 0,
+        lastApplyAt: Number(source.lastApplyAt) || 0,
         terminal,
       }
     }
@@ -213,10 +247,17 @@ window.__ModuleLoader__.load({
       const task = taskCenterNormalize(raw, adapter)
       if (!task) return null
       const previous = taskCenterState.tasks.get(task.taskId)
+      if (previous && !task.mode) task.mode = String(previous.mode || '')
+      if (previous && previous.stage === task.stage) task.lastSyncedAt = Number(previous.lastSyncedAt) || task.lastSyncedAt
+      const nowForTask = Date.now()
+      if (!previous) task.lastStatusChangeAt = nowForTask
+      else if (previous.stage !== task.stage || String(previous.hostStatus || '') !== String(task.hostStatus || '')) task.lastStatusChangeAt = nowForTask
+      else task.lastStatusChangeAt = Number(previous.lastStatusChangeAt) || nowForTask
       if (previous && previous.stage === task.stage && previous.stage !== 'running') task.stageSince = previous.stageSince
       if (previous && previous.stage === task.stage && previous.stage === 'running') task.stageSince = previous.stageSince
       const actionIds = (rows) => (Array.isArray(rows) ? rows : []).map((item) => String(item && item.id || '')).join(',')
-      if (previous && previous.stage === task.stage && previous.error === task.error && previous.displayName === task.displayName && actionIds(previous.actions) === actionIds(task.actions)) return previous
+      const revisionChanged = Number(previous && previous.revision) !== Number(task.revision) || Number(previous && previous.taskRevision) !== Number(task.taskRevision)
+      if (previous && previous.stage === task.stage && previous.error === task.error && previous.displayName === task.displayName && actionIds(previous.actions) === actionIds(task.actions) && !revisionChanged) return previous
       taskCenterState.tasks.set(task.taskId, task)
       taskCenterCounters.upsert += 1
       if (!previous) taskCenterState.hidden.delete(task.taskId)
@@ -264,10 +305,12 @@ window.__ModuleLoader__.load({
         rows.push(task)
       }
       rows.sort((left, right) => (left.stage === 'error' ? 0 : 1) - (right.stage === 'error' ? 0 : 1) || (right.updatedAt || 0) - (left.updatedAt || 0))
-      return rows
+      const failed = rows.filter((task) => task.stage === 'error').slice(0, TASK_CENTER_FAILURE_VISIBLE_MAX)
+      const failedIds = new Set(failed.map((task) => String(task.taskId)))
+      return rows.filter((task) => task.stage !== 'error' || failedIds.has(String(task.taskId)))
     }
     function taskCenterSnapshot() {
-      const tasks = [...taskCenterState.tasks.values()].map((task) => ({ taskId: task.taskId, type: task.type, source: task.source, cardId: task.cardId, stateId: task.stateId || '', displayName: task.displayName, title: task.title, stage: task.stage, stageSince: task.stageSince, doneAt: task.doneAt, error: task.error, terminal: task.terminal }))
+      const tasks = [...taskCenterState.tasks.values()].map((task) => ({ taskId: task.taskId, type: task.type, source: task.source, cardId: task.cardId, stateId: task.stateId || '', displayName: task.displayName, title: task.title, stage: task.stage, stageSince: task.stageSince, doneAt: task.doneAt, error: task.error, terminal: task.terminal, authority: task.authority || 'temp', hostStatus: task.hostStatus || '', revision: Number(task.revision) || 0, taskRevision: Number(task.taskRevision) || 0, lastSyncedAt: Number(task.lastSyncedAt) || 0, needsConfirm: task.needsConfirm === true, confirmReason: task.confirmReason || '', migrationState: task.migrationState || 'none', mode: task.mode || '', migrationSince: Number(task.migrationSince) || 0, lastStatusChangeAt: Number(task.lastStatusChangeAt) || 0, lastApplyAt: Number(task.lastApplyAt) || 0, updatedAt: Number(task.updatedAt) || 0 }))
       const visible = taskCenterVisible(Date.now(), false)
       const queue = tasks.filter((task) => task.stage === 'queued')
       const notices = visible.map((task) => ({ taskId: task.taskId, type: task.type, stage: task.stage, cardId: task.cardId, displayName: task.displayName, error: task.error }))
@@ -282,6 +325,9 @@ window.__ModuleLoader__.load({
         queue, notices, groups,
         counters: { ...taskCenterCounters },
         selectedCardId: String(taskCenterState.selectedCardId || ''),
+        authority: { source: 'host', projectRevision: Math.max(0, ...tasks.map((task) => Number(task.revision) || 0)), lastSyncedAt: Math.max(0, ...tasks.map((task) => Number(task.lastSyncedAt) || 0)) },
+        pollLimit: taskCenterState.pollLimit || null,
+        migration: { ...taskCenterDiagnostics.migration },
         hasActive: tasks.some((task) => !task.terminal),
         hasErrors: tasks.some((task) => task.stage === 'error' || task.stage === 'timeout'),
         ready: true,
@@ -293,17 +339,21 @@ window.__ModuleLoader__.load({
     function taskCenterClearAll() {
       for (const task of [...taskCenterState.tasks.values()]) taskCenterState.tasks.delete(task.taskId)
       taskCenterState.hidden.clear()
+      taskCenterState.clearedAt = Date.now()
+      try { taskCenterDiagnostics.sync.failCount = 0; taskCenterDiagnostics.sync.retryAttempt = 0; taskCenterDiagnostics.sync.lastError = null } catch (error) { /* 忽略 */ }
+      taskCenterPersist()
       taskCenterEmit()
       return taskCenterSnapshot()
     }
     function taskCenterGetDiagnostics() {
-      return { lastResume: { ...taskCenterDiagnostics.lastResume }, restore: { ...taskCenterDiagnostics.restore }, version: taskCenterDiagnostics.version }
+      return { lastResume: { ...taskCenterDiagnostics.lastResume }, restore: { ...taskCenterDiagnostics.restore }, polling: { active: Boolean(taskCenterDiagnostics.polling.active), taskIds: (taskCenterDiagnostics.polling.taskIds || []).slice(), count: Number(taskCenterDiagnostics.polling.count) || 0, skipped: (taskCenterDiagnostics.polling.skipped || []).slice(), activeTaskCount: Number(taskCenterDiagnostics.polling.activeTaskCount) || 0, overLimit: Number(taskCenterDiagnostics.polling.overLimit) || 0, totalActive: Number(taskCenterDiagnostics.polling.totalActive) || 0, lastRevision: Number(taskCenterDiagnostics.polling.lastRevision) || 0, staleResponses: Number(taskCenterDiagnostics.polling.staleResponses) || 0, networkErrors: Number(taskCenterDiagnostics.polling.networkErrors) || 0, lastError: String(taskCenterDiagnostics.polling.lastError || ''), lastSnapshotAt: Number(taskCenterDiagnostics.polling.lastSnapshotAt) || 0, snapshotCount: Number(taskCenterDiagnostics.polling.snapshotCount) || 0, snapshotRevision: Number(taskCenterDiagnostics.polling.snapshotRevision) || 0, lastSkipReason: String(taskCenterDiagnostics.polling.lastSkipReason || ''), lastApplyAt: Number(taskCenterDiagnostics.polling.lastApplyAt) || 0, lastForcedApplyAt: Number(taskCenterDiagnostics.polling.lastForcedApplyAt) || 0 }, sync: { lastOkAt: Number(taskCenterDiagnostics.sync.lastOkAt) || 0, lastAttemptAt: Number(taskCenterDiagnostics.sync.lastAttemptAt) || 0, inFlight: taskCenterDiagnostics.sync.inFlight === true, snapshotSeq: Number(taskCenterDiagnostics.sync.snapshotSeq) || 0, rev: taskCenterDiagnostics.sync.rev || 0, failCount: Number(taskCenterDiagnostics.sync.failCount) || 0, retryAttempt: Number(taskCenterDiagnostics.sync.retryAttempt) || 0, lastError: taskCenterDiagnostics.sync.lastError ? { ...taskCenterDiagnostics.sync.lastError } : null, staleMs: Number(taskCenterDiagnostics.sync.staleMs) || 15000 }, migration: { ...taskCenterDiagnostics.migration }, lastStatusAt: Number(taskCenterDiagnostics.lastStatusAt) || 0, version: taskCenterDiagnostics.version }
     }
     function taskCenterReset() {
       taskCenterState.tasks.clear()
       taskCenterState.hidden.clear()
       for (const key of Object.keys(taskCenterCounters)) taskCenterCounters[key] = 0
       taskCenterState.selectedCardId = ''
+      taskCenterState.pollLimit = null
       taskCenterEmit()
       return taskCenterSnapshot()
     }
@@ -327,13 +377,70 @@ window.__ModuleLoader__.load({
       taskCenterRestore()
       taskCenterEmit()
     }
+    function taskCenterSyncHealth() {
+      const sync = taskCenterDiagnostics.sync || {}
+      const now = Date.now()
+      const lastOkAt = Number(sync.lastOkAt) || 0
+      const age = lastOkAt ? now - lastOkAt : 0
+      const stale = !lastOkAt || age > (Number(sync.staleMs) || 15000)
+      const failed = Number(sync.failCount) >= 3
+      return { lastOkAt, age, stale, failed, fallback: String(taskCenterDiagnostics.polling.lastSkipReason || '') === 'error-fallback', inFlight: sync.inFlight === true, failCount: Number(sync.failCount) || 0, retryAttempt: Number(sync.retryAttempt) || 0, rev: sync.rev || 0, snapshotSeq: Number(sync.snapshotSeq) || 0, lastError: sync.lastError || null, state: sync.inFlight ? 'syncing' : (failed || (sync.lastError && Number(sync.failCount) > 0) ? 'failed' : (stale ? 'stale' : 'ok')) }
+    }
+    function taskCenterTaskLag(task) {
+      if (!task || task.terminal === true || task.needsConfirm === true) return false
+      const baseline = Math.max(Number(task.stageSince) || 0, Number(task.lastStatusChangeAt) || 0)
+      if (!baseline || Date.now() - baseline <= 90000) return false
+      const changed = Number(task.lastStatusChangeAt) || 0
+      const applied = Number(task.lastApplyAt) || 0
+      return changed > 0 && applied > changed
+    }
     function taskCenterStageLabel(task) {
+      const health = taskCenterSyncHealth()
+      if (health.failed) {
+        const previous = task && task.stage === 'success' ? '已完成' : (task && task.stage === 'error' ? '失败' : (task && task.stage === 'running' ? '生成中' : '排队中'))
+        return health.lastOkAt ? '无法确认（上次：' + previous + '）' : '无法确认（同步失败）'
+      }
+      if (health.stale) {
+        const previous = task && task.stage === 'success' ? '已完成' : (task && task.stage === 'error' ? '失败' : (task && task.stage === 'running' ? '生成中' : '排队中'))
+        return '无法确认（上次：' + previous + '）'
+      }
       if (!task) return ''
+      if (task.needsConfirm === true && task.migrationState === 'pending') return '待确认'
+      if (task.migrationState === 'expired') return '无法确认'
+      if (task.migrationState === 'legacy') return '历史任务'
       if (task.stage === 'success') return '已完成'
       if (task.stage === 'error') return '失败'
       if (task.stage === 'timeout') return '超时'
       if (task.stage === 'running') return '进行中'
       return '排队中'
+    }
+    function taskCenterSyncAgeText(ageMs) {
+      const ms = Math.max(0, Number(ageMs) || 0)
+      if (!ms) return '刚刚'
+      if (ms < 1000) return '刚刚'
+      const seconds = Math.floor(ms / 1000)
+      if (seconds < 60) return seconds + 's前'
+      const minutes = Math.floor(seconds / 60)
+      if (minutes < 60) return minutes + 'm前'
+      return Math.floor(minutes / 60) + 'h前'
+    }
+    function taskCenterSyncErrorOf(error) {
+      const text = String((error && error.message) || error || '').slice(0, 40) || '读取失败'
+      if (/timeout|超时|abort/i.test(text)) return { code: 'timeout', text: /status-all/i.test(text) ? 'status-all 超时' : 'status-all 超时' }
+      if (/unavailable|不可用|not found|404/i.test(text)) return { code: 'unavailable', text: 'status-all 不可用' }
+      if (/parse|json|解析/i.test(text)) return { code: 'parse', text: '状态数据解析失败' }
+      return { code: 'unknown', text }
+    }
+    function taskCenterSyncReason(health) {
+      const error = health && health.lastError
+      if (!error) return '读取失败'
+      const text = String(error.text || '')
+      if (text) return text
+      const code = String(error.code || '')
+      if (code === 'timeout') return 'status-all 超时'
+      if (code === 'unavailable') return 'status-all 不可用'
+      if (code === 'parse') return '状态数据解析失败'
+      return '读取失败'
     }
     function taskCenterElapsedText(task) {
       const since = Number(task && (task.stageSince || task.updatedAt)) || Date.now()
@@ -358,12 +465,51 @@ window.__ModuleLoader__.load({
           try { if (typeof window !== 'undefined') window.removeEventListener('resize', onResize) } catch (error) { /* 忽略 */ }
         }
       }, [])
+      const health = (() => { try { return taskCenterSyncHealth() } catch (error) { return { state: 'stale', stale: true, inFlight: false, lastOkAt: 0, age: 0, failCount: 0, retryAttempt: 0, rev: 0, snapshotSeq: 0, lastError: null } } })()
+      const [diagMenuOpen, setDiagMenuOpen] = React.useState(false)
+      const [copyToast, setCopyToast] = React.useState('')
+      const copyToastTimerRef = React.useRef(null)
+      React.useEffect(() => () => { if (copyToastTimerRef.current) { try { clearTimeout(copyToastTimerRef.current) } catch (error) { /* 忽略 */ } } }, [])
+      const showCopyToast = (text) => {
+        setCopyToast(String(text || ''))
+        if (copyToastTimerRef.current) { try { clearTimeout(copyToastTimerRef.current) } catch (error) { /* 忽略 */ } }
+        copyToastTimerRef.current = setTimeout(() => setCopyToast(''), 2000)
+      }
+      const copySyncDiagnostics = async () => {
+        try {
+          const diagnostics = window.__dshTaskCenter && typeof window.__dshTaskCenter.getDiagnostics === 'function' ? window.__dshTaskCenter.getDiagnostics() : {}
+          const current = taskCenterSnapshot().tasks || []
+          const payload = {
+            version: 'v0.16.307',
+            at: new Date().toISOString(),
+            rev: (diagnostics.sync && diagnostics.sync.rev) || diagnostics.polling && diagnostics.polling.snapshotRevision || 0,
+            lastOkAt: (diagnostics.sync && diagnostics.sync.lastOkAt) || 0,
+            failCount: (diagnostics.sync && diagnostics.sync.failCount) || 0,
+            lastError: (diagnostics.sync && diagnostics.sync.lastError) || null,
+            inflightTaskIds: (diagnostics.polling && diagnostics.polling.taskIds) || [],
+            tasks: current.map((task) => ({ taskId: task.taskId, cardId: task.cardId, stateId: task.stateId, stage: task.stage, authority: task.authority, hostStatus: task.hostStatus, revision: task.revision, updatedAt: task.updatedAt, lastSyncedAt: task.lastSyncedAt })),
+          }
+          const text = JSON.stringify(payload, null, 2)
+          if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') await navigator.clipboard.writeText(text)
+          else {
+            const area = document.createElement('textarea')
+            area.value = text
+            if (document.body) document.body.appendChild(area)
+            if (area.select) area.select()
+            if (typeof document.execCommand === 'function') document.execCommand('copy')
+            if (area.remove) area.remove()
+          }
+          showCopyToast('已复制')
+        } catch (error) { showCopyToast('复制失败') }
+      }
       void version
+      const narrow = typeof window !== 'undefined' && Number(window.innerWidth) < 560
       const tasks = taskCenterVisible(Date.now(), paused)
       if (!tasks.length) return null
       const limit = wide ? 3 : 2
       const shown = tasks.slice(0, limit)
       const hiddenCount = Math.max(0, tasks.length - shown.length)
+      const pollLimit = (() => { try { return taskCenterSnapshot().pollLimit || null } catch (error) { return null } })()
       const dockPosition = typeof window !== 'undefined' && window.__dshTaskDockPosition === 'top-right' ? 'top-right' : 'bottom-right'
       const dockStyle = Object.assign({ position: 'fixed', right: 12, zIndex: 40, width: 'min(360px, calc(100vw - 24px))', maxHeight: 'calc(100vh - 120px)', overflowY: 'auto', overscrollBehavior: 'contain', display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, pointerEvents: 'none' }, dockPosition === 'top-right' ? { top: 64 } : { bottom: 16 })
       return h('div', {
@@ -381,27 +527,41 @@ window.__ModuleLoader__.load({
         style: dockStyle,
       },
         h('style', null, '@media (prefers-reduced-motion: reduce){.ad-task-notice-dock *{animation:none!important;transition:none!important}}'),
+        h('div', { 'data-task-notice-head': 'true', style: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 4, marginBottom: 4, position: 'relative' } },
+          h('button', { type: 'button', className: 'ad-btn ad-sm', 'data-notice-clear-all': 'true', 'aria-label': '清空全部通知', title: '清空全部通知', onClick: () => { try { if (window.__dshTaskCenter && typeof window.__dshTaskCenter.clearAll === 'function') window.__dshTaskCenter.clearAll() } catch (error) { /* 忽略 */ } } }, narrow ? '清空' : '清空全部通知'),
+          h('button', { type: 'button', className: 'ad-btn ad-sm', 'data-task-sync-diag-menu': 'true', 'aria-label': '同步诊断菜单', title: '同步诊断', onClick: () => setDiagMenuOpen((value) => !value), style: { minWidth: 24, padding: '0 6px' } }, '⋯'),
+          diagMenuOpen ? h('div', { 'data-task-sync-diag-menu-list': 'true', style: { position: 'absolute', right: 0, top: 26, zIndex: 41, border: '1px solid var(--ad-border)', borderRadius: 6, background: 'var(--ad-bg-base)', boxShadow: '0 2px 8px var(--ad-border)', padding: 4, pointerEvents: 'auto' } }, h('button', { type: 'button', className: 'ad-btn ad-sm', 'data-task-sync-copy-diag': 'true', onClick: () => { copySyncDiagnostics() }, style: { whiteSpace: 'nowrap' } }, '复制同步诊断')) : null,
+          copyToast ? h('span', { 'data-task-sync-copy-toast': 'true', role: 'status', style: { fontSize: 11, color: 'var(--ad-label-secondary)' } }, copyToast) : null),
         h('div', { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'false', style: { display: 'flex', flexDirection: 'column', gap: 6 } },
-          shown.map((task) => h('div', {
+          (health.failCount >= 2 && tasks.some((task) => !task.terminal)) ? h('div', { className: 'ad-sub', 'data-task-sync-banner': 'true', style: { color: 'var(--ad-warn)', fontSize: 11, lineHeight: '16px', marginBottom: 2 } }, '同步失败，自动重试中') : null,
+          shown.map((task) => {
+            const lag = taskCenterTaskLag(task)
+            const snapshotNo = Number(health.snapshotSeq) || 0
+            const lastErrorText = health.lastError ? String(health.lastError.text || health.lastError.code || '') : ''
+            const lagDiag = lag ? ('同步滞后 · rev ' + (health.rev || '-') + ' · 快照#' + snapshotNo + ' · lastError=' + (lastErrorText || '无') + ' · lastOkAt=' + (health.lastOkAt || 0) + ' · failCount=' + (health.failCount || 0) + ' · taskId=' + task.taskId + ' · cardId=' + (task.cardId || '') + ' · stateId=' + (task.stateId || 'default') + ' · authority=' + (task.authority || '') + ' · hostStatus=' + (task.hostStatus || '') + ' · revision=' + (task.revision || 0)) : ''
+            return h('div', {
             key: task.taskId,
             className: 'ad-task-notice',
             'data-notice-task-id': task.taskId,
             'data-notice-card-id': task.cardId || undefined,
             'data-notice-type': task.type,
             'data-notice-stage': task.stage,
+            'data-notice-lag': lag ? 'true' : undefined,
+            title: lagDiag || undefined,
+            'aria-label': lag ? lagDiag : undefined,
             role: task.stage === 'error' || task.stage === 'timeout' ? 'alert' : 'status',
             style: { border: '1px solid var(--ad-border)', borderRadius: 6, padding: '6px 8px', background: 'var(--ad-bg-base)', color: 'var(--ad-label-primary)', boxShadow: '0 2px 8px var(--ad-border)', fontSize: 12, pointerEvents: 'auto' },
           },
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-              h('strong', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, (task.cardId ? task.cardId + ' · ' : '') + (task.displayName || task.title || task.taskId)),
+              h('strong', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, (task.cardId ? task.cardId + ' · ' : '') + (task.displayName || task.title || task.taskId) + (lag ? ' · 同步滞后' : '')),
               h('span', { 'data-notice-stage-label': 'true' }, taskCenterStageLabel(task) + ' · ' + taskCenterElapsedText(task)),
               h('button', { type: 'button', className: 'ad-btn ad-sm', 'data-notice-discard': task.taskId, 'aria-label': '丢弃通知', title: '丢弃该通知（不取消任务）', onClick: () => taskCenterRemove(task.taskId) }, '丢弃'),
               h('button', { type: 'button', className: 'ad-btn ad-sm', 'data-notice-close': task.taskId, 'aria-label': '关闭通知', title: '关闭通知（不取消任务）', onClick: () => taskCenterDismiss(task.taskId), style: { minWidth: 24, padding: '0 6px' } }, '×')),
             task.title && task.title !== task.displayName ? h('div', { className: 'ad-sub', style: { marginTop: 2 } }, task.title) : null,
             task.error ? h('div', { className: 'ad-err', role: 'alert', style: { marginTop: 2 } }, task.error) : null,
-            Array.isArray(task.actions) && task.actions.length ? h('div', { className: 'ad-row', style: { gap: 4, marginTop: 4, flexWrap: 'wrap' } }, task.actions.map((action) => h('button', { key: action.id, type: 'button', className: 'ad-btn ad-sm', onClick: () => { try { action.run() } catch (error) { /* 忽略 */ } } }, action.label))) : null)),
+            Array.isArray(task.actions) && task.actions.length ? h('div', { className: 'ad-row', style: { gap: 4, marginTop: 4, flexWrap: 'wrap' } }, task.actions.map((action) => h('button', { key: action.id, type: 'button', className: 'ad-btn ad-sm', onClick: () => { try { action.run() } catch (error) { /* 忽略 */ } } }, action.label))) : null) }),
           hiddenCount ? h('div', { className: 'ad-sub', 'data-notice-more': 'true', style: { textAlign: 'right' } }, '还有 ' + hiddenCount + ' 条任务通知') : null,
-          h('div', { style: { display: 'flex', justifyContent: 'flex-end' } }, h('button', { type: 'button', className: 'ad-btn ad-sm', 'data-notice-clear-all': 'true', onClick: () => taskCenterClearAll() }, '清空全部通知'))))
+          pollLimit && pollLimit.overLimit > 0 ? h('div', { className: 'ad-sub', 'data-task-poll-limit': 'true', style: { textAlign: 'right' } }, '超出轮询上限，完成部分后自动继续（' + pollLimit.active + '/' + pollLimit.total + '）') : null))
     }
     const TaskAdapter = (adapter) => taskCenterRegisterAdapter(adapter)
     const TaskView = (raw) => taskCenterNormalize(raw)
@@ -433,6 +593,7 @@ window.__ModuleLoader__.load({
         remove: (taskId) => taskCenterRemove(taskId),
         clearAll: () => taskCenterClearAll(),
         getDiagnostics: () => taskCenterGetDiagnostics(),
+        syncNow: () => { try { return typeof taskCenterState.syncNow === 'function' ? taskCenterState.syncNow() : Promise.resolve(false) } catch (error) { return Promise.resolve(false) } },
         setSelectedCard: (cardId) => taskCenterSetSelectedCard(cardId),
         _counters: taskCenterCounters,
       }
@@ -539,6 +700,18 @@ window.__ModuleLoader__.load({
         throw error
       }
       return data
+    }
+
+    function apiWithTimeout(method, payload, timeoutMs) {
+      const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 60000
+      const controller = typeof AbortController === 'function' ? new AbortController() : null
+      let timer = null
+      return Promise.race([
+        api(method, payload, controller ? controller.signal : undefined),
+        new Promise((resolve, reject) => {
+          timer = setTimeout(() => { try { if (controller) controller.abort() } catch (error) { /* 忽略 */ } ; const error = new Error('请求超时'); error.code = 'timeout'; reject(error) }, ms)
+        }),
+      ]).finally(() => { if (timer) clearTimeout(timer) })
     }
 
     /* ------------------------------------------------------------ 宿主能力探测 */
@@ -812,7 +985,6 @@ window.__ModuleLoader__.load({
       ['outline', '分集大纲'],
       ['episode', '分集剧本'],
       ['storyboard', '分镜表'],
-      ['review', '审读 / 检查'],
       ['polish', '润色'],
     ]
 
@@ -2958,6 +3130,16 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       for (const [type, label] of ASSET_TYPE_ORDER) labels[type] = label
       return labels
     })()
+    /* ASSET_TYPE_CHIPS_PURE_START */
+    const ASSET_FIXED_TYPE_CHIPS = [['CHR', '角色'], ['SPC', '场景'], ['PRP', '道具'], ['SFX', '特效'], ['VEH', '载具']]
+    function assetTypeChipsOf(typeCounts) {
+      const counts = typeCounts instanceof Map ? typeCounts : new Map(Object.entries(typeCounts || {}))
+      const fixed = ASSET_FIXED_TYPE_CHIPS.map(([type, label]) => [type, label, Number(counts.get(type)) || 0])
+      const fixedKeys = new Set(ASSET_FIXED_TYPE_CHIPS.map(([type]) => type))
+      const extras = ASSET_TYPE_ORDER.filter(([type]) => !fixedKeys.has(type) && counts.has(type)).map(([type, label]) => [type, label, Number(counts.get(type)) || 0])
+      return fixed.concat(extras)
+    }
+    /* ASSET_TYPE_CHIPS_PURE_END */
     const ASSET_IMAGE_MAX_COUNT = 6
     const ASSET_IMAGE_SRC_MAX = 500
     // 图片读取去重表（项目切换/刷新时清空；渲染状态由组件 assetImageCache 驱动）
@@ -3140,6 +3322,22 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       })
       return list
     }
+    /* PROMPT_PAYLOAD_PURE_START */
+    function buildAssetPromptPayload(card, mode) {
+      const prompts = card && card.prompts && typeof card.prompts === 'object' && !Array.isArray(card.prompts) ? card.prompts : {}
+      const normalize = (value) => String(value == null ? '' : value).replace(/\r\n?/g, '\n').trim()
+      const kind = String(mode || 'plate') === 'scenesheet' ? 'scenesheet' : 'plate'
+      const negative = normalize(prompts.PROMPT_NEGATIVE)
+      if (kind === 'scenesheet') {
+        const sheet = normalize(prompts.PROMPT_SCENESHEET)
+        if (!sheet) return ''
+        return '[PROMPT_SCENESHEET]\n' + sheet + (negative ? '\n\n[PROMPT_NEGATIVE]\n' + negative : '')
+      }
+      const main = normalize(prompts.PROMPT_MAIN)
+      if (!main) return ''
+      return '[PROMPT_MAIN]\n' + main + (negative ? '\n\n[PROMPT_NEGATIVE]\n' + negative : '')
+    }
+    /* PROMPT_PAYLOAD_PURE_END */
     function assetPromptEntryOf(card) {
       const prompts = card && card.prompts && typeof card.prompts === 'object' && !Array.isArray(card.prompts) ? card.prompts : {}
       const keys = Object.keys(prompts).filter((key) => typeof prompts[key] === 'string' && prompts[key].trim())
@@ -3195,11 +3393,25 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       const task = r.task && typeof r.task === 'object' ? r.task : {}
       return {
         taskId: String(r.taskId || r.task_id || task.id || task.taskId || ''),
-        status: String(r.status || task.status || '').toLowerCase(),
+        status: (() => {
+          const taskStatus = String(task.status || '').toLowerCase()
+          const workerState = String(r.workerState || task.workerState || '').toLowerCase()
+          if (taskStatus === 'done' || workerState === 'bound' || task.autoBound === true) return 'done'
+          if (['failed', 'error', 'cancelled', 'canceled'].includes(taskStatus)) return 'failed'
+          return String(r.status || taskStatus || '').toLowerCase()
+        })(),
         error: String(r.error || r.reason || task.error || '').trim(),
         stateId: String(r.stateId || task.stateId || '').trim(),
         stateIdFromDefault: Boolean(r.stateIdFromDefault === true || task.stateIdFromDefault === true),
         workerState: String(r.workerState || task.workerState || '').toLowerCase(),
+        canonicalStatus: String(r.canonicalStatus || r.status || task.status || '').toLowerCase(),
+        revision: Number(r.revision) || 0,
+        taskRevision: Number(r.taskRevision) || 0,
+        updatedAtMs: Number(r.updatedAt) || (r.updatedAt ? Date.parse(String(r.updatedAt)) || 0 : 0),
+        legacy: r.legacy === true || task.legacy === true,
+        legacyBatch: r.legacyBatch === true || task.legacyBatch === true,
+        unmanageable: r.unmanageable === true || task.unmanageable === true,
+        timestampInferred: r.timestampInferred === true || task.timestampInferred === true,
       }
     }
     function assetGenerateStatusOf(status) {
@@ -3329,7 +3541,6 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
     ]
 
     /* VISUAL_BIBLE_120_PURE_START: v0.16.120 视觉圣经参考/分析/锁定共享纯函数（无副作用） */
-    const STYLE_REFERENCE_READ_MAX = 50
     const STYLE_REFERENCE_NOTE_MAX = 200
     const STYLE_REFERENCE_FILMS_MAX = 20
     const STYLE_REFERENCE_FILM_TITLE_MAX = 120
@@ -3342,14 +3553,13 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
     const VISUAL_DRAFT_PATH = '构想/视觉圣经/风格草稿.json'
     const VISUAL_SHARED_DIR = '视觉圣经'
     const VISUAL_SHARED_NAME_MAX = 80
-    const VISUAL_ANALYSIS_MAX_IMAGES = 10
     const VISUAL_ANALYSIS_MIN_IMAGES = 3
     const VISUAL_CONFIDENCE_LABELS = { high: '高', medium: '中', low: '低' }
     function visualText(value, max) { return String(value == null ? '' : value).trim().slice(0, max) }
     function visualReferenceRowsOf(raw) {
       if (!Array.isArray(raw)) return []
       const rows = []
-      for (const item of raw.slice(0, STYLE_REFERENCE_READ_MAX)) {
+      for (const item of raw) {
         const value = item && typeof item === 'object' && !Array.isArray(item) ? item : null
         if (!value) continue
         const assetId = visualText(value.assetId, 120)
@@ -3393,7 +3603,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       return rows
     }
     function visualReferencePayload(rows) {
-      return (Array.isArray(rows) ? rows : []).slice(0, STYLE_REFERENCE_READ_MAX).map((row, index) => ({
+      return (Array.isArray(rows) ? rows : []).map((row, index) => ({
         assetId: String(row.assetId || ''),
         order: index,
         isCover: row.isCover === true,
@@ -3452,7 +3662,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
     function visualAnalysisRefsOf(rows, assets) {
       const pool = Array.isArray(assets) ? assets : []
       const byId = new Map(pool.map((item) => [String(item && item.id || ''), item]))
-      return (Array.isArray(rows) ? rows : []).slice(0, VISUAL_ANALYSIS_MAX_IMAGES).map((row, index) => ({
+      return (Array.isArray(rows) ? rows : []).map((row, index) => ({
         assetId: String(row && row.assetId || ''),
         order: index,
         isCover: row && row.isCover === true,
@@ -3475,7 +3685,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       const lines = [
         '【视觉圣经风格分析】项目《' + String(value.projectTitle || '') + '》· 第 ' + String(Number(value.episode) || 1) + ' 集',
         '请读取以下参考图并做视觉风格分析（使用 read_image 读取每条给出的项目相对路径，配合 drama-visual-bible 能力）：',
-        ...refs.slice(0, VISUAL_ANALYSIS_MAX_IMAGES).map((row, index) => '- 参考图 ' + (index + 1) + '：assetId ' + String(row.assetId || '') + (row.source ? '｜项目相对路径 `' + String(row.source) + '`（请用 read_image 读取该路径）' : '｜项目相对路径未知（请按 assetId 通过项目素材注册表定位；仍不可读时写失败 JSON）') + (row.note ? '｜备注：' + String(row.note) : '')),
+        ...refs.map((row, index) => '- 参考图 ' + (index + 1) + '：assetId ' + String(row.assetId || '') + (row.source ? '｜项目相对路径 `' + String(row.source) + '`（请用 read_image 读取该路径）' : '｜项目相对路径未知（请按 assetId 通过项目素材注册表定位；仍不可读时写失败 JSON）') + (row.note ? '｜备注：' + String(row.note) : '')),
         films.length ? '参考影片：' + films.map((row) => String(row.title || '') + (row.year ? '（' + row.year + '）' : '') + (row.director ? '，导演 ' + row.director : '') + (row.note ? ' — ' + row.note : '')).join('；') : '参考影片：（无）',
         directors.length ? '参考导演：' + directors.map((row) => String(row.director || '') + (row.note ? ' — ' + row.note : '')).join('；') : '参考导演：（无）',
         '无论成功或失败，都必须写固定分析文件：' + VISUAL_ANALYSIS_PATH + '（使用 drama_write_content kind=file；重跑覆盖同一路径）；不写或写错路径视为失败。',
@@ -3512,7 +3722,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         ok: true,
         data: {
           analyzedAt: source.analyzedAt,
-          refs: source.refs.slice(0, VISUAL_ANALYSIS_MAX_IMAGES).filter((row) => row && typeof row === 'object').map((row, index) => ({
+          refs: source.refs.filter((row) => row && typeof row === 'object').map((row, index) => ({
             assetId: visualText(row.assetId, 120),
             name: visualText(row.name, 200),
             order: Number.isInteger(row.order) && row.order >= 0 ? row.order : index,
@@ -3681,60 +3891,12 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       return String(date.getFullYear()) + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes())
     }
 
-    /* ---------------- v0.16.9（C3-C / E16+H-8）：资产/场景卡多轮审核（asset-save 写入口） ---------------- */
-    const ASSET_REVIEW_STATUS_ORDER = ['draft', 'pending', 'rejected', 'approved', 'final']
-    const ASSET_REVIEW_STATUS_LABELS = { draft: '草稿', pending: '待审', rejected: '已驳回', approved: '已通过', final: '已定稿' }
-    const ASSET_REVIEW_KIND_LABELS = { asset: '资产卡', scene: '场景卡' }
-    const ASSET_REVIEW_PROMPT_MAX = 2000
-    const ASSET_REVIEW_REASON_MIN = 4
-    const ASSET_REVIEW_REASON_MAX = 300
-    const ASSET_REVIEW_ACTION_NOTICES = {
-      saveDraft: '提示词草稿已保存',
-      submit: '已提交审核',
-      approve: '审核已通过',
-      reject: '已驳回：请修改提示词后重新提交',
-      finalize: '已定稿并锁定（写操作将被拒绝，需重打开）',
-      reopen: '已重打开：可继续修改并重新提交',
-    }
-
-    /** 防御式归一卡内 add-only `review`（缺失 → null；旧卡不出现 review）。 */
+    /* RC-93：资产只保留 final 防误改锁；不读取/展示审核状态与多轮审核 */
     function normalizeAssetReview(raw) {
       const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null
-      if (!source) return null
-      const intOf = (value, fallback) => {
-        const number = Number(value)
-        return Number.isInteger(number) && number >= 0 ? number : fallback
-      }
-      const textOf = (value) => (typeof value === 'string' ? value : '')
-      const rounds = (Array.isArray(source.rounds) ? source.rounds : [])
-        .filter((round) => round && typeof round === 'object')
-        .map((round) => ({
-          round: intOf(round.round, 0),
-          prompt: textOf(round.prompt).slice(0, ASSET_REVIEW_PROMPT_MAX),
-          promptVersion: intOf(round.promptVersion, 0),
-          status: ASSET_REVIEW_STATUS_ORDER.includes(String(round.status)) ? String(round.status) : 'pending',
-          submittedAt: textOf(round.submittedAt),
-          reviewer: textOf(round.reviewer),
-          reviewedAt: textOf(round.reviewedAt),
-          reason: textOf(round.reason).slice(0, ASSET_REVIEW_REASON_MAX),
-        }))
-        .slice(-20)
-      return {
-        schemaVersion: intOf(source.schemaVersion, 1),
-        status: ASSET_REVIEW_STATUS_ORDER.includes(String(source.status)) ? String(source.status) : 'draft',
-        revision: intOf(source.revision, 0),
-        roundCount: intOf(source.roundCount, 0),
-        round: intOf(source.round, rounds.length),
-        promptVersion: intOf(source.promptVersion, 0),
-        currentPrompt: textOf(source.currentPrompt).slice(0, ASSET_REVIEW_PROMPT_MAX),
-        rounds,
-        approvedAt: textOf(source.approvedAt),
-        approvedBy: textOf(source.approvedBy),
-        finalizedAt: textOf(source.finalizedAt),
-        finalizedBy: textOf(source.finalizedBy),
-        finalPrompt: textOf(source.finalPrompt).slice(0, ASSET_REVIEW_PROMPT_MAX),
-        reopenCount: intOf(source.reopenCount, 0),
-      }
+      if (!source || String(source.status || '') !== 'final') return null
+      const revision = Number(source.revision)
+      return { status: 'final', revision: Number.isInteger(revision) && revision >= 0 ? revision : 0 }
     }
 
     /* ---------------- v0.16.11（C2b-C）：生成链冻结风格只读徽标（只读展示，零写入口） ---------------- */
@@ -4373,7 +4535,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         '【资产分析任务】项目《' + title + '》· 第 ' + episode + ' 集',
         '1. 使用 drama-asset-analysis 技能，只读分析本集剧本/分镜：角色/场景/道具/特效（CHR/SPC/PRP/SFX）需要哪些资产、哪些需要资产图。',
         '2. 仅读取；不要创建/修改资产卡、提示词、媒体、剧本或其它项目文件。',
-        '3. 用 drama_write_content(kind:\'file\') 写分析侧车：构想/导演剖析/第' + episodeText + '集.assets.json（schema=drama.asset-analysis.v1.2）；只写这个文件。',
+        '3. 用 drama_write_content(kind:\'file\', path:\'构想/导演剖析/第' + episodeText + '集.assets.json\') 写分析侧车（schema=drama.asset-analysis.v1.2）；不要传 order（order 仅 episode/storyboard 使用）；只写这个文件。',
         '4. 每项含 type/name/description(建卡基本信息)/appearance(外观要点)/aliases/visualNeed(reference|text-only)/visualNeedReason/evidence(≥1)/confidence；PRP/SFX 按技能规则判定（普通道具/音效 text-only，关键/复杂 reference）。',
         '5. 分析阶段不建卡、不写提示词/媒体/其它文件（资产清单.md 由客户端用现有 doc-save 生成）；完成后只回复分析项数/需制作/文字可生成摘要。',
       ]
@@ -6272,7 +6434,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
     const REVAMP_ASSET_PREFIXES = ['CHR', 'SPC', 'PRP', 'CST', 'VEH', 'EXP', 'SFX', 'VOX', 'MUS', 'SHT']
     const REVAMP_SEVERITIES = ['blocker', 'major', 'minor', 'suggestion']
     const REVAMP_RESOLUTIONS = ['open', 'fixed_in_draft', 'accepted_known_issue', 'rejected']
-    const REVAMP_SEGMENT_STATES = ['pending_storyboard', 'storyboarding', 'pending_generation', 'generating', 'pending_review', 'approved']
+    const REVAMP_SEGMENT_STATES = ['pending_storyboard', 'storyboarding', 'pending_generation', 'generating', 'completed']
     function revampUtf8Bytes(text) {
       const value = String(text == null ? '' : text)
       try { if (typeof TextEncoder === 'function') return new TextEncoder().encode(value).length } catch { /* fallback */ }
@@ -6438,7 +6600,8 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       const list = Array.isArray(raw) ? raw : []
       return list.filter((item) => item && typeof item === 'object').slice(0, 200).map((item, i) => {
         const id = String(item.segmentId || item.segId || item.id || 'EP1-Seg' + (i + 1)).trim()
-        const state = REVAMP_SEGMENT_STATES.includes(String(item.state || '')) ? String(item.state) : 'pending_storyboard'
+        const rawState = String(item.state || '')
+        const state = rawState === 'approved' || rawState === 'pending_review' ? 'completed' : (REVAMP_SEGMENT_STATES.includes(rawState) ? rawState : 'pending_storyboard')
         const sourceRefRaw = item.sourceRef && typeof item.sourceRef === 'object' ? item.sourceRef : {}
         const startLine = Math.max(1, Math.round(Number(sourceRefRaw.startLine) || (i + 1)))
         const endLine = Math.max(startLine, Math.round(Number(sourceRefRaw.endLine) || startLine))
@@ -6457,17 +6620,34 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         }
       })
     }
+    function segmentAutoStateOf(segment, tasks, episode) {
+      const seg = segment || {}
+      const shots = Array.isArray(seg.shotNumbers) ? seg.shotNumbers.map((n) => String(n)) : []
+      if (!shots.length) return ''
+      const list = (Array.isArray(tasks) ? tasks : []).filter((task) => task && Number(task.episode) === Number(episode) && String(task.kind || '') === 'video')
+      if (!list.length) return ''
+      const covers = (task) => {
+        const taskShots = Array.isArray(task.shots) ? task.shots.map((n) => String(n)) : []
+        if (taskShots.length) return taskShots.some((n) => shots.includes(n))
+        return true
+      }
+      const done = list.filter((task) => String(task.status || '') === 'done' && covers(task) && Array.isArray(task.artifacts) && task.artifacts.length > 0)
+      if (shots.every((shot) => done.some((task) => (task.shots || []).map(String).includes(shot)))) return 'completed'
+      const active = list.filter((task) => covers(task) && ['planned', 'submitted', 'running'].includes(String(task.status || '')))
+      if (active.length) return 'generating'
+      return ''
+    }
     function segmentStateOf(segment, ctx) {
       const seg = segment || {}
       const context = ctx || {}
-      if (context.passedAt || (seg.review && seg.review.passedAt)) return 'approved'
+      if (context.passedAt || (seg.review && seg.review.passedAt)) return 'completed'
       if (REVAMP_SEGMENT_STATES.includes(String(seg.state || ''))) return seg.state
       const shots = Array.isArray(context.shots) ? context.shots : []
       const promptReady = shots.length > 0 && shots.every((shot) => String(shot.naturalLanguagePrompt || '').trim() && String(shot.light || '').trim() && String(shot.ambientSound || '').trim())
       if (!shots.length) return context.pendingDraft ? 'storyboarding' : 'pending_storyboard'
       if (!promptReady) return 'storyboarding'
       if (context.runningTask) return 'generating'
-      if (context.taskDone) return 'pending_review'
+      if (context.taskDone) return 'completed'
       return 'pending_generation'
     }
     function segmentNextAction(state) {
@@ -6476,8 +6656,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         storyboarding: { cta: '补齐提示词并生成', hint: 'Agent 直接写正式稿；无草稿区' },
         pending_generation: { cta: '去生成此段', hint: '镜头齐全' },
         generating: { cta: '查看生成任务', hint: '任务 running' },
-        pending_review: { cta: '审核视频并标记通过', hint: '任务完成' },
-        approved: { cta: '下一段', hint: '已通过' },
+        completed: { cta: '下一段', hint: '已完成' },
       }
       return table[state] || { cta: '补齐信息', hint: '' }
     }
@@ -6503,16 +6682,50 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       const a = args || {}
       const annotations = Array.isArray(a.annotations) ? a.annotations : []
       const projectTitle = a.projectTitle || '（未命名项目）'
-      const header = ['你是短剧模式 Agent。请按以下审核意见优化剧本（只改指定段落，保留场次结构）。',
-        '项目：《' + projectTitle + '》 集：第' + revampPad3(a.episode) + '集 场次：' + (a.sceneRef || '（未指定）') + ' 轮次：' + (a.roundId || 'R1') + ' 剧本 hash：' + String(a.scriptHash || '').slice(0, 8)]
-      const headerText = header.join('\n')
-      const batches = splitByBudget(annotations, (ann) => {
+      const episodeNo = Number(a.episode) || 1
+      const episodeText = '第' + revampPad3(episodeNo) + '集'
+      const fullHash = String(a.scriptHash || '').trim()
+      const shortHash = fullHash ? fullHash.slice(0, 8) : ''
+      const sceneRef = a.sceneRef || '（未指定）'
+      const roundId = a.roundId || 'R1'
+      const renderAnn = (ann) => {
         const anchor = ann && ann.anchor ? ann.anchor : {}
         const where = anchor.line ? 'L' + anchor.line : (anchor.quote ? '「' + String(anchor.quote).slice(0, 40) + '」' : '（无锚点）')
-        return '- ' + where + ' ' + (ann.text || '')
-      }, { charLimit: 2000, byteLimit: 4096 })
-      const texts = batches.map((batch, i) => headerText + '\n未解决意见（第' + (i + 1) + '/' + batches.length + ' 批）：\n' + batch.text + '\n约束：输出修订全文，由系统按当前内容写入正式稿，写入后按面板提示刷新；不要直接编辑文件。')
-      const text = texts.join('\n\n') || headerText
+        const index = annotations.indexOf(ann)
+        return (index >= 0 ? index + 1 : 1) + '. ' + where + '：' + String(ann && ann.text || '')
+      }
+      const batches = splitByBudget(annotations, renderAnn, { charLimit: 1800, byteLimit: 4096 })
+      const ruleLines = [
+        '1. 先用短剧插件读取' + episodeText + '当前正文（drama_read_episode，order=' + episodeNo + '），核对下面每条意见的原文与行号。',
+        '2. 只修改上面列出的位置；保留其他正文、场次结构、人物与既有设定，不要顺手改写未要求的内容。',
+        '3. 通过短剧插件写回正式稿：drama_write_content，kind="episode"，order=' + episodeNo + (fullHash ? '，expectedHash="' + fullHash + '"' : '') + '；不要用文件编辑工具或直接改文件写剧本。',
+        '4. 写入前校验版本：若 expectedHash 与当前正文不一致（插件返回 conflict/currentHash），或原文无法准确定位，停止写入并说明冲突；不要绕过校验。',
+        '5. 写入后用插件重新读取' + episodeText + '，核对修改是否生效；只有核实成功才可报告「已回写并核对成功」。',
+      ]
+      const buildText = (batchText, batchIndex, total) => {
+        const lines = [
+          '你是短剧模式 Agent。请根据以下修改意见优化剧本，并通过短剧插件回写正式稿。',
+          '',
+          '项目：《' + projectTitle + '》',
+          '集数：' + episodeText,
+          '场次：' + sceneRef,
+          '优化轮次：' + roundId,
+          '当前剧本 hash（sha256，完整）：' + (fullHash || '（未读取到；请先读取当前正文核对）'),
+          ...(shortHash ? ['面板短码：#' + shortHash] : []),
+          '',
+          '修改意见' + (total > 1 ? '（第 ' + (batchIndex + 1) + '/' + total + ' 批）' : '') + '：',
+          batchText,
+          '',
+          '执行要求：',
+          ...ruleLines,
+          '',
+          '回复要求：',
+          '只展示修改后的两处文字，以及「已回写并核对成功」或具体失败原因；不要输出整集全文，不要附加未要求的剧情或解释。',
+        ]
+        return lines.join('\n')
+      }
+      const texts = batches.length ? batches.map((batch, i) => buildText(batch.text, i, batches.length)) : [buildText('（无待处理意见）', 0, 1)]
+      const text = texts.join('\n\n')
       return { text, batches: texts, chars: text.length, bytes: revampUtf8Bytes(text), truncated: false }
     }
     /* 审核 overlay（SCHEMA v1.2 §6） */
@@ -6563,28 +6776,6 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
     }
     function buildEmptyReviewOverlay(episode) {
       return normalizeReviewOverlay({ schemaVersion: 1, kind: 'ai-drama-review', episode: Number(episode) || 1, sourceHash: '', version: 0, updatedAt: '', operator: '', review: { status: 'review_draft', annotations: [], rounds: [], approvedAt: null, approver: '', lockedAt: null, lockedBy: '', unlockLog: [] } }, episode)
-    }
-    function reviewStatusOf(overlay) {
-      const status = overlay && overlay.review ? String(overlay.review.status || 'review_draft') : 'review_draft'
-      if (status === 'locked') return 'locked'
-      if (status === 'approved') return 'approved'
-      if (status === 'review_draft') return 'unreviewed'
-      return 'reviewing'
-    }
-    function reviewGate(annotations) {
-      const list = Array.isArray(annotations) ? annotations : []
-      const counts = { blockers: 0, majors: 0, minors: 0, suggestions: 0 }
-      list.forEach((ann) => {
-        if (!ann) return
-        const resolution = revampResolution(ann).status
-        const severity = String(ann.severity || 'suggestion')
-        if (resolution !== 'open') return
-        if (severity === 'blocker') counts.blockers += 1
-        else if (severity === 'major') counts.majors += 1
-        else if (severity === 'minor') counts.minors += 1
-        else counts.suggestions += 1
-      })
-      return { ...counts, canApprove: counts.blockers === 0 && counts.majors === 0, unresolvedBlocker: counts.blockers, unresolvedMajor: counts.majors }
     }
     /* analysis overlay（SCHEMA v1.2 §2–§5） */
     function normalizeAnalysisOverlay(raw, episode) {
@@ -7048,7 +7239,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
     }
 
     /* ================= v0.16.40（P0 / S4）：segments 分段 / 六态 / 段级流水线 / 命名 纯函数 ================= */
-    const SEGMENT_STATE_LABELS = { pending_storyboard: '待分镜', storyboarding: '分镜中', pending_generation: '待生成', generating: '生成中', pending_review: '待审核', approved: '已通过' }
+    const SEGMENT_STATE_LABELS = { pending_storyboard: '待分镜', storyboarding: '分镜中', pending_generation: '待生成', generating: '生成中', completed: '已完成' }
     const SEGMENT_FIELD_LIMITS = { segments: 200, shotNumbers: 200, stateHistory: 100, aliases: 20, keyFrames: 8, keyFrameLen: 120, dialogues: 30, characters: 12, assetsDeclared: 20, curve: 5, curveLen: 20, title: 80, summary: 300, actionSummary: 300, segmentReason: 200, notes: 500 }
     function segmentStateLabel(state) { return SEGMENT_STATE_LABELS[String(state || '')] || '待分镜' }
     function buildSegmentId(episode, number) { return 'EP' + (Number(episode) || 1) + '-Seg' + Math.max(1, Number(number) || 1) }
@@ -7066,7 +7257,8 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       const ep = Number(episode) || 1
       const list = Array.isArray(raw) ? raw.filter((item) => item && typeof item === 'object') : []
       return list.slice(0, SEGMENT_FIELD_LIMITS.segments).map((item, index) => {
-        const state = REVAMP_SEGMENT_STATES.includes(String(item.state || '')) ? String(item.state) : 'pending_storyboard'
+        const rawState = String(item.state || '')
+        const state = rawState === 'approved' || rawState === 'pending_review' ? 'completed' : (REVAMP_SEGMENT_STATES.includes(rawState) ? rawState : 'pending_storyboard')
         const sourceRefRaw = item.sourceRef && typeof item.sourceRef === 'object' ? item.sourceRef : {}
         const startLine = Math.max(1, Math.round(Number(sourceRefRaw.startLine) || 1))
         const endLine = Math.max(startLine, Math.round(Number(sourceRefRaw.endLine) || startLine))
@@ -7107,13 +7299,13 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
     function recomputeSegmentDerived(segment) {
       const seg = segment || {}
       const total = Array.isArray(seg.shotNumbers) ? seg.shotNumbers.length : 0
-      const approved = String(seg.state || '') === 'approved'
-      const progress = { shotsTotal: total, shotsApproved: approved ? total : 0, videosTotal: (seg.progress && Number(seg.progress.videosTotal)) || 0, videosApproved: approved ? ((seg.progress && Number(seg.progress.videosTotal)) || 0) : 0 }
+      const completed = String(seg.state || '') === 'completed'
+      const progress = { shotsTotal: total, shotsApproved: completed ? total : 0, videosTotal: (seg.progress && Number(seg.progress.videosTotal)) || 0, videosApproved: completed ? ((seg.progress && Number(seg.progress.videosTotal)) || 0) : 0 }
       return { ...seg, order: Number(seg.order) || 1, progress, nextAction: segmentNextAction(String(seg.state || 'pending_storyboard')).cta }
     }
     function episodeSegmentsComplete(segments) {
       const list = Array.isArray(segments) ? segments : []
-      return list.length > 0 && list.every((seg) => String(seg && seg.state || '') === 'approved')
+      return list.length > 0 && list.every((seg) => String(seg && seg.state || '') === 'completed')
     }
     function segmentStateCounts(segments) {
       const counts = {}
@@ -7121,29 +7313,27 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       ;(Array.isArray(segments) ? segments : []).forEach((seg) => { const state = String(seg && seg.state || ''); if (counts[state] != null) counts[state] += 1 })
       return counts
     }
-    /* 六态流转：P0 工作流标记（人工回填）；禁止跳段通过（approved 仅可从 pending_review 人工通过） */
+    /* 执行态流转（无人工审核）：完成由任务/素材事实派生 */
     function nextSegmentStates(state) {
       const from = String(state || 'pending_storyboard')
       const table = {
         pending_storyboard: ['storyboarding'],
         storyboarding: ['pending_generation', 'pending_storyboard'],
         pending_generation: ['generating', 'storyboarding'],
-        generating: ['pending_review', 'pending_generation'],
-        pending_review: ['approved', 'generating'],
-        approved: ['pending_review', 'pending_generation'],
+        generating: ['pending_generation'],
       }
       return (table[from] || []).slice()
     }
-    function canApproveSegment(segment) { return String(segment && segment.state || '') === 'pending_review' }
+    function canApproveSegment(segment) { return false }
     function appendSegmentHistory(segment, nextState, meta) {
       const seg = segment || {}
       const to = String(nextState || '')
       if (!REVAMP_SEGMENT_STATES.includes(to)) return seg
       const from = REVAMP_SEGMENT_STATES.includes(String(seg.state || '')) ? String(seg.state) : 'pending_storyboard'
       if (String(seg.state || '') === to) return seg
-      const history = (Array.isArray(seg.stateHistory) ? seg.stateHistory : []).concat([{ from, to, at: String((meta && meta.at) || new Date().toISOString()), by: String((meta && meta.by) || 'user'), reason: String((meta && meta.reason) || '人工回填') }]).slice(-SEGMENT_FIELD_LIMITS.stateHistory)
+      const history = (Array.isArray(seg.stateHistory) ? seg.stateHistory : []).concat([{ from, to, at: String((meta && meta.at) || new Date().toISOString()), by: String((meta && meta.by) || 'user'), reason: String((meta && meta.reason) || '自动') }]).slice(-SEGMENT_FIELD_LIMITS.stateHistory)
       const next = recomputeSegmentDerived({ ...seg, state: to, stateHistory: history, updatedAt: String((meta && meta.at) || new Date().toISOString()) })
-      if (to === 'approved') next.review = { ...(seg.review || {}), passedAt: String((meta && meta.at) || new Date().toISOString()) }
+      if (to === 'completed') next.review = { ...(seg.review || {}), passedAt: String((meta && meta.at) || new Date().toISOString()) }
       return next
     }
     /* 合并：仅同场相邻；保留首段 ID，被并 ID 入 aliases；order 重排（R-2） */
@@ -7774,8 +7964,8 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       const raw = s6TextOf(shot && shot.shotNumber)
       return raw ? { shotNumber: raw } : null
     }
-    const REVAMP_PURE_NAMES = ['parseEpisodeTitle', 'parseEpisodeBlocks', 'canonicalProductionShotId', 'parseProductionShotId', 'normalizeProductionShotId', 'isCanonicalProductionShotId', 'buildShotCopyText', 'buildGroupCopyText', 'buildSegmentCopyText', 'buildEpisodeCopyText', 'suggestSegmentsFromScenes', 'suggestSegmentsByKeyVisuals', 'normalizeSegments', 'segmentStateOf', 'segmentNextAction', 'splitByBudget', 'buildReviewOptimizeInstruction', 'normalizeReviewOverlay', 'buildEmptyReviewOverlay', 'reviewStatusOf', 'reviewGate', 'normalizeAnalysisOverlay', 'buildEmptyAnalysisOverlay', 'analysisByteSize', 'computeLineDiff', 'revampParseAssetTokens', 'scanShotAssetTokens', 'classifyAssetToken', 'deriveAssetBindingView', 'revampAnalysisPath', 'revampReviewPath', 'revampUtf8Bytes', 'normalizeDirectorBrief', 'buildDirectorBriefSkeleton', 'buildVscJson', 'buildVscMarkdown', 'buildVscHandoff', 'normalizeHandoffList', 'deriveWritingPathLamp', 'vscByteSize', 'buildVscGenerateInstruction', 'vscShootingAggregate', 'nextAnnotationId', 'anchorFromSelection', 'applyAnnotationResolution', 'buildReviewRound', 'reviewRoundStats', 'nextReviewRoundNo', 'segmentStateLabel', 'buildSegmentId', 'nextSegmentNumber', 'renumberSegments', 'normalizeSegmentRecords', 'recomputeSegmentDerived', 'episodeSegmentsComplete', 'segmentStateCounts', 'nextSegmentStates', 'canApproveSegment', 'appendSegmentHistory', 'mergeSegmentInto', 'splitSegmentAtLine', 'reorderSegment', 'updateSegmentAt', 'segmentShotsOf', 'deriveSegmentShotMap', 'deriveNamingSnapshot', 'namingDisplayOf', 'namingCopyText', 'mergeNamingSnapshot', 'segmentSummaryLine', 'SEGMENT_STATE_LABELS', 'SEGMENT_FIELD_LIMITS', 'CARD_PLACEHOLDER', 'CARD_SECTION_LABELS', 'cardTextOf', 'storyboardCardModel', 'cardContextLine', 'groupCardModel', 'directorNoteModel', 'buildS5aCopy', 'GROUP_CONTROLS_LIMITS', 'ASSET_STATE_LABELS', 'ASSET_STATUS_VALUES', 'GROUP_OP_CODES', 'groupTextLimit', 'normalizeGroupControlEntry', 'normalizeGroupControls', 'groupControlOf', 'groupIdOf', 'groupControlName', 'groupControlSummary', 'normalizeGroupOrder', 'groupOrderedIds', 'groupOrderIndex', 'reorderGroupControls', 'groupShotBuckets', 'groupMenuItems', 'applyGroupControlOp', 'groupEditSuggestionText', 'buildAssetBindingRows', 'applyAssetBinding', 'removeAssetBinding', 'batchBindPlan', 'applyAssetMapping', 'bindingRateText', 'shotTablePlaceholder', 'shotTableSegmentOf', 'shotTableRowModel', 'narrowLayoutOf', 's6TierLabelOf', 's6ModeSwitchKeepsState', 'tableRowLinkTarget']
-    const REVAMP_P0_PURE = { parseEpisodeTitle, parseEpisodeBlocks, canonicalProductionShotId, parseProductionShotId, normalizeProductionShotId, isCanonicalProductionShotId, buildShotCopyText, buildGroupCopyText, buildSegmentCopyText, buildEpisodeCopyText, suggestSegmentsFromScenes, suggestSegmentsByKeyVisuals, normalizeSegments, segmentStateOf, segmentNextAction, splitByBudget, buildReviewOptimizeInstruction, normalizeReviewOverlay, buildEmptyReviewOverlay, reviewStatusOf, reviewGate, normalizeAnalysisOverlay, buildEmptyAnalysisOverlay, analysisByteSize, computeLineDiff, revampParseAssetTokens, scanShotAssetTokens, classifyAssetToken, deriveAssetBindingView, revampAnalysisPath, revampReviewPath, revampUtf8Bytes, normalizeDirectorBrief, buildDirectorBriefSkeleton, buildVscJson, buildVscMarkdown, buildVscHandoff, normalizeHandoffList, deriveWritingPathLamp, vscByteSize, buildVscGenerateInstruction, vscShootingAggregate, nextAnnotationId, anchorFromSelection, applyAnnotationResolution, buildReviewRound, reviewRoundStats, nextReviewRoundNo, segmentStateLabel, buildSegmentId, nextSegmentNumber, renumberSegments, normalizeSegmentRecords, recomputeSegmentDerived, episodeSegmentsComplete, segmentStateCounts, nextSegmentStates, canApproveSegment, appendSegmentHistory, mergeSegmentInto, splitSegmentAtLine, reorderSegment, updateSegmentAt, segmentShotsOf, deriveSegmentShotMap, deriveNamingSnapshot, namingDisplayOf, namingCopyText, mergeNamingSnapshot, segmentSummaryLine, SEGMENT_STATE_LABELS, SEGMENT_FIELD_LIMITS, CARD_PLACEHOLDER, CARD_SECTION_LABELS, cardTextOf, storyboardCardModel, cardContextLine, groupCardModel, directorNoteModel, buildS5aCopy, GROUP_CONTROLS_LIMITS, ASSET_STATE_LABELS, ASSET_STATUS_VALUES, GROUP_OP_CODES, groupTextLimit, normalizeGroupControlEntry, normalizeGroupControls, groupControlOf, groupIdOf, groupControlName, groupControlSummary, normalizeGroupOrder, groupOrderedIds, groupOrderIndex, reorderGroupControls, groupShotBuckets, groupMenuItems, applyGroupControlOp, groupEditSuggestionText, buildAssetBindingRows, applyAssetBinding, removeAssetBinding, batchBindPlan, applyAssetMapping, bindingRateText, shotTablePlaceholder, shotTableSegmentOf, shotTableRowModel, narrowLayoutOf, s6TierLabelOf, s6ModeSwitchKeepsState, tableRowLinkTarget, s6TextOf, SHOT_TABLE_S6_COLUMNS, SHOT_TABLE_PLACEHOLDER, S6_BREAKPOINTS, REVAMP_PURE_NAMES, REVAMP_SEVERITIES, REVAMP_RESOLUTIONS, REVAMP_SEGMENT_STATES, REVAMP_ASSET_PREFIXES }
+    const REVAMP_PURE_NAMES = ['parseEpisodeTitle', 'parseEpisodeBlocks', 'canonicalProductionShotId', 'parseProductionShotId', 'normalizeProductionShotId', 'isCanonicalProductionShotId', 'buildShotCopyText', 'buildGroupCopyText', 'buildSegmentCopyText', 'buildEpisodeCopyText', 'suggestSegmentsFromScenes', 'suggestSegmentsByKeyVisuals', 'normalizeSegments', 'segmentStateOf', 'segmentNextAction', 'splitByBudget', 'buildReviewOptimizeInstruction', 'normalizeReviewOverlay', 'buildEmptyReviewOverlay', 'normalizeAnalysisOverlay', 'buildEmptyAnalysisOverlay', 'analysisByteSize', 'computeLineDiff', 'revampParseAssetTokens', 'scanShotAssetTokens', 'classifyAssetToken', 'deriveAssetBindingView', 'revampAnalysisPath', 'revampReviewPath', 'revampUtf8Bytes', 'normalizeDirectorBrief', 'buildDirectorBriefSkeleton', 'buildVscJson', 'buildVscMarkdown', 'buildVscHandoff', 'normalizeHandoffList', 'deriveWritingPathLamp', 'vscByteSize', 'buildVscGenerateInstruction', 'vscShootingAggregate', 'nextAnnotationId', 'anchorFromSelection', 'applyAnnotationResolution', 'buildReviewRound', 'reviewRoundStats', 'nextReviewRoundNo', 'segmentStateLabel', 'buildSegmentId', 'nextSegmentNumber', 'renumberSegments', 'normalizeSegmentRecords', 'recomputeSegmentDerived', 'episodeSegmentsComplete', 'segmentStateCounts', 'nextSegmentStates', 'canApproveSegment', 'appendSegmentHistory', 'mergeSegmentInto', 'splitSegmentAtLine', 'reorderSegment', 'updateSegmentAt', 'segmentShotsOf', 'deriveSegmentShotMap', 'deriveNamingSnapshot', 'namingDisplayOf', 'namingCopyText', 'mergeNamingSnapshot', 'segmentSummaryLine', 'SEGMENT_STATE_LABELS', 'SEGMENT_FIELD_LIMITS', 'CARD_PLACEHOLDER', 'CARD_SECTION_LABELS', 'cardTextOf', 'storyboardCardModel', 'cardContextLine', 'groupCardModel', 'directorNoteModel', 'buildS5aCopy', 'GROUP_CONTROLS_LIMITS', 'ASSET_STATE_LABELS', 'ASSET_STATUS_VALUES', 'GROUP_OP_CODES', 'groupTextLimit', 'normalizeGroupControlEntry', 'normalizeGroupControls', 'groupControlOf', 'groupIdOf', 'groupControlName', 'groupControlSummary', 'normalizeGroupOrder', 'groupOrderedIds', 'groupOrderIndex', 'reorderGroupControls', 'groupShotBuckets', 'groupMenuItems', 'applyGroupControlOp', 'groupEditSuggestionText', 'buildAssetBindingRows', 'applyAssetBinding', 'removeAssetBinding', 'batchBindPlan', 'applyAssetMapping', 'bindingRateText', 'shotTablePlaceholder', 'shotTableSegmentOf', 'shotTableRowModel', 'narrowLayoutOf', 's6TierLabelOf', 's6ModeSwitchKeepsState', 'tableRowLinkTarget']
+    const REVAMP_P0_PURE = { parseEpisodeTitle, parseEpisodeBlocks, canonicalProductionShotId, parseProductionShotId, normalizeProductionShotId, isCanonicalProductionShotId, buildShotCopyText, buildGroupCopyText, buildSegmentCopyText, buildEpisodeCopyText, suggestSegmentsFromScenes, suggestSegmentsByKeyVisuals, normalizeSegments, segmentStateOf, segmentNextAction, splitByBudget, buildReviewOptimizeInstruction, normalizeReviewOverlay, buildEmptyReviewOverlay, normalizeAnalysisOverlay, buildEmptyAnalysisOverlay, analysisByteSize, computeLineDiff, revampParseAssetTokens, scanShotAssetTokens, classifyAssetToken, deriveAssetBindingView, revampAnalysisPath, revampReviewPath, revampUtf8Bytes, normalizeDirectorBrief, buildDirectorBriefSkeleton, buildVscJson, buildVscMarkdown, buildVscHandoff, normalizeHandoffList, deriveWritingPathLamp, vscByteSize, buildVscGenerateInstruction, vscShootingAggregate, nextAnnotationId, anchorFromSelection, applyAnnotationResolution, buildReviewRound, reviewRoundStats, nextReviewRoundNo, segmentStateLabel, buildSegmentId, nextSegmentNumber, renumberSegments, normalizeSegmentRecords, recomputeSegmentDerived, episodeSegmentsComplete, segmentStateCounts, nextSegmentStates, canApproveSegment, appendSegmentHistory, mergeSegmentInto, splitSegmentAtLine, reorderSegment, updateSegmentAt, segmentShotsOf, deriveSegmentShotMap, deriveNamingSnapshot, namingDisplayOf, namingCopyText, mergeNamingSnapshot, segmentSummaryLine, SEGMENT_STATE_LABELS, SEGMENT_FIELD_LIMITS, CARD_PLACEHOLDER, CARD_SECTION_LABELS, cardTextOf, storyboardCardModel, cardContextLine, groupCardModel, directorNoteModel, buildS5aCopy, GROUP_CONTROLS_LIMITS, ASSET_STATE_LABELS, ASSET_STATUS_VALUES, GROUP_OP_CODES, groupTextLimit, normalizeGroupControlEntry, normalizeGroupControls, groupControlOf, groupIdOf, groupControlName, groupControlSummary, normalizeGroupOrder, groupOrderedIds, groupOrderIndex, reorderGroupControls, groupShotBuckets, groupMenuItems, applyGroupControlOp, groupEditSuggestionText, buildAssetBindingRows, applyAssetBinding, removeAssetBinding, batchBindPlan, applyAssetMapping, bindingRateText, shotTablePlaceholder, shotTableSegmentOf, shotTableRowModel, narrowLayoutOf, s6TierLabelOf, s6ModeSwitchKeepsState, tableRowLinkTarget, s6TextOf, SHOT_TABLE_S6_COLUMNS, SHOT_TABLE_PLACEHOLDER, S6_BREAKPOINTS, REVAMP_PURE_NAMES, REVAMP_SEVERITIES, REVAMP_RESOLUTIONS, REVAMP_SEGMENT_STATES, REVAMP_ASSET_PREFIXES }
     /* REVAMP_P0_PURE_END */
 
     /** 页内模式器（role=group + aria-pressed；不使用 select/tablist）。 */
@@ -8475,62 +8665,6 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
                 h('select', { className: 'ad-select', value: settings.retrievalEnabled ? 'on' : 'off', onChange: (e) => setSettings({ ...settings, retrievalEnabled: e.target.value === 'on' }) },
                   h('option', { value: 'on' }, '开启（生成前召回设定 / 伏笔）'), h('option', { value: 'off' }, '关闭')))),
             h(Field, { label: '存储位置', value: settings.storageLocation, placeholder: '留空 = 默认位置（P1 仅持久化预留，切换存储根在 P2 生效）', onChange: (v) => setSettings({ ...settings, storageLocation: v }) })),
-          h('div', { className: 'ad-form-group', key: 'st-task-model' },
-            h('div', { className: 'ad-sec' }, '任务模型'),
-            h('div', { className: 'ad-box' },
-              h('div', { className: 'ad-row', style: { marginBottom: 6, flexWrap: 'wrap' } },
-                h('span', { className: 'ad-count' }, '按任务覆盖模型参数；未配置 = 跟随宿主默认'),
-                h('div', { style: { flex: 1 } }),
-                h('label', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 } },
-                  h('input', {
-                    className: 'ad-check',
-                    type: 'checkbox',
-                    checked: useDefault,
-                    'aria-label': '审读任务使用宿主默认模型',
-                    onChange: (e) => setAuditTaskModelDefault(e.target.checked),
-                  }),
-                  '审读：使用宿主默认')),
-              useDefault
-                ? h('div', { className: 'ad-hint-next' }, '跟随宿主默认（回退链：settings.defaultModel → 宿主 agentDefaultModel）。取消勾选可配置任务级模型。')
-                : h('div', { className: 'ad-settings-grid', style: { marginBottom: 8 } },
-                    h(Field, { label: 'Provider', value: audit.provider || '', placeholder: '留空 = 宿主默认 provider', onChange: (v) => setAuditTaskModelField('provider', v) }),
-                    h(Field, { label: '审读模型', value: audit.model || '', placeholder: hostSupportsCostTier() ? '必填；或仅配置成本档位（留空）' : '必填，例如 deepseek-reasoner', onChange: (v) => setAuditTaskModelField('model', v) }),
-                    h(Field, { label: 'Temperature', value: audit.temperature == null ? '' : audit.temperature, placeholder: '0~2，留空 = 宿主默认', onChange: (v) => setAuditTaskModelField('temperature', v) }),
-                    h(Field, { label: 'MaxTokens', value: audit.maxTokens == null ? '' : audit.maxTokens, placeholder: '≤60000，留空 = 宿主默认 60k', onChange: (v) => setAuditTaskModelField('maxTokens', v) }),
-                    h(Field, { label: '超时(ms)', value: audit.timeoutMs == null ? '' : audit.timeoutMs, placeholder: '1000~60000，留空 = 宿主默认 45s', onChange: (v) => setAuditTaskModelField('timeoutMs', v) })),
-              h('div', { className: 'ad-field', key: 'tm-cost-tier' },
-                h('label', null, '成本档位'),
-                h('select', {
-                  className: 'ad-select',
-                  'aria-label': '审读成本档位',
-                  value: normalizeCostTier(audit.costTier),
-                  onChange: (e) => setAuditTaskModelCostTier(e.target.value),
-                  disabled: useDefault || !hostSupportsCostTier(),
-                  title: hostSupportsCostTier()
-                    ? '成本档位（fast/standard/strong；不可用时宿主回退并标记）'
-                    : `当前宿主 v${(status && status.version) || '?'} 不支持成本档位：SKIP（不发送该字段）`,
-                },
-                  COST_TIER_OPTIONS.map(([value, label]) => h('option', { key: value || 'default', value }, label))),
-                useDefault
-                  ? h('span', { className: 'ad-sub' }, '未配置任务级模型时不保存档位')
-                  : !hostSupportsCostTier()
-                    ? h('span', { className: 'ad-sub' }, '旧宿主降级：SKIP（不发送 costTier）')
-                    : h('span', { className: 'ad-sub' }, '不可用档位由宿主回退并标记')),
-              costTierNotice ? h('div', { className: 'ad-doc-note', key: 'tm-cost-notice', role: 'status', style: { marginBottom: 6 } }, costTierNotice) : null,
-              !useDefault
-                ? h('div', { className: 'ad-row', key: 'tm-recent', style: { marginBottom: 8, flexWrap: 'wrap' } },
-                    h('span', { className: 'ad-sub' }, '最近使用：'),
-                    taskModelRecent.length
-                      ? taskModelRecent.map((item, index) => h('button', {
-                          className: 'ad-btn ad-sm',
-                          key: `${item.provider}/${item.model}/${index}`,
-                          title: '填入该模型配置',
-                          onClick: () => applyRecentTaskModel(item),
-                        }, `${item.provider ? item.provider + ' / ' : ''}${item.model}`))
-                      : h('span', { className: 'ad-hint-next' }, '暂无记录（保存一次任务模型后自动记录，最多 8 条）'))
-                : null,
-              taskModelError ? h('div', { className: 'ad-err', style: { marginBottom: 6 }, role: 'alert' }, taskModelError) : null,
-              h('div', { className: 'ad-path' }, '回退链：任务模型 → 默认模型 → 宿主默认（agentDefaultModel）。模型运行时不可用时宿主降级并标记，不阻断审读。其他任务键（review/outline/characters/episode/storyboard）已预留，v0.6.1 暂不渲染。Ctrl/⌘+S 保存当前页签或文档栏；Enter 执行搜索。'))),
           h('div', { className: 'ad-form-group', key: 'st-templates' },
             h('div', { className: 'ad-sec' }, `提示词模板（${PROMPT_TEMPLATE_KEYS.length} 个环节，留空 = 内置默认）`),
             h('div', { className: 'ad-settings-grid' },
@@ -8826,7 +8960,6 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       if (!args) return null
       const parts = []
       if (args.title) parts.push(`项目：${toolviewCut(args.title, 60)}`)
-      if (args.deep === true) parts.push('AI 审读：开')
       if (args.episode != null) parts.push(`第 ${args.episode} 集`)
       if (args.maxTokens != null) parts.push(`预算 ${args.maxTokens} tokens`)
       if (args.timeoutMs != null) parts.push(`超时 ${args.timeoutMs}ms`)
@@ -8855,7 +8988,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       if (phase === 'preparing') {
         children.push(h('div', { className: 'ad-toolview-hint', key: 'prep' }, args ? '等待参数发送…' : '准备参数…'))
       } else if (phase === 'start') {
-        children.push(h('div', { className: 'ad-toolview-hint', key: 'run' }, '检查中…（确定性检查 + 可选 AI 审读，完成后显示结果）'))
+        children.push(h('div', { className: 'ad-toolview-hint', key: 'run' }, '检查中…（确定性检查，完成后显示结果）'))
       } else if (isError) {
         const errorText = toolviewResultText(block) || [block.error && block.error.name, block.error && block.error.code].filter(Boolean).join(': ')
         children.push(h('div', { className: 'ad-toolview-error', key: 'err' },
@@ -8874,7 +9007,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         } catch {
           model = null
         }
-        const parsed = Boolean(model && (model.summary || model.issues.length || model.findings.length || model.noIssues || model.deep || model.saved))
+        const parsed = Boolean(model && (model.summary || model.issues.length || model.noIssues))
         if (!parsed || !text) {
           children.push(h('div', { className: 'ad-toolview-fallback', key: 'raw' },
             h('div', { className: 'ad-toolview-hint' }, '结果解析回退（原文摘要）'),
@@ -8898,33 +9031,8 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
                 ? h('div', { className: 'ad-toolview-hint', key: 'more-issues' }, `…共 ${model.issues.length} 项；完整清单见面板「检查」页`)
                 : null))
           }
-          if (model.deep || model.conclusion.length || model.findings.length) {
-            children.push(h('div', { className: 'ad-toolview-deep', key: 'deep' },
-              h('div', { className: 'ad-toolview-sub', key: 'sub' }, 'AI 审读',
-                model.deep
-                  ? h('span', { className: 'ad-toolview-badge', 'data-state': model.deep.state.indexOf('降级') >= 0 ? 'error' : 'ok', style: { marginLeft: 6 }, key: 'deep-badge' }, `${model.deep.mode} / ${model.deep.state}`)
-                  : null),
-              model.deep && model.deep.reason
-                ? h('div', { className: 'ad-toolview-hint', key: 'reason' }, `降级原因：${toolviewCut(model.deep.reason, 120)}（不阻断定稿 / 导出）`)
-                : null,
-              model.conclusion.length
-                ? h('div', { className: 'ad-toolview-conclusion', key: 'conclusion' }, `结论：${toolviewCut(model.conclusion[model.conclusion.length - 1], TOOLVIEW_TEXT_MAX)}`)
-                : null,
-              model.findings.slice(0, TOOLVIEW_MAX_FINDINGS).map((finding, index) => h('div', { className: 'ad-toolview-finding', key: 'finding-' + index },
-                h('div', { className: 'ad-toolview-finding-head', key: 'head' },
-                  toolviewSeverityChip(finding.severity),
-                  h('span', { className: 'ad-toolview-dim', key: 'dim' }, `${toolviewCut(finding.dimension, 40)} @${toolviewCut(finding.location, 40)}`)),
-                h('div', { className: 'ad-toolview-evidence', key: 'ev' }, `证据：${toolviewCut(finding.evidence, TOOLVIEW_TEXT_MAX)}`),
-                h('div', { className: 'ad-toolview-suggestion', key: 'sg' }, `建议：${toolviewCut(finding.suggestion, TOOLVIEW_TEXT_MAX)}`))),
-              model.findings.length > TOOLVIEW_MAX_FINDINGS
-                ? h('div', { className: 'ad-toolview-hint', key: 'more-findings' }, `…共 ${model.findings.length} 条；完整清单见面板「检查」页 / .aidrama/reviews/latest.json`)
-                : null))
-          }
-          if (model.saved) children.push(h('div', { className: 'ad-toolview-hint', key: 'saved' }, `已保存审读报告：第 ${model.saved.episode} 集${model.saved.path ? `（${toolviewCut(model.saved.path, 120)}）` : ''}`))
-          if (model.savedPath) children.push(h('div', { className: 'ad-toolview-hint', key: 'path' }, `报告已落盘：${toolviewCut(model.savedPath, 160)}`))
-          if (model.next) children.push(h('div', { className: 'ad-toolview-next', key: 'next' }, `下一步：${toolviewCut(model.next, 200)}`))
         }
-        children.push(h('div', { className: 'ad-toolview-foot', key: 'foot' }, '只读卡片：裁决（采纳 / 忽略 / 标误报）请在面板「检查」页操作；完整报告见 .aidrama/reviews/latest.json。'))
+        children.push(h('div', { className: 'ad-toolview-foot', key: 'foot' }, '只读卡片：确定性检查结果。'))
       }
       return h('div', { className: 'ad-toolview', 'data-toolview': 'drama_check_consistency', 'data-state': state }, children)
     }
@@ -9413,6 +9521,12 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       })
       return out
     }
+    function worldDocEntryOf(entry) {
+      const next = { id: String(entry && entry.id || ''), name: String(entry && entry.name || ''), detail: String(entry && entry.detail || '') }
+      if (entry && entry.extension) next.extension = String(entry.extension)
+      if (entry && entry.tertiary) next.tertiary = String(entry.tertiary)
+      return next
+    }
     function worldDocFromFlat(world, rules, tertiaryTags, schemaVersion) {
       const payload = worldSavePayload(world)
       const v3 = Number(schemaVersion) >= 3
@@ -9421,17 +9535,17 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         const summaryRow = rows.find((entry) => entry.role === 'summary') || null
         return {
           kind,
-          summary: summaryRow ? String(summaryRow.detail || '').slice(0, 4000) : '',
-          rules: worldRulesNormalize(rules && rules[kind]).map((rule) => ({ ...rule, name: rule.name.slice(0, 60), detail: rule.detail.slice(0, 2000) })),
-          entries: rows.filter((entry) => entry.role !== 'summary').map((entry) => { const next = { ...entry }; delete next.role; return next }),
+          summary: summaryRow ? String(summaryRow.detail || '').slice(0, 5000) : '',
+          rules: worldRulesNormalize(rules && rules[kind]).map((rule) => ({ ...rule, name: rule.name.slice(0, 60), detail: rule.detail.slice(0, 5000) })),
+          entries: rows.filter((entry) => entry.role !== 'summary').map(worldDocEntryOf),
           ...(v3 ? { tertiaryTags: worldTertiaryTagsDocOf(tertiaryTags, kind) } : {}),
         }
       })
       const otherRows = payload.filter((entry) => entry && entry.kind === '其他')
       const otherSummaryRow = otherRows.find((entry) => entry.role === 'summary') || null
-      const otherRules = worldRulesNormalize(rules && rules['其他']).map((rule) => ({ ...rule, name: rule.name.slice(0, 60), detail: rule.detail.slice(0, 2000) }))
-      const otherEntries = otherRows.filter((entry) => entry.role !== 'summary').map((entry) => { const next = { ...entry }; delete next.role; return next })
-      const otherSummary = otherSummaryRow ? String(otherSummaryRow.detail || '').slice(0, 4000) : ''
+      const otherRules = worldRulesNormalize(rules && rules['其他']).map((rule) => ({ ...rule, name: rule.name.slice(0, 60), detail: rule.detail.slice(0, 5000) }))
+      const otherEntries = otherRows.filter((entry) => entry.role !== 'summary').map(worldDocEntryOf)
+      const otherSummary = otherSummaryRow ? String(otherSummaryRow.detail || '').slice(0, 5000) : ''
       if (otherSummary || otherRules.length || otherEntries.length) {
         categories.push({ kind: '其他', summary: otherSummary, rules: otherRules, entries: otherEntries, ...(v3 ? { tertiaryTags: worldTertiaryTagsDocOf(tertiaryTags, '其他') } : {}) })
       }
@@ -9449,13 +9563,13 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
           const category = categories.find((item) => item && String(item.kind || '') === kind)
           if (!category) return
           const summary = String(category.summary == null ? '' : category.summary).trim()
-          if (summary) flat.push({ id: '', kind, role: 'summary', name: '总述', detail: summary.slice(0, 4000) })
+          if (summary) flat.push({ id: '', kind, role: 'summary', name: '总述', detail: summary.slice(0, 5000) })
           const entries = Array.isArray(category.entries) ? category.entries : []
           entries.forEach((entry) => {
             const item = entry && typeof entry === 'object' ? entry : {}
             if (item.role === 'summary') {
               const text = String(item.detail == null ? '' : item.detail).trim()
-              if (text) flat.push({ id: String(item.id || ''), kind, role: 'summary', name: '总述', detail: text.slice(0, 4000) })
+              if (text) flat.push({ id: String(item.id || ''), kind, role: 'summary', name: '总述', detail: text.slice(0, 5000) })
               return
             }
             flat.push({ ...item, kind })
@@ -9795,6 +9909,15 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       const [assetBatchNotice, setAssetBatchNotice] = React.useState('')
       const assetBatchQueueRef = React.useRef([])
       const assetBatchDrainingRef = React.useRef(false)
+      const assetPollReloadAtRef = React.useRef(0)
+      const assetSnapshotRevisionRef = React.useRef(-1)
+      const assetSnapshotKnownIdsRef = React.useRef(new Set())
+      const assetSnapshotRunningRef = React.useRef(false)
+      const assetSnapshotLastDeepAtRef = React.useRef(0)
+      const assetSnapshotLastApplyAtRef = React.useRef(0)
+      const assetSnapshotManualAtRef = React.useRef(0)
+      const assetSnapshotManualOkRef = React.useRef(true)
+      const assetLastGenerationAtRef = React.useRef(0)
       const assetBatchBarRef = React.useRef(null)
       const [assetBatchBarStyle, setAssetBatchBarStyle] = React.useState({ position: 'fixed', left: '50%', bottom: 16, width: 'min(560px, calc(100vw - 32px))', transform: 'translateX(-50%)', zIndex: 39 })
       React.useEffect(() => {
@@ -9817,11 +9940,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
             let bottom = 16
             const dock = typeof document !== 'undefined' ? document.querySelector('[data-task-notice-dock]') : null
             const dockRect = dock && typeof dock.getBoundingClientRect === 'function' ? dock.getBoundingClientRect() : null
-            if (dockRect && Number(dockRect.width) > 0) {
-              const barLeft = center - width / 2
-              const overlapsX = barLeft < Number(dockRect.right) && barLeft + width > Number(dockRect.left)
-              if (overlapsX) bottom = 16 + Number(dockRect.height || 0) + 8
-            }
+            if (dockRect && Number(dockRect.width) > 0) bottom = 16 + Number(dockRect.height || 0) + 8
             const next = { position: 'fixed', left: Math.round(center), bottom: Math.round(bottom), width: Math.round(width), transform: 'translateX(-50%)', zIndex: 39 }
             setAssetBatchBarStyle((prev) => (prev && prev.left === next.left && prev.bottom === next.bottom && prev.width === next.width ? prev : next))
             if (typeof ResizeObserver === 'function') {
@@ -10139,7 +10258,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         return () => { cancelled = true }
       }, [tab, assetLibraryV2, assetGenerateSupported, openTitle, assetSelectedId, status && status.assetGenerateHostWorkerSupported, assetDetailStage])
       React.useEffect(() => {
-        if (!openTitle || tab !== 'assets') return undefined
+        if (!openTitle) return undefined
         let reconcileRunning = false
         let resumeRestoredRunning = false
         const resumeRestored = () => {
@@ -10156,7 +10275,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
               for (const task of restoredAll) {
                 try {
                   const card = assetCards.find((item) => String(item.id || '').toUpperCase() === String(task.cardId || '').toUpperCase()) || null
-                  const retry = card ? [{ id: 'retry', label: '重试', run: () => { try { sendAssetImageRequest(card).catch(() => {}) } catch (error) { /* 忽略 */ } } }] : []
+                  const retry = card ? [{ id: 'retry', label: '重试', run: () => { try { bridgeSendAssetTask(card).catch(() => {}) } catch (error) { /* 忽略 */ } } }] : []
                   taskCenterUpsert({ ...task, restored: false, stage: 'error', error: '未提交：当前宿主不支持直连生成，无法续跑（可重试/丢弃）', actions: [...retry, { id: 'discard', label: '丢弃' }] }, taskCenterAssetAdapter)
                   taskCenterDiagnostics.lastResume.handled += 1
                 } catch (error) { /* 忽略单条 */ }
@@ -10166,8 +10285,8 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
             }
             const restored = restoredAll
             const queueAdds = []
-            const locateAction = (card) => ({ id: 'locate', label: '定位', run: () => { try { focusAssetCard(String(card && card.id || '')) } catch (error) { /* 忽略 */ } } })
-            const retryAction = (card) => ({ id: 'retry', label: '重试', run: () => { try { sendAssetImageRequest(card).catch(() => {}) } catch (error) { /* 忽略 */ } } })
+            const locateAction = (card) => ({ id: 'locate', label: '定位', run: () => { try { bridgeLocateAssetCard(card) } catch (error) { /* 忽略 */ } } })
+            const retryAction = (card) => ({ id: 'retry', label: '重试', run: () => { try { bridgeSendAssetTask(card).catch(() => {}) } catch (error) { /* 忽略 */ } } })
             for (const task of restored) {
               try {
                 const card = assetCards.find((item) => String(item.id || '').toUpperCase() === String(task.cardId || '').toUpperCase()) || null
@@ -10207,20 +10326,137 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
             resumeRestoredRunning = false
           }
         }
-        const pollOne = async (task) => {
+        const bridgeSendAssetTask = (card) => { try { const fn = taskCenterState.sendAssetImageRequest; if (typeof fn === 'function') return fn(card) } catch (error) { /* 忽略 */ } return Promise.resolve() }
+        const bridgeLocateAssetCard = (card) => { try { const fn = taskCenterState.focusAssetCard; if (typeof fn === 'function') fn(String(card && card.id || '')) } catch (error) { /* 忽略 */ } }
+        const snapshotPublishTask = (card, info, options) => {
           try {
-            const result = await api('asset-generate', { title: openTitle, assetId: task.cardId, taskId: task.taskId, action: 'status' })
-            const info = assetGenerateTaskOf(result)
+            const direct = taskCenterState.publishAssetTask
+            if (typeof direct === 'function') return direct(card, info, options)
+          } catch (error) { /* 回退到本地 upsert */ }
+          const optionsValue = options && typeof options === 'object' ? options : {}
+          const taskId = String((info && info.taskId) || optionsValue.taskId || '')
+          if (!taskId) return null
+          const stage = optionsValue.stage || snapshotStageOf((info && (info.canonicalStatus || info.status)) || '')
+          const errorText = String((info && info.error) || '')
+          const actions = stage === 'error' ? [{ id: 'retry', label: '重试', run: () => { try { bridgeSendAssetTask(card).catch(() => {}) } catch (error) { /* 忽略 */ } } }, { id: 'locate', label: '定位', run: () => bridgeLocateAssetCard(card) }] : [{ id: 'locate', label: '定位', run: () => bridgeLocateAssetCard(card) }]
+          return taskCenterUpsert({ taskId, type: 'asset-image', source: 'ai-drama', cardId: String(card && card.id || ''), stateId: String(optionsValue.stateId || (info && info.stateId) || ''), project: openTitle, displayName: String(card ? ((card.id + ' ' + (card.name || '')).trim() + (String(optionsValue.stateId || (info && info.stateId) || '') ? ' · ' + String(optionsValue.stateId || (info && info.stateId) || '') : '')) : taskId), title: String(optionsValue.title || '资产图生成'), stage, authority: String(optionsValue.authority || (/^ag-/.test(taskId) ? 'host' : 'temp')), mode: String(optionsValue.mode || (info && info.mode) || ''), hostStatus: String((info && (info.canonicalStatus || info.status)) || ''), revision: Number(info && info.revision) || 0, taskRevision: Number(info && info.taskRevision) || 0, lastSyncedAt: Date.now(), lastApplyAt: Date.now(), updatedAt: Number(info && info.updatedAtMs) || undefined, error: errorText, artifact: (info && info.artifact) || null, actions }, taskCenterAssetAdapter)
+        }
+        const snapshotStageOf = (status) => {
+          const text = String(status || '').toLowerCase()
+          if (['done', 'succeeded', 'success', 'completed', 'finished', 'bound'].includes(text)) return 'success'
+          if (['failed', 'error', 'cancelled', 'canceled', 'timeout'].includes(text)) return 'error'
+          if (['queued', 'submitted', 'pending'].includes(text)) return 'queued'
+          return 'running'
+        }
+        const notePollSkipped = (reason, taskId) => {
+          try {
+            const skipped = taskCenterDiagnostics.polling.skipped || (taskCenterDiagnostics.polling.skipped = [])
+            skipped.push({ reason: String(reason || ''), taskId: String(taskId || ''), at: Date.now() })
+            if (skipped.length > 50) skipped.splice(0, skipped.length - 50)
+          } catch (error) { /* 忽略 */ }
+        }
+        const dropLocalBatchEntry = (queueId) => {
+          const key = String(queueId || '')
+          if (!key.startsWith('batch-')) return
+          try {
+            const next = assetBatchQueueRef.current.filter((item) => String(item.queueId) !== key)
+            assetBatchQueueRef.current = next
+            setAssetBatchQueue(next.slice())
+          } catch (error) { /* 忽略 */ }
+        }
+        const markAssetTaskInvalid = (task, message) => {
+          try {
             const card = assetCards.find((item) => String(item.id || '') === String(task.cardId || '')) || { id: task.cardId, name: task.displayName }
-            publishAssetTask(card, info, { title: '资产图生成 · ' + (info.taskId ? String(info.taskId).slice(0, 8) : task.taskId) })
-          } catch (error) {
-            if (task && task.restored) {
-              const age = Date.now() - (Number(task.stageSince) || Number(task.updatedAt) || Date.now())
-              if (age > 30 * 60 * 1000) {
-                const card = assetCards.find((item) => String(item.id || '') === String(task.cardId || '')) || { id: task.cardId, name: task.displayName }
-                taskCenterUpsert({ ...task, restored: false, stage: 'timeout', error: ASSET_TASK_ERROR_TEXT.timeout + '（对账未找到任务）', actions: [{ id: 'retry', label: '重试', run: () => { try { sendAssetImageRequest(card).catch(() => {}) } catch (error) { /* 忽略 */ } } }, { id: 'locate', label: '定位', run: () => { try { focusAssetCard(String(card && card.id || '')) } catch (error) { /* 忽略 */ } } }] }, taskCenterAssetAdapter)
+            taskCenterUpsert({ ...task, restored: false, stage: 'timeout', terminal: true, doneAt: Date.now(), error: String(message || '任务已失效'), actions: [{ id: 'retry', label: '重试', run: () => { try { bridgeSendAssetTask(card).catch(() => {}) } catch (error) { /* 忽略 */ } } }, { id: 'locate', label: '定位', run: () => { try { bridgeLocateAssetCard(card) } catch (error) { /* 忽略 */ } } }, { id: 'discard', label: '丢弃', run: () => { try { taskCenterRemove(String(task.taskId)) } catch (error) { /* 忽略 */ } } }] }, taskCenterAssetAdapter)
+            return true
+          } catch (error) { return false }
+        }
+        const pollOne = async (task) => {
+          const pollKey = String((task && task.taskId) || '')
+          const rawTaskId = String((task && task.taskId) || '')
+          const canQueryByTaskId = /^ag-/.test(rawTaskId)
+          const isLegacy = task && (task.needsConfirm === true || task.authority === 'legacy')
+          const migrationAge = Date.now() - (Number(task && (task.migrationSince || task.updatedAt || task.stageSince)) || Date.now())
+          const taskAge = Date.now() - (Number(task && (task.stageSince || task.updatedAt)) || Date.now())
+          const age = isLegacy ? migrationAge : taskAge
+          const expire = () => {
+            if (isLegacy) {
+              try {
+                taskCenterUpsert({ ...task, needsConfirm: false, migrationState: 'expired', stage: 'timeout', terminal: true, doneAt: Date.now(), error: '无法确认（宿主无记录）', actions: [{ id: 'discard', label: '丢弃' }] }, taskCenterAssetAdapter)
+                taskCenterDiagnostics.migration.pending = Math.max(0, Number(taskCenterDiagnostics.migration.pending) - 1)
+                taskCenterDiagnostics.migration.expired += 1
+              } catch (error) { /* 忽略 */ }
+              return
+            }
+            markAssetTaskInvalid(task, '任务已失效（宿主无记录）')
+          }
+          try {
+            taskCenterDiagnostics.polling.active = true
+            if (pollKey && !taskCenterDiagnostics.polling.taskIds.includes(pollKey)) taskCenterDiagnostics.polling.taskIds.push(pollKey)
+            taskCenterDiagnostics.polling.count += 1
+            taskCenterDiagnostics.lastStatusAt = Date.now()
+            if (isLegacy) notePollSkipped(rawTaskId.startsWith('batch-') ? 'batch' : 'noTaskId', rawTaskId)
+            let result = null
+            let queryError = null
+            if (canQueryByTaskId) {
+              try {
+                result = await api('asset-generate', { title: openTitle, assetId: task.cardId, taskId: rawTaskId, action: 'status', statusVersion: 2 })
+              } catch (error) { queryError = error }
+            }
+            let info = assetGenerateTaskOf(result)
+            if (!canQueryByTaskId || !info.status || queryError) {
+              try {
+                const fallback = await api('asset-generate', { title: openTitle, assetId: task.cardId, action: 'status', statusVersion: 2 })
+                const fallbackInfo = assetGenerateTaskOf(fallback)
+                if (fallbackInfo && fallbackInfo.status) info = fallbackInfo
+              } catch (error) { queryError = error }
+            }
+            if (!info || !info.status) {
+              if (age >= 120000) expire()
+              return
+            }
+            if (info.legacy === true || info.unmanageable === true) {
+              try {
+                taskCenterUpsert({ ...task, needsConfirm: false, migrationState: 'legacy', stage: 'error', terminal: true, doneAt: Date.now(), error: '历史任务（不可管理）', actions: [{ id: 'discard', label: '丢弃' }] }, taskCenterAssetAdapter)
+                taskCenterDiagnostics.migration.pending = Math.max(0, Number(taskCenterDiagnostics.migration.pending) - 1)
+                taskCenterDiagnostics.migration.legacy += 1
+              } catch (error) { /* 忽略 */ }
+              return
+            }
+            const realTaskId = String(info.taskId || '') || rawTaskId
+            const current = taskCenterSnapshot().tasks.find((row) => String(row.taskId) === String(realTaskId))
+            const incomingRevision = Number(info.revision) || 0
+            const currentRevision = Number(current && current.revision) || 0
+            if (incomingRevision && currentRevision && incomingRevision < currentRevision) {
+              taskCenterDiagnostics.polling.staleResponses = (Number(taskCenterDiagnostics.polling.staleResponses) || 0) + 1
+              return
+            }
+            if (incomingRevision && currentRevision && incomingRevision === currentRevision && Number(info.taskRevision) && Number(current && current.taskRevision) === Number(info.taskRevision) && String(current.hostStatus || '') === String(info.canonicalStatus || info.status || '')) return
+            if (incomingRevision) taskCenterDiagnostics.polling.lastRevision = Math.max(Number(taskCenterDiagnostics.polling.lastRevision) || 0, incomingRevision)
+            if (realTaskId !== rawTaskId) {
+              dropLocalBatchEntry(rawTaskId)
+              try { taskCenterRemove(rawTaskId) } catch (error) { /* 忽略 */ }
+              if (isLegacy) {
+                taskCenterDiagnostics.migration.pending = Math.max(0, Number(taskCenterDiagnostics.migration.pending) - 1)
+                taskCenterDiagnostics.migration.adopted += 1
               }
             }
+            const card = assetCards.find((item) => String(item.id || '') === String(task.cardId || '')) || { id: task.cardId, name: task.displayName }
+            const stage = snapshotStageOf(info.canonicalStatus || info.status)
+            snapshotPublishTask(card, { ...info, taskId: realTaskId }, { stage, stateId: info.stateId || task.stateId, authority: 'host', title: '资产图生成 · ' + (realTaskId ? String(realTaskId).slice(0, 8) : rawTaskId) })
+            if (stage === 'success' || stage === 'error') {
+              const at = Date.now()
+              if (stage === 'success' && at - Number(assetPollReloadAtRef.current || 0) > 5000) {
+                assetPollReloadAtRef.current = at
+                loadAssets({ keepView: true }).catch(() => {})
+              }
+            }
+          } catch (error) {
+            taskCenterDiagnostics.polling.networkErrors = (Number(taskCenterDiagnostics.polling.networkErrors) || 0) + 1
+            if (age >= 120000) expire()
+          } finally {
+            taskCenterDiagnostics.polling.taskIds = (taskCenterDiagnostics.polling.taskIds || []).filter((id) => id !== pollKey)
+            taskCenterDiagnostics.polling.active = taskCenterDiagnostics.polling.taskIds.length > 0
           }
         }
         const reconcileRestored = async () => {
@@ -10237,16 +10473,270 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
             reconcileRunning = false
           }
         }
-        const poll = () => {
-          try { resumeRestored() } catch (error) { /* 恢复失败不阻断轮询 */ }
-          const active = taskCenterSnapshot().tasks.filter((task) => task.type === 'asset-image' && task.stage === 'running' && !task.restored).slice(0, 3)
-          for (const task of active) { void pollOne(task) }
-          void reconcileRestored()
+        const snapshotRowOf = (raw) => {
+          const row = raw && typeof raw === 'object' ? raw : {}
+          const task = row.task && typeof row.task === 'object' ? row.task : row
+          const updatedRaw = row.updatedAt || row.updated_at || task.updatedAt || task.updated_at || 0
+          return {
+            taskId: String(row.taskId || row.id || task.taskId || task.id || '').trim(),
+            cardId: String(row.cardId || row.assetId || task.cardId || task.assetId || '').toUpperCase(),
+            stateId: String(row.stateId || task.stateId || 'default') || 'default',
+            canonical: String(row.canonicalStatus || row.status || task.canonicalStatus || task.status || '').toLowerCase(),
+            error: String(row.error || row.reason || task.error || task.reason || ''),
+            revision: Number(row.revision || task.revision) || 0,
+            taskRevision: Number(row.taskRevision || task.taskRevision) || 0,
+            updatedAtMs: Number(updatedRaw) || (updatedRaw ? Date.parse(String(updatedRaw)) || 0 : 0),
+            artifact: row.artifact || task.artifact || null,
+            mode: String(row.mode || task.mode || ''),
+            legacy: row.legacy === true || task.legacy === true,
+            unmanageable: row.unmanageable === true || task.unmanageable === true,
+          }
         }
-        const timer = setInterval(poll, 8000)
-        poll()
-        return () => clearInterval(timer)
-      }, [openTitle, tab, assetGenerateSupported, assetCards])
+        const upsertExpiredLegacyActions = () => {
+          const expiredLegacy = taskCenterSnapshot().tasks.filter((task) => task.type === 'asset-image' && task.migrationState === 'expired' && Array.isArray(task.actions) && !task.actions.some((action) => action && action.id === 'retry'))
+          for (const task of expiredLegacy) {
+            try {
+              const card = assetCards.find((item) => String(item.id || '') === String(task.cardId || '')) || { id: task.cardId, name: task.displayName }
+              taskCenterUpsert({ ...task, actions: [{ id: 'retry', label: '重试', run: () => { try { bridgeSendAssetTask(card).catch(() => {}) } catch (error) { /* 忽略 */ } } }, { id: 'locate', label: '定位', run: () => { try { bridgeLocateAssetCard(card) } catch (error) { /* 忽略 */ } } }, { id: 'discard', label: '丢弃', run: () => { try { taskCenterRemove(String(task.taskId)) } catch (error) { /* 忽略 */ } } }] }, taskCenterAssetAdapter)
+            } catch (error) { /* 忽略 */ }
+          }
+        }
+        const applyStatusAllSnapshot = (result) => {
+          const rows = (Array.isArray(result && result.tasks) ? result.tasks : (Array.isArray(result && result.snapshot && result.snapshot.tasks) ? result.snapshot.tasks : [])).map(snapshotRowOf).filter((row) => row.taskId)
+          const revision = Number(result && (result.revision || (result.snapshot && result.snapshot.revision))) || 0
+          const localTasks = taskCenterSnapshot().tasks.filter((task) => task.type === 'asset-image')
+          const localById = new Map(localTasks.map((task) => [String(task.taskId), task]))
+          const localByKey = new Map()
+          for (const task of localTasks) {
+            const key = String(task.cardId || '').toUpperCase() + '::' + String(task.stateId || 'default')
+            const previous = localByKey.get(key)
+            if (!previous || (Number(task.updatedAt) || 0) >= (Number(previous.updatedAt) || 0)) localByKey.set(key, task)
+          }
+          const matched = new Set()
+          const successCards = []
+          taskCenterBeginBatch()
+          try {
+            for (const row of rows) {
+              const terminalStatus = ['done', 'failed', 'cancelled', 'canceled'].includes(String(row.canonical || '').toLowerCase())
+              const rowUpdatedAt = Number(row.updatedAtMs) || Date.now()
+              const key = row.cardId + '::' + row.stateId
+              const local = localById.get(row.taskId) || localByKey.get(key) || null
+              if (terminalStatus && rowUpdatedAt < TASK_CENTER_BOOT_AT) continue
+              const clearedBlocked = Number(taskCenterState.clearedAt) > 0 && rowUpdatedAt < Number(taskCenterState.clearedAt)
+              if (clearedBlocked && !(terminalStatus && local && local.terminal !== true)) continue
+              if (local) matched.add(String(local.taskId))
+              if (row.legacy || row.unmanageable) {
+                const target = local || { taskId: row.taskId, cardId: row.cardId, stateId: row.stateId }
+                try { taskCenterUpsert({ ...target, taskId: String(local && local.taskId || row.taskId), type: 'asset-image', source: 'ai-drama', cardId: row.cardId, stateId: row.stateId, project: openTitle, displayName: String(row.cardId || row.taskId), title: '历史任务（不可管理）', authority: 'legacy', hostStatus: row.canonical || 'legacy', needsConfirm: false, migrationState: 'legacy', stage: 'error', terminal: true, doneAt: Date.now(), error: '历史任务（不可管理）', actions: [{ id: 'discard', label: '丢弃' }] }, taskCenterAssetAdapter) } catch (error) { /* 忽略 */ }
+                continue
+              }
+              for (const other of localTasks) {
+                if (other === local || other.terminal) continue
+                const otherKey = String(other.cardId || '').toUpperCase() + '::' + String(other.stateId || 'default')
+                if (otherKey !== key) continue
+                const otherId = String(other.taskId || '')
+                if (!/^(batch-|submitting:|submit-|status-|collect-)/.test(otherId) && other.authority === 'host') continue
+                try { taskCenterRemove(otherId) } catch (error) { /* 忽略 */ }
+                dropLocalBatchEntry(otherId)
+              }
+              if (local && String(local.taskId) !== row.taskId) {
+                const localTaskId = String(local.taskId)
+                const placeholder = local.terminal !== true || /^(batch-|submitting:|submit-|status-|collect-)/.test(localTaskId)
+                if (placeholder) {
+                  try { taskCenterRemove(localTaskId) } catch (error) { /* 忽略 */ }
+                  dropLocalBatchEntry(localTaskId)
+                }
+                if (local.needsConfirm === true || local.authority === 'legacy') {
+                  taskCenterDiagnostics.migration.pending = Math.max(0, Number(taskCenterDiagnostics.migration.pending) - 1)
+                  taskCenterDiagnostics.migration.adopted += 1
+                }
+              }
+              const card = assetCards.find((item) => String(item.id || '').toUpperCase() === String(row.cardId || '').toUpperCase()) || { id: row.cardId, name: row.cardId }
+              const stage = snapshotStageOf(row.canonical)
+              const title = stage === 'success' ? '已完成' : (stage === 'error' ? '失败' : (stage === 'queued' ? '排队中' : '生成中'))
+              snapshotPublishTask(card, { taskId: row.taskId, status: row.canonical, canonicalStatus: row.canonical, error: row.error, stateId: row.stateId, revision: row.revision, taskRevision: row.taskRevision, updatedAtMs: row.updatedAtMs, artifact: row.artifact, mode: row.mode || (local && local.mode) || '', lastApplyAt: Date.now() }, { stage, stateId: row.stateId, authority: 'host', mode: row.mode || (local && local.mode) || '', title })
+              const stored = taskCenterState.tasks.get(String(row.taskId))
+              if (stored) stored.lastApplyAt = Date.now()
+              if (stage === 'success') successCards.push(String(row.cardId || ''))
+            }
+            const matchedByIds = new Set(rows.map((row) => row.taskId))
+            const now = Date.now()
+            for (const local of localTasks) {
+              if (matched.has(String(local.taskId))) continue
+              if (local.authority === 'legacy' && local.needsConfirm === true && local.migrationState === 'pending') {
+                const migrationAge = now - (Number(local.migrationSince) || Number(local.updatedAt) || now)
+                if (migrationAge >= 120000) {
+                  try {
+                    taskCenterUpsert({ ...local, needsConfirm: false, migrationState: 'expired', stage: 'timeout', terminal: true, doneAt: now, error: '无法确认（宿主无记录）', actions: [{ id: 'discard', label: '丢弃' }] }, taskCenterAssetAdapter)
+                    taskCenterDiagnostics.migration.pending = Math.max(0, Number(taskCenterDiagnostics.migration.pending) - 1)
+                    taskCenterDiagnostics.migration.expired += 1
+                  } catch (error) { /* 忽略 */ }
+                }
+                continue
+              }
+              if (local.authority !== 'host' || local.terminal) continue
+              if (String(local.taskId).startsWith('submitting:')) continue
+              if (matchedByIds.has(String(local.taskId))) continue
+              const age = now - (Number(local.stageSince) || Number(local.updatedAt) || now)
+              if (age >= 120000) markAssetTaskInvalid(local, '无法确认（宿主无记录）')
+            }
+            const applyNow = Date.now()
+            for (const local of localTasks) {
+              if (!local || local.terminal) continue
+              const stored = taskCenterState.tasks.get(String(local.taskId))
+              if (stored) stored.lastApplyAt = applyNow
+            }
+            if (successCards.length) {
+              const at = Date.now()
+              if (at - Number(assetPollReloadAtRef.current || 0) > 5000) {
+                assetPollReloadAtRef.current = at
+                loadAssets({ keepView: true }).catch(() => {})
+              }
+            }
+          } finally {
+            taskCenterEndBatch()
+          }
+          upsertExpiredLegacyActions()
+          assetSnapshotRevisionRef.current = revision
+          assetSnapshotKnownIdsRef.current = new Set(taskCenterSnapshot().tasks.filter((task) => task.authority === 'host').map((task) => String(task.taskId)))
+          taskCenterDiagnostics.polling.snapshotRevision = revision
+          taskCenterDiagnostics.polling.lastRevision = revision
+          taskCenterDiagnostics.polling.lastError = ''
+          taskCenterState.pollLimit = null
+        }
+        const fallbackPerTaskPoll = () => {
+          try { resumeRestored() } catch (error) { /* 恢复失败不阻断轮询 */ }
+          try {
+            const now = Date.now()
+            const allActive = taskCenterSnapshot().tasks.filter((task) => task.type === 'asset-image' && task.authority === 'host' && (task.stage === 'running' || task.stage === 'queued'))
+            for (const task of allActive) {
+              if (String(task.taskId || '').startsWith('submitting:')) { notePollSkipped('submitting', task.taskId); continue }
+              const age = now - (Number(task.stageSince) || Number(task.updatedAt) || now)
+              if (age >= 900000) markAssetTaskInvalid(task, '任务超时（长时间未完成）')
+            }
+          } catch (error) { /* 忽略 */ }
+          const activeAll = taskCenterSnapshot().tasks.filter((task) => task.type === 'asset-image' && task.authority === 'host' && (task.stage === 'running' || task.stage === 'queued') && !String(task.taskId || '').startsWith('submitting:'))
+          const active = activeAll.slice(0, 20)
+          taskCenterState.pollLimit = { active: active.length, total: activeAll.length, overLimit: Math.max(0, activeAll.length - active.length) }
+          taskCenterDiagnostics.polling.activeTaskCount = active.length
+          taskCenterDiagnostics.polling.totalActive = activeAll.length
+          taskCenterDiagnostics.polling.overLimit = Math.max(0, activeAll.length - active.length)
+          for (const task of active) { void pollOne(task) }
+          const legacyPending = taskCenterSnapshot().tasks.filter((task) => task.type === 'asset-image' && task.needsConfirm === true && task.migrationState === 'pending').slice(0, 20)
+          for (const task of legacyPending) { void pollOne(task) }
+          upsertExpiredLegacyActions()
+        }
+        let pollTimer = null
+        let pollDisposed = false
+        const clearPollTimer = () => { if (pollTimer) { try { clearTimeout(pollTimer) } catch (error) { /* 忽略 */ } pollTimer = null } }
+        const syncSnapshotTasks = () => taskCenterSnapshot().tasks
+        const hasActiveTask = () => syncSnapshotTasks().some((task) => !task.terminal)
+        const hasAnyTask = () => syncSnapshotTasks().length > 0
+        const nextDelayForSuccess = () => { if (!hasAnyTask()) return 0; return hasActiveTask() ? 5000 : 15000 }
+        let scheduleNextPoll = () => {}
+        const pollSnapshot = async (force) => {
+          if (pollDisposed) return false
+          if (assetSnapshotRunningRef.current) return false
+          if (!force && typeof document !== 'undefined' && document.visibilityState === 'hidden') return false
+          clearPollTimer()
+          const localNonTerminal = taskCenterSnapshot().tasks.filter((task) => task.type === 'asset-image' && !task.terminal)
+          const legacyPending = taskCenterSnapshot().tasks.filter((task) => task.type === 'asset-image' && task.needsConfirm === true && task.migrationState === 'pending')
+          const recentlyGenerated = Date.now() - Number(assetLastGenerationAtRef.current || 0) < 120000
+          assetSnapshotRunningRef.current = true
+          taskCenterDiagnostics.sync.inFlight = true
+          taskCenterDiagnostics.sync.lastAttemptAt = Date.now()
+          taskCenterDiagnostics.polling.active = true
+          try {
+            const result = await api('asset-generate', { title: openTitle, action: 'status-all', statusVersion: 2 })
+            if (!result || result.ok === false) throw new Error(String((result && (result.error || result.message)) || 'status-all 失败'))
+            const revision = Number(result.revision || (result.snapshot && result.snapshot.revision)) || 0
+            const now = Date.now()
+            taskCenterDiagnostics.sync.lastOkAt = now
+            taskCenterDiagnostics.sync.snapshotSeq = (Number(taskCenterDiagnostics.sync.snapshotSeq) || 0) + 1
+            taskCenterDiagnostics.sync.rev = revision > 0 ? revision : taskCenterDiagnostics.sync.snapshotSeq
+            taskCenterDiagnostics.sync.failCount = 0
+            taskCenterDiagnostics.sync.retryAttempt = 0
+            taskCenterDiagnostics.sync.lastError = null
+            taskCenterDiagnostics.polling.lastSnapshotAt = now
+            taskCenterDiagnostics.polling.snapshotCount = (Number(taskCenterDiagnostics.polling.snapshotCount) || 0) + 1
+            taskCenterDiagnostics.polling.snapshotRevision = revision
+            taskCenterDiagnostics.polling.lastError = ''
+            taskCenterDiagnostics.lastStatusAt = now
+            assetSnapshotLastDeepAtRef.current = now
+            taskCenterDiagnostics.polling.taskIds = localNonTerminal.map((task) => String(task.taskId)).slice(0, 20)
+            const known = assetSnapshotKnownIdsRef.current instanceof Set ? assetSnapshotKnownIdsRef.current : new Set()
+            const hasNewLocal = localNonTerminal.some((task) => !known.has(String(task.taskId)))
+            const revisionChanged = revision <= 0 || assetSnapshotRevisionRef.current < 0 || revision !== Number(assetSnapshotRevisionRef.current)
+            const hostNonTerminal = localNonTerminal.filter((task) => task.authority === 'host')
+            const forcedDue = hostNonTerminal.length > 0 && now - Number(assetSnapshotLastApplyAtRef.current || 0) >= 30000
+            if (!force && !revisionChanged && !hasNewLocal && !forcedDue) {
+              const syncedAt = Date.now()
+              taskCenterDiagnostics.polling.lastSkipReason = 'revision-unchanged'
+              scheduleNextPoll()
+              return true
+            }
+            taskCenterDiagnostics.polling.lastSkipReason = force ? 'manual' : (forcedDue ? 'forced-30s' : (revisionChanged ? '' : 'local-new-task'))
+            if (forcedDue) taskCenterDiagnostics.polling.lastForcedApplyAt = now
+            applyStatusAllSnapshot(result)
+            assetSnapshotLastApplyAtRef.current = Date.now()
+            taskCenterDiagnostics.polling.lastApplyAt = assetSnapshotLastApplyAtRef.current
+            scheduleNextPoll()
+            return true
+          } catch (error) {
+            const failCount = (Number(taskCenterDiagnostics.sync.failCount) || 0) + 1
+            taskCenterDiagnostics.sync.failCount = failCount
+            taskCenterDiagnostics.sync.retryAttempt = Math.min(3, failCount)
+            taskCenterDiagnostics.sync.lastError = taskCenterSyncErrorOf(error)
+            taskCenterDiagnostics.polling.lastError = taskCenterDiagnostics.sync.lastError.text
+            taskCenterDiagnostics.polling.lastSkipReason = 'error-fallback'
+            fallbackPerTaskPoll()
+            {
+              const base = failCount <= 3 ? ([2000, 5000, 10000][failCount - 1] || 10000) : 30000
+              const delay = Math.round(base * (0.8 + Math.random() * 0.4))
+              clearPollTimer()
+              pollTimer = setTimeout(() => { void pollSnapshot(false) }, delay)
+            }
+            return false
+          } finally {
+            if (taskCenterDiagnostics.sync) taskCenterDiagnostics.sync.inFlight = false
+            taskCenterDiagnostics.polling.active = false
+            assetSnapshotRunningRef.current = false
+          }
+        }
+        scheduleNextPoll = () => {
+          clearPollTimer()
+          if (pollDisposed) return
+          if (!hasAnyTask()) return
+          if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+          const delay = nextDelayForSuccess()
+          if (!delay) return
+          pollTimer = setTimeout(() => { void pollSnapshot(false) }, delay)
+        }
+        const syncNowBridge = () => {
+          if (assetSnapshotManualOkRef.current && Date.now() - Number(assetSnapshotManualAtRef.current || 0) < 2000) return Promise.resolve(false)
+          assetSnapshotManualAtRef.current = Date.now()
+          clearPollTimer()
+          return Promise.resolve(pollSnapshot(true)).then((ok) => { assetSnapshotManualOkRef.current = ok === true; return ok })
+        }
+        taskCenterState.syncNow = syncNowBridge
+        taskCenterDiagnostics.sync.snapshotSeq = 0
+        taskCenterDiagnostics.sync.rev = 0
+        taskCenterDiagnostics.sync.failCount = 0
+        taskCenterDiagnostics.sync.retryAttempt = 0
+        taskCenterDiagnostics.sync.lastError = null
+        const onVisibilityChange = () => {
+          if (typeof document !== 'undefined' && document.visibilityState === 'hidden') { clearPollTimer(); return }
+          void pollSnapshot(true)
+        }
+        try { if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') document.addEventListener('visibilitychange', onVisibilityChange) } catch (error) { /* 忽略 */ }
+        void pollSnapshot(true)
+        return () => {
+          pollDisposed = true
+          clearPollTimer()
+          try { if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') document.removeEventListener('visibilitychange', onVisibilityChange) } catch (error) { /* 忽略 */ }
+          if (taskCenterState.syncNow === syncNowBridge) taskCenterState.syncNow = null
+        }
+              }, [openTitle, tab, assetGenerateSupported, assetCards])
       const bindGeneratedVersions = async (cardId, relPaths, stateId) => {
         const paths = [...new Set((Array.isArray(relPaths) ? relPaths : []).map((item) => String(item || '').trim()).filter(Boolean))]
         if (!paths.length) return []
@@ -10891,10 +11381,11 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       const wbVscCloseRef = React.useRef(null)
       const wbVscMemory = (() => { if (!globalThis.__AD_WB_VSC_MEMORY) globalThis.__AD_WB_VSC_MEMORY = new Map(); return globalThis.__AD_WB_VSC_MEMORY })()
       const [wbDraft, setWbDraft] = React.useState({})
-      const [wbSave, setWbSave] = React.useState(() => { let at = ''; try { at = new Date().toLocaleTimeString('zh-CN', { hour12: false }) } catch (error) { at = '' } return { script: { state: 'saved', at: at }, prompt: { state: 'saved', at: at } } })
+      const [wbSave, setWbSave] = React.useState(() => ({ script: { state: 'idle', at: '' }, prompt: { state: 'idle', at: '' } }))
       const [wbExtractOpen, setWbExtractOpen] = React.useState(false)
       const [wbVideoStream, setWbVideoStream] = React.useState({ status: 'idle', url: '', message: '' })
       const [wbVideoSelectedVersion, setWbVideoSelectedVersion] = React.useState(null)
+      const [wbSaveBusy, setWbSaveBusy] = React.useState(false)
       const [wbVideoCanvas, setWbVideoCanvas] = React.useState({ state: 'idle', bound: false, error: '' })
       const [wbVideoParamsOpen, setWbVideoParamsOpen] = React.useState(false)
       const [wbVideoParams, setWbVideoParams] = React.useState(null)
@@ -10934,6 +11425,12 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       const wbDirtyRef = React.useRef(false)
       const wbSavingRef = React.useRef(false)
       const wbPendingRef = React.useRef(false)
+      const wbDraftRevisionRef = React.useRef(0)
+      const wbSavedRevisionRef = React.useRef(0)
+      const wbSaveChainRef = React.useRef(Promise.resolve(true))
+      const wbExpectedHashRef = React.useRef(null)
+      const wbSaveErrorRef = React.useRef('')
+      const wbQueueCountRef = React.useRef(0)
       const wbFlushRef = React.useRef(null)
       const wbSaveRef = React.useRef(null)
       const wbExtractTriggerRef = React.useRef(null)
@@ -10973,7 +11470,6 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       const [p11Highlight, setP11Highlight] = React.useState(null)
       /* v0.16.43（P1.2）：意见筛选/批量选择（纯 UI；不新增写面） */
       const [p12AnnFilter, setP12AnnFilter] = React.useState('all')
-      const [p12AnnSel, setP12AnnSel] = React.useState([])
       const [selectedSegmentId, setSelectedSegmentId] = React.useState(() => (initialPanelRestore && typeof initialPanelRestore.selectedSegmentId === 'string') ? initialPanelRestore.selectedSegmentId : '')
 
       // v0.16.40（P0 / S2）：审核工作流（review overlay；只读/写走 doc-read/doc-save，0 新 api）
@@ -10997,6 +11493,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       const p16DirectRef = React.useRef({ sending: false }) // v0.16.50 单飞
       // v0.16.54（D-0027）：自动应用状态/单飞/同 draft 一次
       const [p27Auto, setP27Auto] = React.useState({ state: 'idle', draftId: '', message: '', at: 0 })
+      const [autoAgentDraft, setAutoAgentDraft] = React.useState(null)
       const p27AutoRef = React.useRef({ inflight: false, attempted: new Set() })
       const [p16ServicesTick, setP16ServicesTick] = React.useState(0) // v0.16.50 条件注入就绪刷新
       // v0.16.51 D-0023：AI 直连会话选择器
@@ -11404,6 +11901,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         setReviewDirty(false)
         setReviewConflict(null)
         setReviewPendingDraft(null)
+        setAutoAgentDraft(null)
         setReviewDiff(null)
         setReviewSubmitInfo('')
 
@@ -11655,6 +12153,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         clearDirty('episode')
       }
       const applyShotsLoaded = (order, response) => {
+        if (wbTimerRef.current) { clearTimeout(wbTimerRef.current); wbTimerRef.current = null }
         const target = Number(order) || 1
         const result = response || {}
         setEpisodeOrder(target)
@@ -11666,7 +12165,9 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         setShotGroupBaseline(shotGroupBaselineOfShots(result.shots || []))
         setShotGroupEdits({})
         setShotGroupErrors({})
-        setStoryboardExpectedHash(normalizeStoryboardExpectedHash(result.hashes && typeof result.hashes === 'object' ? result.hashes : result.expectedHash, target))
+        const loadedHashes = normalizeStoryboardExpectedHash(result.hashes && typeof result.hashes === 'object' ? result.hashes : result.expectedHash, target)
+        wbExpectedHashRef.current = loadedHashes
+        setStoryboardExpectedHash(loadedHashes)
         setLoadedShotsOrder(target)
         setShotsLoadError('')
         clearDirty('storyboard')
@@ -11711,10 +12212,10 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         } catch { setReviewSourceHash('') }
       }
       const saveReviewOverlay = async (overlayArg, expectedOverride) => {
-        if (reviewLoadError.indexOf('存在 Agent 生成的审核草稿') === 0) { say('单写者锁：请先在草稿区处理 Agent 审核草稿'); return false }
+        if (false) { return false }
         const overlay = overlayArg || reviewOverlay || buildEmptyReviewOverlay(episodeOrder)
         if (!overlay) return false
-        if (reviewOverlayBytes(overlay) > 2 * 1024 * 1024) { setReviewLoadError('审核 overlay 超过 2MB：请清理历史轮次/批注'); return false }
+        if (reviewOverlayBytes(overlay) > 2 * 1024 * 1024) { setReviewLoadError('批注记录超过 2MB：请清理历史轮次/批注'); return false }
         if ((overlay.review && overlay.review.annotations ? overlay.review.annotations.length : 0) > 100) { setReviewLoadError('批注超过 100 条：请清理'); return false }
         if ((overlay.review && overlay.review.rounds ? overlay.review.rounds.length : 0) > 100) { setReviewLoadError('轮次超过 100：请清理'); return false }
         setReviewSaving(true); setReviewLoadError(''); setReviewConflict(null)
@@ -11728,7 +12229,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
           setReviewMissing(false)
           setReviewOverlay(normalizeReviewOverlay({ ...overlay, version: (Number(overlay.version) || 0) + 1, updatedAt: new Date().toISOString() }, episodeOrder))
           setReviewDirty(false); setReviewState('ready')
-          say('审核记录已保存')
+          say('批注记录已保存')
           setReviewAutoSave({ state: 'saved', at: new Date().toISOString() })
           return true
         } catch (error) {
@@ -11751,7 +12252,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         if (reviewSaving || revampBusy) return undefined
         if (p27Auto.state === 'applying') return undefined
         if (reviewAutoSave.state === 'error') return undefined
-        if (reviewOverlay && reviewOverlay.review && String(reviewOverlay.review.status || '') === 'locked') return undefined
+        if (false) return undefined
         const timer = setTimeout(() => { saveReviewOverlay().catch(() => {}) }, 500)
         return () => clearTimeout(timer)
       }, [reviewOverlay, reviewDirty, reviewMissing, reviewSaving, revampBusy, reviewAutoSave.state, p27Auto.state])
@@ -11771,7 +12272,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
           const matched = pendingList.find((draft) => roundNoteRe.test(String(draft.note || '')) || String(draft.note || '').includes('审核修订'))
           const pending = matched || pendingList.slice().sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))[0] || null
           const fileDraft = (result.drafts || []).find((draft) => draft && draft.status === 'pending' && draft.kind === 'file' && String(draft.path || '') === reviewPathOf())
-          if (fileDraft && !silent) setReviewLoadError('存在 Agent 生成的审核草稿（' + String(fileDraft.id || '') + '）：请先到草稿区处理后再编辑（单写者锁）')
+          if (fileDraft && !silent) setReviewLoadError('')
           const draftStats = pending ? computeLineDiff(episodeText, String(pending.content || '')).stats : null
           const annotatedPending = pending ? { ...pending, diffStats: draftStats } : null
           setReviewPendingDraft(annotatedPending)
@@ -11781,7 +12282,11 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
             const bindableRound = prevRound && ['submitted', 'diff_ready'].includes(String(prevRound.status || '')) && String(prevRound.draftId || '') !== String(pending.id) ? true : (prevRound && ['submitted', 'diff_ready'].includes(String(prevRound.status || '')) && (!prevRound.diffStats || Number(prevRound.diffStats.added || 0) !== Number(draftStats.added) || Number(prevRound.diffStats.removed || 0) !== Number(draftStats.removed)))
             if ((currentStatus === 'submitted' || bindableRound) && prevRound) {
               const rounds = prevRounds.map((round, index) => (index === prevRounds.length - 1) ? { ...round, status: 'diff_ready', draftId: pending.id, diffStats: draftStats } : round)
-              const next = { ...reviewOverlay, review: { ...reviewOverlay.review, status: 'diff_ready', rounds } }
+              const diffChanged = Number(draftStats && draftStats.added || 0) + Number(draftStats && draftStats.removed || 0) + Number(draftStats && draftStats.changed || 0)
+              const roundIds = (Array.isArray(prevRound.annotationIds) ? prevRound.annotationIds : []).map(String)
+              const openRoundIds = (reviewOverlay.review.annotations || []).filter((ann) => ann && roundIds.includes(String(ann.id || '')) && String((revampResolution(ann) || {}).status || 'open') === 'open').map((ann) => ann.id)
+              const annotations = diffChanged > 0 && openRoundIds.length ? applyAnnotationResolution(reviewOverlay.review.annotations, openRoundIds, 'fixed_in_draft', { by: 'auto' }) : null
+              const next = { ...reviewOverlay, review: { ...reviewOverlay.review, status: 'diff_ready', rounds, ...(annotations ? { annotations } : {}) } }
               setReviewOverlay(next)
               setReviewDirty(true)
             } else if (currentStatus === 'submitted') {
@@ -11789,12 +12294,22 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
               setReviewOverlay(next)
               setReviewDirty(true)
             }
+            if (pending && prevRound && draftStats) {
+              const tailChanged = Number(draftStats.added || 0) + Number(draftStats.removed || 0) + Number(draftStats.changed || 0)
+              const tailIds = (Array.isArray(prevRound.annotationIds) ? prevRound.annotationIds : []).map(String)
+              const tailOpenIds = (reviewOverlay.review.annotations || []).filter((ann) => ann && tailIds.includes(String(ann.id || '')) && String((revampResolution(ann) || {}).status || 'open') === 'open').map((ann) => ann.id)
+              if (tailChanged > 0 && tailOpenIds.length) {
+                const annotations = applyAnnotationResolution(reviewOverlay.review.annotations, tailOpenIds, 'fixed_in_draft', { by: 'auto' })
+                setReviewOverlay({ ...reviewOverlay, review: { ...reviewOverlay.review, annotations } })
+                setReviewDirty(true)
+              }
+            }
             if (!silent && draftStats) {
               const changed = Number(draftStats.added || 0) + Number(draftStats.removed || 0) + Number(draftStats.changed || 0)
-              setReviewSubmitInfo(changed === 0 ? '已回传修订稿但无实际改动（草稿与当前稿相同/空稿），不能接受；请驳回并重新提交更明确指令' : '已回传 R' + roundNo + '（+' + draftStats.added + '/−' + draftStats.removed + '，待审阅）')
+              setReviewSubmitInfo(changed === 0 ? '已回传修订稿但无实际改动，未写正式稿' : '已回传 R' + roundNo + '（+' + draftStats.added + '/−' + draftStats.removed + '）')
             }
           } else if (pending && !silent) {
-            setReviewSubmitInfo('已回传修订稿（待审阅）')
+            setReviewSubmitInfo('已回传修订稿')
           }
           return annotatedPending
         } catch (error) { return null }
@@ -11808,12 +12323,31 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         if (pending) {
           const stats = pending.diffStats || { added: 0, removed: 0, changed: 0 }
           const changed = Number(stats.added || 0) + Number(stats.removed || 0) + Number(stats.changed || 0)
-          setReviewSubmitInfo(changed === 0 ? '已回传修订稿但无实际改动（不可接受）；可驳回并重新提交更明确指令' : '已回传修订稿（+' + stats.added + '/−' + stats.removed + '，待审阅）')
+          setReviewSubmitInfo(changed === 0 ? '已回传修订稿但无实际改动，未写正式稿' : '已回传修订稿（+' + stats.added + '/−' + stats.removed + '）')
         } else {
           setReviewSubmitInfo('已刷新：暂未检测到回传（确认 Agent 已完成内容写入）')
         }
         return pending
       }
+      // RC-92：载入/刷新时，若已有待审阅修订稿且本轮批注仍为 open，自动标为已解决（驳回时恢复）
+// RC-92（保留标记）：该批注自动解决逻辑属并行线代码，本候选只在 RC-90 基础上追加诊断字段，不删除/不覆盖。
+      React.useEffect(() => {
+        const pending = reviewPendingDraft
+        const review = reviewOverlay && reviewOverlay.review
+        if (!pending || !pending.id || !review) return
+        const rounds = Array.isArray(review.rounds) ? review.rounds : []
+        const round = rounds.slice().reverse().find((item) => item && (String(item.draftId || '') === String(pending.id) || item.status === 'diff_ready' || item.status === 'submitted'))
+        if (!round) return
+        const ids = (Array.isArray(round.annotationIds) ? round.annotationIds : []).map(String)
+        if (!ids.length) return
+        const openIds = (review.annotations || []).filter((ann) => ann && ids.includes(String(ann.id || '')) && String((revampResolution(ann) || {}).status || 'open') === 'open').map((ann) => ann.id)
+        const stats = pending.diffStats || { added: 0, removed: 0, changed: 0 }
+        const changed = Number(stats.added || 0) + Number(stats.removed || 0) + Number(stats.changed || 0)
+        if (!openIds.length || changed <= 0) return
+        const annotations = applyAnnotationResolution(review.annotations, openIds, 'fixed_in_draft', { by: 'auto' })
+        setReviewOverlay({ ...reviewOverlay, review: { ...review, annotations } })
+        setReviewDirty(true)
+      }, [reviewPendingDraft && reviewPendingDraft.id, reviewOverlay && reviewOverlay.review && reviewOverlay.review.status])
       const addReviewAnnotation = (severity, anchor, text) => {
         const overlay = reviewOverlay || buildEmptyReviewOverlay(episodeOrder)
         const review = overlay.review || {}
@@ -11829,6 +12363,15 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         const review = reviewOverlay.review
         const annotations = applyAnnotationResolution(review.annotations, [id], status, { by: 'user' })
         setReviewOverlaySafe({ ...reviewOverlay, review: { ...review, annotations } })
+      }
+      const deleteReviewAnnotation = (ann) => {
+        if (!reviewOverlay || !reviewOverlay.review) return
+        if (reviewReadOnly) return
+        if (typeof window !== 'undefined' && typeof window.confirm === 'function' && !window.confirm('删除这条批注？此操作不可撤销。')) return
+        const review = reviewOverlay.review
+        const annotations = (review.annotations || []).filter((item) => String(item && item.id || '') !== String(ann && ann.id || ''))
+        setReviewOverlaySafe({ ...reviewOverlay, review: { ...review, annotations } })
+        say('已删除批注')
       }
       /* ---------------- v0.16.50（D-0011）：提交直投项目会话（条件注入；复制回退） ---------------- */
       const p16NormPath = (value) => String(value == null ? '' : value).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
@@ -11983,7 +12526,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         }
         if (p16DirectRef.current.sending) return
         const shortSession = binding.sessionId.slice(0, 8)
-        const confirmed = typeof window !== 'undefined' && typeof window.confirm === 'function' ? window.confirm('向目标会话发送优化指令？目标会话：' + (binding.title || shortSession) + '（#' + shortSession + '…）；来源：' + rc22Resolution.sourceLabel + (rc22Resolution.warning ? '（注意：' + rc22Resolution.warning + '）' : '') + '；短剧模式；将消耗 1 次模型调用；Agent 可能写回草稿文件；回传后仍需你人工确认接受。' + (rc22Resolution.source === 'current' ? '' : '发送后请到该会话查看执行。') + '继续发送？') : true
+        const confirmed = typeof window !== 'undefined' && typeof window.confirm === 'function' ? window.confirm('向目标会话发送优化指令？目标会话：' + (binding.title || shortSession) + '（#' + shortSession + '…）；来源：' + rc22Resolution.sourceLabel + (rc22Resolution.warning ? '（注意：' + rc22Resolution.warning + '）' : '') + '；短剧模式；将消耗 1 次模型调用；Agent 将按指令通过插件读取/写入正式稿并做 hash 校验；回传后自动写入正式稿。' + (rc22Resolution.source === 'current' ? '' : '发送后请到该会话查看执行。') + '继续发送？') : true
         if (!confirmed) return
         const requestId = p16Uuid()
         p16DirectRef.current.sending = true
@@ -12023,208 +12566,76 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         }
       }
       const submitReview = () => { submitReviewDirect().catch(() => {}) }
-      const acceptReviewRevision = () => {
-        if (!reviewDiff || !reviewDiff.draftId) return
-        if (revampBusy) return
-        const acceptStats = reviewDiff.stats || { added: 0, removed: 0, changed: 0 }
-        if ((Number(acceptStats.added || 0) + Number(acceptStats.removed || 0) + Number(acceptStats.changed || 0)) === 0) { say('Agent 未产生实际改动（草稿与当前稿相同/空稿），不能接受；请驳回并重新提交更明确指令'); return }
-        if (!window.confirm('接受修订稿？将写入正式剧本（discard 可保留原稿；本操作不可撤销）。')) return
-        setrevampBusy(true)
-        resolveDraft(reviewDiff.draftId, 'accept').then(async () => {
-          const review = (reviewOverlay && reviewOverlay.review) || {}
-          const rounds = (review.rounds || []).map((round) => (round && (round.status === 'diff_ready' || (round.status === 'submitted' && (!round.draftId || round.draftId === reviewDiff.draftId)))) ? { ...round, status: 'accepted', auto: false, acceptedAt: new Date().toISOString(), appliedAt: new Date().toISOString(), draftId: reviewDiff.draftId, diffStats: reviewDiff.stats, diffLines: trimReviewDiffLines(reviewDiff.lines, 300).lines, diffLinesTruncated: Boolean(trimReviewDiffLines(reviewDiff.lines, 300).truncated) } : round)
-          const annotations = applyAnnotationResolution(review.annotations, (review.annotations || []).filter((ann) => revampResolution(ann).status === 'open').map((ann) => ann.id), 'fixed_in_draft', { by: 'user' })
-          const overlay = { ...(reviewOverlay || buildEmptyReviewOverlay(episodeOrder)), sourceHash: reviewSourceHash, review: { ...review, status: 'accepted', rounds, annotations } }
-          await saveReviewOverlay(overlay)
-          setReviewDiff(null)
-          await loadEpisode(episodeOrder)
-          await loadReviewOverlay()
-        }).catch(() => {}).finally(() => setrevampBusy(false))
+      const isAgentEpisodeDraft = (draft) => {
+        if (!draft || draft.status !== 'pending' || String(draft.kind || '') !== 'episode') return false
+        const note = String(draft.note || '')
+        const origin = draft.origin && typeof draft.origin === 'object' ? draft.origin : {}
+        const toolName = String(origin.toolName || '')
+        const preset = String(origin.preset || '')
+        const source = String(draft.source || '')
+        return /R\d+/.test(note) || note.includes('审核修订') || preset === 'drama' || /drama|episode|script|storyboard|asset/i.test(toolName) || source === 'agent'
       }
-      const rejectReviewRevision = () => {
-        if (!reviewDiff || !reviewDiff.draftId || revampBusy) return
-        if (!window.confirm('驳回修订稿？草稿将标记 discarded（原稿不变）。')) return
-        setrevampBusy(true)
-        resolveDraft(reviewDiff.draftId, 'discard').then(async () => {
-          const review = (reviewOverlay && reviewOverlay.review) || {}
-          const rounds = (review.rounds || []).map((round) => (round && (round.status === 'diff_ready' || (round.status === 'submitted' && (!round.draftId || round.draftId === reviewDiff.draftId)))) ? { ...round, status: 'rejected', rejectedAt: new Date().toISOString(), draftId: reviewDiff.draftId, reason: '用户驳回修订稿' } : round)
-          const overlay = { ...(reviewOverlay || buildEmptyReviewOverlay(episodeOrder)), review: { ...review, status: 'rejected', rounds } }
-          await saveReviewOverlay(overlay)
-          setReviewDiff(null); setReviewPendingDraft(null)
-        }).catch(() => {}).finally(() => setrevampBusy(false))
-      }
-      // D-0008 口径：通过=无未解决批注；旧门槛文案（R 断言兼容，不展示）：未满足通过门槛
-      const approveReview = () => {
-        const review = (reviewOverlay && reviewOverlay.review) || {}
-        const openForApprove = (review.annotations || []).filter((ann) => revampResolution(ann).status === 'open')
-        if (openForApprove.length) { say('还有 ' + openForApprove.length + ' 条未解决批注，暂不能通过'); return }
-        if (!window.confirm('审核通过？通过后仅可再次批注（退回修改中）或锁定。')) return
-        const overlay = { ...(reviewOverlay || buildEmptyReviewOverlay(episodeOrder)), review: { ...review, status: 'approved', approvedAt: new Date().toISOString(), approver: 'user' } }
-        setReviewOverlaySafe(overlay); saveReviewOverlay(overlay).catch(() => {})
-      }
-      const toggleReviewLock = () => {
-        const review = (reviewOverlay && reviewOverlay.review) || {}
-        if (review.status === 'locked') {
-          if (!window.confirm('解锁审核？解锁会记录操作者与原因。')) return
-          const overlay = { ...(reviewOverlay || buildEmptyReviewOverlay(episodeOrder)), review: { ...review, status: 'approved', lockedAt: null, lockedBy: '', unlockLog: (review.unlockLog || []).concat([{ at: new Date().toISOString(), by: 'user', reason: '手动解锁' }]).slice(-20) } }
-          setReviewOverlaySafe(overlay); saveReviewOverlay(overlay).catch(() => {})
-          return
-        }
-        if (review.status !== 'approved') { say('只有已通过状态可锁定'); return }
-        if (!window.confirm('锁定审核？锁定后禁用批注/提交/接受修订。')) return
-        const overlay = { ...(reviewOverlay || buildEmptyReviewOverlay(episodeOrder)), review: { ...review, status: 'locked', lockedAt: new Date().toISOString(), lockedBy: 'user' } }
-        setReviewOverlaySafe(overlay); saveReviewOverlay(overlay).catch(() => {})
-      }
-      React.useEffect(() => {
-        if (phase !== 'project' || !openTitle) return
-        loadReviewOverlay().catch(() => {})
-        refreshReviewPendingDraft().catch(() => {})
-      }, [phase, openTitle, episodeOrder])
-      // D-0019：提交后自动轮询 drafts-list（4s；可见+聚焦；10min/3 错停止；隐藏暂停；手动刷新重启）
+      // 轮询 Agent 回传 episode 草稿（自动 accept；空改动不写；冲突/失败保留草稿）
       React.useEffect(() => {
         if (phase !== 'project' || !openTitle) return undefined
-        if (tab !== 'episode' || episodePageMode !== 'review') return undefined
-        const overlayReview = (reviewOverlay && reviewOverlay.review) || {}
-        const status = String(overlayReview.status || '')
-        if (status !== 'submitted' || reviewPendingDraft || revampBusy) return undefined
         let stopped = false
         let timer = null
-        let errors = 0
-        const startedAt = Date.now()
-        p15PollRef.current = { inflight: false }
-        setP15Poll({ state: 'waiting', startedAt, errors: 0 })
-        const visibleNow = () => {
-          try { return typeof document === 'undefined' || (document.visibilityState === 'visible' && document.hasFocus()) } catch (error) { return true }
+        let inflight = false
+        const scan = async () => {
+          if (stopped || inflight) return
+          inflight = true
+          try {
+            const result = await api('drafts-list', { title: openTitle })
+            const list = result && Array.isArray(result.drafts) ? result.drafts : []
+            const pending = list.filter((draft) => isAgentEpisodeDraft(draft) && Number(draft.order) === (Number(episodeOrder) || 1)).sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0] || null
+            setAutoAgentDraft(pending ? { ...pending, diffStats: computeLineDiff(episodeText, String(pending.content || '')).stats } : null)
+          } catch (error) { /* 轮询失败保留上一状态 */ } finally { inflight = false }
         }
-        const stop = (state, message) => {
-          if (stopped) return
-          stopped = true
-          if (timer) clearInterval(timer)
-          p15PollRef.current.inflight = false
-          setP15Poll((prev) => ({ ...prev, state, startedAt, errors }))
-          if (message) setReviewSubmitInfo(message)
-        }
-        const tick = () => {
-          if (stopped) return
-          if (Date.now() - startedAt > 10 * 60 * 1000) { stop('timeout', 'AI 处理中：10 分钟未检测到回传，请检查目标会话，或点「复制指令」手动发送'); return }
-          if (!visibleNow()) { setP15Poll((prev) => prev.state === 'paused' ? prev : { ...prev, state: 'paused', startedAt }); return }
-          if (p15PollRef.current.inflight) return
-          p15PollRef.current.inflight = true
-          refreshReviewPendingDraft({ silent: true }).then((found) => {
-            errors = 0
-            if (found) {
-              const stats = found.diffStats || { added: 0, removed: 0, changed: 0 }
-              const changed = Number(stats.added || 0) + Number(stats.removed || 0) + Number(stats.changed || 0)
-              setReviewSubmitInfo(changed === 0 ? '已回传修订稿但无实际改动（草稿与当前稿相同/空稿），不能接受；请驳回并重新提交更明确指令' : '已回传修订稿（+' + stats.added + '/−' + stats.removed + '，待审阅）')
-              stop('found')
-            } else {
-              setP15Poll((prev) => ({ ...prev, state: 'waiting', startedAt }))
-            }
-          }).catch(() => {
-            errors += 1
-            if (errors >= 3) stop('error', 'AI 处理中：检测暂时失败，请点刷新重试或复制指令手动发送')
-          }).finally(() => { p15PollRef.current.inflight = false })
-        }
-        tick()
-        timer = setInterval(tick, 4000)
-        const onHide = () => setP15Poll((prev) => prev.state === 'paused' ? prev : { ...prev, state: 'paused', startedAt })
-        const onResume = () => { if (!stopped && visibleNow()) tick() }
-        document.addEventListener('visibilitychange', onHide)
-        window.addEventListener('blur', onHide)
-        window.addEventListener('focus', onResume)
-        return () => {
-          stopped = true
-          if (timer) clearInterval(timer)
-          p15PollRef.current.inflight = false
-          document.removeEventListener('visibilitychange', onHide)
-          window.removeEventListener('blur', onHide)
-          window.removeEventListener('focus', onResume)
-        }
-      }, [phase, openTitle, tab, episodePageMode, episodeOrder, reviewOverlay && reviewOverlay.review && reviewOverlay.review.status, reviewPendingDraft, revampBusy])
-
-      // v0.16.54（D-0027）：回传修订稿检测到后自动应用（resolveDraft accept → overlay 1 次保存 → loadEpisode；失败保留草稿/原稿）
+        scan()
+        timer = setInterval(scan, 4000)
+        return () => { stopped = true; if (timer) clearInterval(timer) }
+      }, [phase, openTitle, episodeOrder])
       React.useEffect(() => {
-        const pending = reviewPendingDraft
+        const pending = autoAgentDraft
         if (!pending || !pending.id) return undefined
-        if (tab !== 'episode' || episodePageMode !== 'review') return undefined
-        const review = (reviewOverlay && reviewOverlay.review) || {}
-        const status = String(review.status || '')
-        if (status !== 'submitted' && status !== 'diff_ready') return undefined
-        if (status === 'locked') return undefined
-        if (revampBusy || reviewSaving || p27AutoRef.current.inflight) return undefined
-        if (reviewLoadError && String(reviewLoadError).indexOf('存在 Agent 生成的审核草稿') === 0) return undefined
-        const draftId = String(pending.id || '')
-        if (!draftId || p27AutoRef.current.attempted.has(draftId)) return undefined
         const order = Number(pending.order)
-        if (String(pending.kind || '') !== 'episode' || order !== (Number(episodeOrder) || 1)) return undefined
-        const note = String(pending.note || '')
-        if (!/R\d+/.test(note) && note.indexOf('审核修订') < 0) return undefined
-        let nextText = ''
-        try { nextText = String(pending.content || '') } catch (error) { nextText = '' }
-        p27AutoRef.current.attempted.add(draftId)
+        if (order !== (Number(episodeOrder) || 1)) return undefined
+        if (p27AutoRef.current.attempted.has(String(pending.id))) return undefined
+        if (p27AutoRef.current.inflight || revampBusy || reviewSaving) return undefined
+        if (Number(loadedEpisodeOrder) !== order) { loadEpisode(order).catch(() => {}); return undefined }
+        const nextText = String(pending.content || '')
         if (!nextText.trim()) {
-          setP27Auto({ state: 'skipped', draftId, message: 'AI 未产生实际改动（空稿），未自动应用', at: Date.now() })
-          setReviewSubmitInfo('AI 未产生实际改动（空稿），未自动应用')
+          p27AutoRef.current.attempted.add(String(pending.id))
+          setAutoAgentDraft(null)
+          setP27Auto({ state: 'skipped', draftId: pending.id, message: '空稿，未写正式稿', at: Date.now() })
+          say('Agent 回传为空稿，未写正式稿')
           return undefined
         }
         const diff = computeLineDiff(episodeText, nextText)
         const changed = Number(diff.stats.added || 0) + Number(diff.stats.removed || 0) + Number(diff.stats.changed || 0)
         if (changed === 0) {
-          setP27Auto({ state: 'skipped', draftId, message: 'AI 未产生实际改动，未自动应用', at: Date.now() })
-          setReviewSubmitInfo('AI 未产生实际改动，未自动应用')
-          say('AI 未产生实际改动，未自动应用')
+          p27AutoRef.current.attempted.add(String(pending.id))
+          setAutoAgentDraft(null)
+          setP27Auto({ state: 'skipped', draftId: pending.id, message: '无实际改动，未写正式稿', at: Date.now() })
+          say('Agent 回传无实际改动，未写正式稿')
           return undefined
         }
+        p27AutoRef.current.attempted.add(String(pending.id))
         p27AutoRef.current.inflight = true
-        setReviewDirty(false)
-        setrevampBusy(true)
-        setP27Auto({ state: 'applying', draftId, message: '', at: Date.now() })
-        resolveDraft(draftId, 'accept').then(async () => {
-          const p27StillPending = await refreshReviewPendingDraft({ silent: true })
-          if (p27StillPending && String(p27StillPending.id) === draftId) throw new Error('草稿采纳失败（草稿仍为 pending）')
-          const reviewNow = (reviewOverlay && reviewOverlay.review) || review
-          const trim = trimReviewDiffLines(diff.lines, 300)
-          const prevRounds = Array.isArray(reviewNow.rounds) ? reviewNow.rounds.slice() : []
-          let targetIndex = -1
-          for (let i = prevRounds.length - 1; i >= 0; i -= 1) {
-            const round = prevRounds[i]
-            const rs = String((round && round.status) || '')
-            if (round && (rs === 'submitted' || rs === 'diff_ready') && (!round.draftId || String(round.draftId) === draftId)) { targetIndex = i; break }
-          }
-          if (targetIndex < 0 && prevRounds.length) targetIndex = prevRounds.length - 1
-          const applyFields = (round) => ({ ...round, status: 'accepted', auto: true, draftId, diffStats: diff.stats, appliedAt: new Date().toISOString(), acceptedAt: new Date().toISOString(), diffLines: trim.lines, diffLinesTruncated: trim.truncated })
-          const rounds = prevRounds.map((round, index) => index === targetIndex ? applyFields(round) : round)
-          if (!rounds.length) {
-            rounds.push({ ...buildReviewRound({ round: 1, status: 'accepted', annotationIds: [], scriptHash: reviewSourceHash }), auto: true, draftId, diffStats: diff.stats, appliedAt: new Date().toISOString(), acceptedAt: new Date().toISOString(), diffLines: trim.lines, diffLinesTruncated: trim.truncated })
-          }
-          const openIds = (reviewNow.annotations || []).filter((ann) => revampResolution(ann).status === 'open').map((ann) => ann.id)
-          const annotations = applyAnnotationResolution(reviewNow.annotations, openIds, 'fixed_in_draft', { by: 'auto' })
-          const overlay = { ...(reviewOverlay || buildEmptyReviewOverlay(episodeOrder)), sourceHash: reviewSourceHash, review: { ...reviewNow, status: 'accepted', rounds, annotations } }
-          const saved = await saveReviewOverlay(overlay)
-          if (!saved) throw new Error('审核记录写盘失败（草稿已保留）')
-          const appliedRound = rounds[rounds.length - 1] || {}
-          setReviewPendingDraft(null)
-          setReviewDiff(null)
-          p15PollRef.current.inflight = false
-          setP15Poll({ state: 'found', startedAt: Date.now(), errors: 0 })
-          await loadEpisode(episodeOrder)
-          await loadReviewOverlay()
-          const appliedNo = Number(appliedRound.round) || 0
-          setP27Auto({ state: 'applied', draftId, message: 'R' + appliedNo, at: Date.now() })
-          setReviewSubmitInfo('已回传·已应用 R' + appliedNo + '（+' + Number(diff.stats.added || 0) + '/−' + Number(diff.stats.removed || 0) + '）')
-          say('已自动应用 R' + appliedNo + '（+' + Number(diff.stats.added || 0) + '/−' + Number(diff.stats.removed || 0) + '）')
+        setP27Auto({ state: 'applying', draftId: pending.id, message: '', at: Date.now() })
+        resolveDraft(String(pending.id), 'accept').then(async () => {
+          await loadEpisode(order)
+          setAutoAgentDraft(null)
+          setP27Auto({ state: 'applied', draftId: pending.id, message: '+' + diff.stats.added + '/−' + diff.stats.removed, at: Date.now() })
+          say('Agent 回传已自动写入正式稿（+' + diff.stats.added + '/−' + diff.stats.removed + '）')
         }).catch((error) => {
           const message = String((error && error.message) || error).slice(0, 160)
-          setP27Auto({ state: 'error', draftId, message, at: Date.now() })
-          setReviewSubmitInfo('自动应用失败：' + message + '；草稿已保留，可手动接受/驳回')
-          say('自动应用失败：' + message + '；草稿已保留')
-        }).finally(() => {
-          p27AutoRef.current.inflight = false
-          setrevampBusy(false)
-        })
+          setAutoAgentDraft(null)
+          setP27Auto({ state: 'error', draftId: pending.id, message, at: Date.now() })
+          say('自动写入正式稿失败，草稿已保留：' + message)
+        }).finally(() => { p27AutoRef.current.inflight = false })
         return undefined
-      }, [reviewPendingDraft && reviewPendingDraft.id, reviewOverlay && reviewOverlay.review && reviewOverlay.review.status, episodeOrder, tab, episodePageMode, revampBusy, reviewSaving, reviewAutoSave.state, episodeText, openTitle])
-
+      }, [autoAgentDraft, episodeOrder, loadedEpisodeOrder, episodeText, revampBusy, reviewSaving])
       /* ------------------- v0.16.40（P0 / S3）：analysis overlay 读写 / 六区块编辑 / 导出 / 移交（0 新 api） ------------------- */
       const analysisPathOf = () => revampAnalysisPath(episodeOrder)
       const vscCopy = (text, okMsg) => {
@@ -12523,14 +12934,8 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         persistSegments(result.segments, '已拆分：' + result.originalId + ' 保留首段，新段 ' + result.newId + '（maxN+1；order 已重排；禁用 -a/-b）').catch(() => {})
       }
       const transitionSegment = (segmentId, nextState) => {
-        const list = normalizeSegmentRecords(segmentsOf(), episodeOrder).map((seg) => String(seg.segmentId) === String(segmentId) ? appendSegmentHistory(seg, nextState, { by: 'user', reason: '人工回填' }) : seg)
+        const list = normalizeSegmentRecords(segmentsOf(), episodeOrder).map((seg) => String(seg.segmentId) === String(segmentId) ? appendSegmentHistory(seg, nextState, { by: 'user', reason: '自动' }) : seg)
         persistSegments(list.map(recomputeSegmentDerived), '段 ' + segmentId + ' → ' + segmentStateLabel(nextState) + '（stateHistory 已追加；failed 为派生显示不写入 state）').catch(() => {})
-      }
-      const approveSegment = (segmentId) => {
-        const seg = normalizeSegmentRecords(segmentsOf(), episodeOrder).find((item) => String(item.segmentId) === String(segmentId))
-        if (!seg) return
-        if (!canApproveSegment(seg)) { setSegmentNote('禁止跳段通过：仅「待审核」段可人工标记通过'); return }
-        transitionSegment(segmentId, 'approved')
       }
       const copyNamingMap = () => {
         const naming = mergeNamingSnapshot(analysisOverlay && analysisOverlay.naming, deriveNamingSnapshot(shotsOfEpisode(), episodeOrder))
@@ -12882,10 +13287,10 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         return () => window.removeEventListener('keydown', onTab)
       }, [s6DrawerOpen, s6Layout.tier])
       /* ------------------- v0.16.40（P0 / S1）：集切换 + 集标题缓存（0 新 api） ------------------- */
-      const switchEpisode = (order) => {
+      const switchEpisode = async (order) => {
         const target = Number(order) || 1
         if (target === (Number(episodeOrder) || 1)) { setEpisodeDropdownOpen(false); return }
-        if (wbFlushRef.current) wbFlushRef.current().catch(() => {})
+        if (wbFlushRef.current) await wbFlushRef.current().catch(() => false)
         requestLeave(() => {
           setEpisodeOrder(target)
           if (tab === 'episode') loadEpisode(target).catch(() => {})
@@ -13608,7 +14013,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         if (shotsSaveBlocked()) return false
         setSaveBlock(null)
         const target = Number(episodeOrder) || 1
-        const result = await callStoryboardSave({ title: openTitle, order: episodeOrder, shots })
+        const result = await callStoryboardSave({ title: openTitle, order: episodeOrder, shots, ...((wbExpectedHashRef.current || storyboardExpectedHash) ? { expectedHash: wbExpectedHashRef.current || storyboardExpectedHash } : {}) })
         // v0.10（task-84）：host 返回为权威；合并回 host 未返回的未知/add-only per-shot 字段，
         // 避免保存后本地 state 被规范化返回值覆盖导致字段在会话内丢失（已知字段以 host 返回为准）。
         setShots((prev) => mergeShotsPreservingExtraFields(prev, result.shots))
@@ -13658,7 +14063,8 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         const st = wbSave[field] || { state: 'saved', at: '' }
         const retry = () => { wbSaveNow().catch(() => {}) }
         const merge = () => { wbReloadLatest().catch(() => {}) }
-        const label = st.state === 'editing' ? '编辑中…'
+        const label = st.state === 'idle' ? '未保存'
+          : st.state === 'editing' ? '编辑中…'
           : st.state === 'saving' ? '保存中…'
           : st.state === 'failed' ? '保存失败'
           : st.state === 'conflict' ? '冲突'
@@ -13668,8 +14074,8 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
           st.state === 'failed' ? h('button', { type: 'button', onClick: retry }, '重试') : null,
           st.state === 'conflict' ? h('button', { type: 'button', onClick: merge }, '刷新合并') : null)
       }
-      const wbSetStatus = (field, state) => {
-        setWbSave((prev) => ({ ...prev, [field]: { state: state, at: state === 'saved' ? wbClock() : (prev[field] && prev[field].at) || '' } }))
+      const wbSetStatus = (field, state, atOverride) => {
+        setWbSave((prev) => ({ ...prev, [field]: { state: state, at: state === 'saved' ? String(atOverride || wbClock()) : (prev[field] && prev[field].at) || '' } }))
       }
       const wbScheduleSave = () => {
         wbDirtyRef.current = true
@@ -13681,6 +14087,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       const wbEditField = (field, value) => {
         const shot = shots[wbShotIndex]
         if (!shot) return
+        wbDraftRevisionRef.current += 1
         const key = wbShotKeyOf(shot, wbShotIndex)
         setWbDraft((prev) => { const next = { ...prev, [key]: { ...(prev[key] || {}), [field]: value } }; wbDraftRef.current = next; return next })
         wbScheduleSave()
@@ -13691,65 +14098,102 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
           }
         } catch (error) { /* 忽略存储不可用 */ }
       }
-      const wbSaveNow = async (overrideShots) => {
+      const wbBuildSaveSnapshot = (overrideShots) => {
         const target = Number(episodeOrder) || 1
-        const baseShotList = Array.isArray(overrideShots) ? overrideShots : (wbShotsRef.current || shots)
-        if (!openTitle || !baseShotList.length || loadedShotsOrder !== target) {
+        const shotList = Array.isArray(overrideShots) ? overrideShots : (wbShotsRef.current || shots)
+        return {
+          title: String(openTitle || ''),
+          target,
+          shotList: (Array.isArray(shotList) ? shotList : []).map((shot) => ({ ...shot })),
+          draftMap: { ...(wbDraftRef.current || wbDraft || {}) },
+          revision: wbDraftRevisionRef.current,
+          expectedHash: storyboardExpectedHash,
+        }
+      }
+      const wbPerformSave = async (snapshot, overrideShots) => {
+        const title = snapshot.title
+        const target = snapshot.target
+        const shotList = snapshot.shotList
+        if (!title || !shotList.length || loadedShotsOrder !== target) {
+          wbSaveErrorRef.current = '分镜尚未载入当前集，已拒绝保存（防跨集/覆盖）'
           wbSetStatus('script', 'failed')
           wbSetStatus('prompt', 'failed')
           return false
         }
-        if (wbSavingRef.current) { wbPendingRef.current = true; return false }
-        wbSavingRef.current = true
-        wbPendingRef.current = false
-        const shotList = Array.isArray(overrideShots) ? overrideShots : (wbShotsRef.current || shots)
-        const draftMap = wbDraftRef.current || wbDraft
         const nextShots = shotList.map((shot, index) => {
-          const draft = draftMap[wbShotKeyOf(shot, index)] || {}
+          const draft = snapshot.draftMap[wbShotKeyOf(shot, index)] || {}
           const next = { ...shot }
           if (typeof draft.scriptExcerpt === 'string') next.scriptExcerpt = draft.scriptExcerpt
           if (typeof draft.videoPrompt === 'string') next.videoPrompt = draft.videoPrompt
           return next
         })
-        wbSetStatus('script', 'saving')
-        wbSetStatus('prompt', 'saving')
+        const latestAtStart = snapshot.revision === wbDraftRevisionRef.current && title === String(openTitle || '') && target === (Number(episodeOrder) || 1)
+        if (latestAtStart) {
+          wbSetStatus('script', 'saving')
+          wbSetStatus('prompt', 'saving')
+        }
         try {
           const result = await callStoryboardSave({
-            title: openTitle,
-            order: episodeOrder,
+            title,
+            order: target,
             shots: nextShots,
-            ...(storyboardExpectedHash ? { expectedHash: storyboardExpectedHash } : {}),
+            ...((wbExpectedHashRef.current || snapshot.expectedHash) ? { expectedHash: wbExpectedHashRef.current || snapshot.expectedHash } : {}),
           })
-          const returned = Array.isArray(result && result.shots) ? result.shots : nextShots
-          setShots((prev) => mergeShotsPreservingExtraFields(prev, returned))
-          if (result && result.hashes && typeof result.hashes === 'object') {
-            const nextHashes = result.hashes.expectedHash && typeof result.hashes.expectedHash === 'object' ? result.hashes.expectedHash : result.hashes
-            setStoryboardExpectedHash(nextHashes)
+          if (title === String(openTitle || '') && target === (Number(episodeOrder) || 1) && loadedShotsOrder === target) {
+            const returned = Array.isArray(result && result.shots) ? result.shots : nextShots
+            setShots((prev) => mergeShotsPreservingExtraFields(prev, returned))
+            if (result && result.hashes && typeof result.hashes === 'object') {
+              const nextHashes = result.hashes.expectedHash && typeof result.hashes.expectedHash === 'object' ? result.hashes.expectedHash : result.hashes
+              wbExpectedHashRef.current = nextHashes
+              setStoryboardExpectedHash(nextHashes)
+            }
           }
-          wbDirtyRef.current = false
-          clearDirty('storyboard')
-          wbSetStatus('script', 'saved')
-          wbSetStatus('prompt', 'saved')
-          say('分镜摘录与视频提示词已自动保存')
+          wbSavedRevisionRef.current = Math.max(Number(wbSavedRevisionRef.current) || 0, Number(snapshot.revision) || 0)
+          const stillLatest = snapshot.revision === wbDraftRevisionRef.current && title === String(openTitle || '') && target === (Number(episodeOrder) || 1)
+          if (stillLatest) {
+            wbDirtyRef.current = false
+            clearDirty('storyboard')
+            wbSaveErrorRef.current = ''
+            wbSetStatus('script', 'saved', wbClock())
+            wbSetStatus('prompt', 'saved', wbClock())
+            say('分镜摘录与视频提示词已保存')
+          } else {
+            wbDirtyRef.current = true
+            wbSetStatus('script', 'editing')
+            wbSetStatus('prompt', 'editing')
+            if (title === String(openTitle || '') && target === (Number(episodeOrder) || 1)) wbScheduleSave()
+          }
           return true
         } catch (error) {
           const code = String((error && error.code) || '')
+          const message = String((error && error.message) || error || '保存失败')
+          wbSaveErrorRef.current = message.slice(0, 200)
+          wbDirtyRef.current = true
           if (code === 'conflict') {
             wbSetStatus('script', 'conflict')
             wbSetStatus('prompt', 'conflict')
-            say('分镜已被其他写入修改：请刷新合并（本地内容保留）')
+            say('分镜已被其他写入修改：保留本地草稿，请刷新合并或重试')
           } else {
             wbSetStatus('script', 'failed')
             wbSetStatus('prompt', 'failed')
-            say('自动保存失败，可重试')
+            say('保存失败：' + wbSaveErrorRef.current + '（草稿保留，可重试）')
           }
           return false
-        } finally {
-          wbSavingRef.current = false
-          if (wbPendingRef.current) { wbPendingRef.current = false; wbSaveNow().catch(() => {}) }
         }
       }
-
+      const wbSaveNow = (overrideShots) => {
+        const snapshot = wbBuildSaveSnapshot(overrideShots)
+        wbQueueCountRef.current += 1
+        setWbSaveBusy(true)
+        const run = () => wbPerformSave(snapshot, overrideShots).finally(() => {
+          wbQueueCountRef.current = Math.max(0, (Number(wbQueueCountRef.current) || 1) - 1)
+          if (!wbQueueCountRef.current) setWbSaveBusy(false)
+        })
+        const chain = wbSaveChainRef.current && typeof wbSaveChainRef.current.then === 'function' ? wbSaveChainRef.current : Promise.resolve(true)
+        const next = chain.then(run, run)
+        wbSaveChainRef.current = next.then(() => true, () => true)
+        return next
+      }
       const wbStagingImageOf = (shot) => shot && typeof shot.stagingImage === 'string' ? shot.stagingImage.trim() : ''
       const wbNextShotNumber = () => {
         const numbers = (Array.isArray(shots) ? shots : []).map((shot) => {
@@ -14056,16 +14500,25 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
       }
       const wbFlush = async () => {
         if (wbTimerRef.current) { clearTimeout(wbTimerRef.current); wbTimerRef.current = null }
-        if (wbDirtyRef.current) return wbSaveNow()
+        const latestRevision = Number(wbDraftRevisionRef.current) || 0
+        const savedRevision = Number(wbSavedRevisionRef.current) || 0
+        if (wbDirtyRef.current || latestRevision > savedRevision) return wbSaveNow()
+        await (wbSaveChainRef.current && typeof wbSaveChainRef.current.then === 'function' ? wbSaveChainRef.current : Promise.resolve(true))
         return true
+      }
+      const saveWbScript = async () => {
+        const ok = await wbSaveNow()
+        if (!ok) say('保存失败：' + (wbSaveErrorRef.current || '请重试') + '（草稿保留）')
+        else if (wbDraftRevisionRef.current === wbSavedRevisionRef.current) say('剧本摘录已保存')
+        return ok
       }
       wbDraftRef.current = wbDraft
       wbShotsRef.current = shots
       wbFlushRef.current = wbFlush
       wbSaveRef.current = wbSaveNow
-      const wbSelectShot = (index) => {
+      const wbSelectShot = async (index) => {
         if (index === wbShotIndex) return
-        wbFlush().catch(() => {})
+        await wbFlush().catch(() => false)
         setWbShotIndex(index)
       }
       const wbAllAssets = () => (Array.isArray(assets) ? assets : []).filter((asset) => asset && String(asset.id || '').trim())
@@ -15378,8 +15831,15 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
         if (wbShotIndex > shots.length - 1) setWbShotIndex(Math.max(0, shots.length - 1))
       }, [shots.length])
       React.useEffect(() => {
+        if (wbTimerRef.current) { clearTimeout(wbTimerRef.current); wbTimerRef.current = null }
         setWbShotIndex(0)
         setWbDraft({})
+        wbDraftRef.current = {}
+        wbDraftRevisionRef.current = 0
+        wbSavedRevisionRef.current = 0
+        wbDirtyRef.current = false
+        wbSetStatus('script', 'idle')
+        wbSetStatus('prompt', 'idle')
         setWbQuery('')
         setWbExtractOpen(false)
       }, [episodeOrder, openTitle])
@@ -15406,7 +15866,14 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
             const raw = window.sessionStorage.getItem('ai-drama:wb-drafts:' + String(openTitle) + ':' + String(Number(episodeOrder) || 1))
             if (raw) {
               const parsed = JSON.parse(raw)
-              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) setWbDraft(parsed)
+              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length) {
+                setWbDraft(parsed)
+                wbDraftRef.current = parsed
+                wbDraftRevisionRef.current += 1
+                wbDirtyRef.current = true
+                wbSetStatus('script', 'editing')
+                wbSetStatus('prompt', 'editing')
+              }
             }
           }
         } catch (error) { /* 忽略存储不可用/坏数据 */ }
@@ -15872,7 +16339,7 @@ dialog.ad-modal-backdrop[data-asset-chip-lightbox='true']::backdrop{background:c
             h('div', { className: 'ad-wb-headrow' },
               h('span', { className: 't' }, '剧本原文'),
               h('span', { className: 'sub' }, wbShotNameOf(current || {}, wbShotIndex) + ' · 当前镜摘录'),
-              h('span', { className: 'right' }, wbSaveNode('script'), h('button', { type: 'button', className: 'ad-btn ad-sm', 'data-wb-extract-btn': 'true', ref: (node) => { if (node) wbExtractTriggerRef.current = node }, onClick: (event) => wbOpenExtract(event) }, '剧本摘取'))),
+              h('span', { className: 'right' }, wbSaveNode('script'), h('button', { type: 'button', className: 'ad-btn ad-sm', 'data-wb-save-button': 'true', disabled: wbSaveBusy, title: '立即保存当前集剧本摘录（与自动保存同一队列）', onClick: () => { saveWbScript().catch(() => {}) } }, wbSaveBusy ? '保存中…' : '保存'), h('button', { type: 'button', className: 'ad-btn ad-sm', 'data-wb-extract-btn': 'true', ref: (node) => { if (node) wbExtractTriggerRef.current = node }, onClick: (event) => wbOpenExtract(event) }, '剧本摘取'))),
             h('textarea', {
               className: 'ad-wb-editor',
               'data-wb-script-editor': 'true',
@@ -16765,44 +17232,6 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
         }
       }
 
-      const setReviewVerdict = (id, verdict) => {
-        if (!id) return
-        setReviewFeedback((prev) => {
-          const next = { ...prev, [id]: verdict }
-          persistReviewFeedback(next)
-          return next
-        })
-        say(
-          verdict === 'accepted'
-            ? '已采纳该审读建议（本地标记）'
-            : verdict === 'false-positive'
-              ? '已标记为误报（本地记录，v0.6.0 不做自动学习）'
-              : '已忽略该建议（本地标记）',
-        )
-      }
-
-      // 单条 finding 渲染（severity 徽标 / 维度 / 定位 / 置信度 / 证据 / 建议 / 本地裁决）
-      const renderReviewFinding = (finding) => {
-        const verdict = reviewFeedback[finding.id]
-        const verdictText = verdict === 'accepted' ? '已采纳' : verdict === 'ignored' ? '已忽略' : verdict === 'false-positive' ? '已标误报' : ''
-        return h('div', { className: 'ad-box ad-review-finding', key: finding.id, 'data-severity': finding.severity },
-          h('div', { className: 'ad-review-head' },
-            h('span', { className: 'ad-sev', 'data-tone': reviewSeverityTone(finding.severity) }, finding.severityLabel),
-            h('span', null, finding.dimensionLabel),
-            h('span', { className: 'ad-hit-path' }, reviewLocationText(finding.location)),
-            finding.confidence != null ? h('span', { className: 'ad-count' }, `置信度 ${Math.round(Number(finding.confidence) * 100)}%`) : null,
-            verdictText ? h('span', { className: 'ad-review-status' }, verdictText) : null),
-          finding.evidence ? renderReviewEvidence(finding.evidence) : null,
-          finding.suggestion ? h('div', { className: 'ad-hit' }, '建议：' + finding.suggestion) : null,
-          h('div', { className: 'ad-review-actions' },
-            h('button', { className: 'ad-btn ad-sm', onClick: () => jumpToFinding(finding) }, '跳转定位'),
-            h('button', { className: 'ad-btn ad-sm', onClick: () => setReviewVerdict(finding.id, 'accepted'), disabled: verdictText === '已采纳' }, '采纳'),
-            h('button', { className: 'ad-btn ad-sm', onClick: () => setReviewVerdict(finding.id, 'ignored'), disabled: verdictText === '已忽略' }, '忽略'),
-            h('button', { className: 'ad-btn ad-sm', onClick: () => setReviewVerdict(finding.id, 'false-positive'), disabled: verdictText === '已标误报' }, '标误报')))
-      }
-
-
-
       /* ------------------------------------------------------------ 世界观 */
 
       const setWorldEntry = (index, key, value) => {
@@ -17004,7 +17433,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
         const detailCell = h('td', null,
           mode === 'editing'
             ? h('div', null,
-                h('textarea', { className: 'ad-area', rows: 2, value: detail, 'data-world-edit': index, 'aria-label': '第 ' + rowNumber + ' 条 世界观说明', style: { width: '100%', minHeight: '36px', maxHeight: '180px', resize: 'vertical', boxSizing: 'border-box' }, onInput: worldAutoGrow, onChange: (event) => setWorldEntry(index, 'detail', event.target.value), onBlur: (event) => { const cell = event && event.currentTarget ? event.currentTarget.closest('td') : null; const next = event && event.relatedTarget; if (cell && next && cell.contains(next)) return; endWorldEdit(index) }, onKeyDown: (event) => { if (event && event.key === 'Escape') { event.preventDefault(); endWorldEdit(index, { restoreFocus: true }) } } }),
+                h('textarea', { className: 'ad-area', rows: 2, value: detail, 'data-world-edit': index, maxLength: 5000, 'aria-label': '第 ' + rowNumber + ' 条 世界观说明', style: { width: '100%', minHeight: '36px', maxHeight: '180px', resize: 'vertical', boxSizing: 'border-box' }, onInput: worldAutoGrow, onChange: (event) => setWorldEntry(index, 'detail', event.target.value), onBlur: (event) => { const cell = event && event.currentTarget ? event.currentTarget.closest('td') : null; const next = event && event.relatedTarget; if (cell && next && cell.contains(next)) return; endWorldEdit(index) }, onKeyDown: (event) => { if (event && event.key === 'Escape') { event.preventDefault(); endWorldEdit(index, { restoreFocus: true }) } } }),
                 h('button', { className: 'ad-btn ad-sm', type: 'button', 'data-world-edit-button': index, onClick: () => endWorldEdit(index, { restoreFocus: true }) }, '完成'))
             : h('div', null,
                 h('div', { className: 'ad-world-detail', 'data-expanded': mode === 'expanded' ? '1' : '0' }, detail),
@@ -20060,13 +20489,12 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
       /* ---------------------------------------------------------------- 渲染 */
 
       /* ------------------- v0.16.40（P0 / S2）：结构化阅读 / 审核栏 / diff ------------------- */
-      const reviewReadOnly = Boolean(reviewOverlay && reviewOverlay.review && reviewOverlay.review.status === 'locked')
+      const reviewReadOnly = false
       const reviewAnnsAll = reviewAnnotations()
-      const reviewGateState = reviewGate(reviewAnnsAll)
       const reviewCurrentSceneNo = revampParsed.scenes[selectedSceneIndex] ? String(revampParsed.scenes[selectedSceneIndex].no) : ''
       const reviewAnnsOfScene = reviewAnnsAll.filter((ann) => !reviewCurrentSceneNo || String(ann.anchor && ann.anchor.sceneRef || '') === ('场景' + reviewCurrentSceneNo))
       const addBlockAnnotation = (kind, sceneNo, block) => {
-        if (reviewReadOnly) { say('审核已锁定：解锁后才能批注'); return }
+
         /* v0.16.43（P1.2）：内联批注 composer（替换 window.prompt；锚点/quote 由块信息派生） */
         p11LastBlockRef.current = { sceneNo, block }
         p11OpenComposer({ sceneNo, block, severity: kind })
@@ -20088,7 +20516,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
         },
           h('div', { className: 'ad-row ad-rev-reading-filter', style: { flexWrap: 'wrap', gap: 8, marginBottom: 8 } },
             h('span', { className: 'ad-sub', 'data-p11-scene-pos': 'true' }, '全部场景（' + scenes.length + ' 场）'),
-            reviewDirty ? h('span', { className: 'ad-dirty' }, '● 审核记录未保存') : null),
+            reviewDirty ? h('span', { className: 'ad-dirty' }, '● 批注未保存') : null),
           visibleScenes.map((scene, visibleIndex) => {
             const si = readingSceneIndexOf(visibleIndex)
             const sceneAnns = reviewAnnsAll.filter((ann) => String((ann.anchor && ann.anchor.sceneRef) || '') === ('场景' + scene.no))
@@ -20117,7 +20545,6 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
               }))
           }))
       }
-      const reviewStatusLabelOf = (status) => ({ review_draft: '未审核', annotating: '修改中', submitted: '已提交', optimizing: '生成中', diff_ready: '修订稿待审阅', accepted: '已应用（自动）', rejected: '已驳回', approved: '已通过', locked: '已通过锁定' })[String(status || '')] || '未审核'
       const SEVERITY_ORDER = ['blocker', 'major', 'suggestion']
       const p11SevKeyOf = (severity) => {
         const raw = String(severity || '')
@@ -20410,54 +20837,34 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
       }
       const renderReviewPanel = () => {
         const review = (reviewOverlay && reviewOverlay.review) || {}
-        const status = String(review.status || 'review_draft')
-        const locked = status === 'locked'
-        const rounds = Array.isArray(review.rounds) ? review.rounds : []
         const resolved = (reviewAnnsAll || []).filter((ann) => String((revampResolution(ann) || {}).status || 'open') !== 'open')
-        const known = resolved.filter((ann) => String((revampResolution(ann) || {}).status || '') === 'accepted_known_issue')
-        return h('div', { className: 'ad-rev-review-panel ad-p11-panel', 'data-p11-review-left': 'true', 'data-p11-panel': 'true', 'data-p11-review-panel': 'true', 'data-p19-autoapply': p27Auto.state, 'data-p27-auto': p27Auto.state, 'data-p11-sev-order': 'blocker,major,suggestion', 'data-p12-loading': reviewState === 'loading' ? 'true' : 'false', 'data-p12-empty': (reviewAnnsAll || []).length ? 'false' : 'true', 'data-p12-tech-detail': 'true', 'aria-busy': (reviewState === 'loading' || reviewSaving) ? 'true' : 'false' },
-          h('div', { className: 'ad-sec', style: { marginTop: 0 } }, '审核'),
-          h('div', { className: 'ad-p11-kv' }, h('span', { className: 'ad-p11-k' }, '状态'), h(RevChip, { tone: reviewGateState.canApprove ? 'ok' : 'warn' }, reviewStatusLabelOf(status))),
-          h('div', { className: 'ad-p11-kv' }, h('span', { className: 'ad-p11-k' }, '未解决'), '：' + (reviewAnnsAll || []).filter((ann) => String((revampResolution(ann) || {}).status || 'open') === 'open').length + '（⛔' + reviewGateState.blockers + ' · ⚠' + reviewGateState.majors + ' · 💡' + ((reviewAnnsAll || []).length - reviewGateState.blockers - reviewGateState.majors) + '）'),
-          h('div', { className: 'ad-p11-kv' }, h('span', { className: 'ad-p11-k' }, '已解决'), '：' + resolved.length + '（知悉不改 ' + known.length + '）'),
-          h('div', { className: 'ad-p11-kv' }, h('span', { className: 'ad-p11-k' }, '轮次 R' + rounds.length), rounds.length ? '：' + p11RoundTextOf(rounds[rounds.length - 1]) : '：暂无轮次'),
-          h('div', { className: 'ad-p11-kv' }, h('span', { className: 'ad-p11-k' }, '版本'), '：' + ((review.sourceHash || reviewSourceHash) ? '脚本 hash #' + String(review.sourceHash || reviewSourceHash).slice(0, 8) : 'hash —')),
-          h('div', { className: 'ad-sec' }, '修订稿'),
-          reviewPendingDraft
-            ? (() => {
-              const stats = reviewPendingDraft.diffStats || { added: 0, removed: 0, changed: 0 }
-              const changed = Number(stats.added || 0) + Number(stats.removed || 0) + Number(stats.changed || 0)
-              return h('div', { className: 'ad-rev-hint', 'data-p15-returned': 'true', 'data-p15-receipt': changed === 0 ? 'diffzero' : 'returned', 'data-p15-diffstats': String(stats.added) + '/' + String(stats.removed), 'data-p15-diffzero': changed === 0 ? 'true' : undefined }, '修订稿 ' + String(reviewPendingDraft.id || '') + ' 待审阅' + (changed === 0 ? '：无实际改动（不可接受，请驳回重提）' : '：+' + stats.added + '/−' + stats.removed))
-            })()
-            : (status === 'submitted'
-              ? h('div', { className: 'ad-rev-hint', 'data-p15-wait': 'true', 'data-p15-poll': p15Poll.state }, p15Poll.state === 'paused' ? '等待 Agent 回传（页面不可见/失焦，已暂停检测）' : (p15Poll.state === 'timeout' || p15Poll.state === 'error') ? '未检测到回传：确认 Agent 已完成内容写入，可点刷新重试' : '等待 Agent 回传（自动检测中，约 4s 一次）')
-              : h('div', { className: 'ad-rev-hint' }, '暂无待审阅修订稿')),
+        return h('div', { className: 'ad-rev-review-panel ad-p11-panel', 'data-p11-review-left': 'true', 'data-p11-panel': 'true', 'data-p11-review-panel': 'true', 'data-p12-loading': reviewState === 'loading' ? 'true' : 'false', 'data-p12-empty': (reviewAnnsAll || []).length ? 'false' : 'true', 'data-p12-tech-detail': 'true', 'aria-busy': (reviewState === 'loading' || reviewSaving) ? 'true' : 'false' },
+          h('div', { className: 'ad-sec', style: { marginTop: 0 } }, '批注'),
+          h('div', { className: 'ad-p11-kv' }, h('span', { className: 'ad-p11-k' }, '未解决'), '：' + (reviewAnnsAll || []).filter((ann) => String((revampResolution(ann) || {}).status || 'open') === 'open').length + '（已处理 ' + resolved.length + '）'),
           (reviewState === 'error' && reviewLoadError)
-            ? h('div', { className: 'ad-warn', role: 'alert' }, '审核记录读取失败，可重试（详细信息见 title）',
+            ? h('div', { className: 'ad-warn', role: 'alert' }, '批注记录读取失败，可重试（详细信息见 title）',
                 h('button', { type: 'button', className: 'ad-btn ad-sm', style: { marginLeft: 8 }, 'data-p12-retry': 'true', title: String(reviewLoadError), onClick: () => { loadReviewOverlay().catch(() => {}) } }, '重试载入'))
             : null,
           reviewConflict ? h('div', { className: 'ad-warn', role: 'alert' }, '磁盘版本已变化（409）：请载入最新或用最新 hash 重试') : null,
-          reviewSubmitInfo ? h('div', { className: 'ad-rev-hint', role: 'status' }, reviewSubmitInfo) : null,
-          p27Auto.state === 'error' ? h('div', { className: 'ad-err', role: 'alert', 'data-p19-error': 'true', 'data-p27-error': 'true' }, '自动应用失败：' + p27Auto.message + '；草稿已保留，可', h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: () => submitReviewCopy() }, '复制指令')) : null,
+          p27Auto.state === 'error' ? h('div', { className: 'ad-err', role: 'alert', 'data-p19-error': 'true', 'data-p27-error': 'true' }, '自动写入正式稿失败：' + p27Auto.message + '；草稿已保留') : null,
           h('div', { className: 'ad-sec' }, '意见列表'),
           h('div', { className: 'ad-p12-ann-filter', 'data-p12-ann-filter': 'true', role: 'group', 'aria-label': '意见筛选' },
             h('button', { type: 'button', className: 'ad-btn ad-sm', 'aria-pressed': p12AnnFilter === 'all' ? 'true' : 'false', 'data-p12-filter': 'all', onClick: () => setP12AnnFilter('all') }, '全部 ' + p11AnnsSorted().length),
             h('button', { type: 'button', className: 'ad-btn ad-sm', 'aria-pressed': p12AnnFilter === 'open' ? 'true' : 'false', 'data-p12-filter': 'open', onClick: () => setP12AnnFilter('open') }, '未解决 ' + p11AnnsSorted().filter((ann) => String((revampResolution(ann) || {}).status || 'open') === 'open').length),
-            h('button', { type: 'button', className: 'ad-btn ad-sm', 'aria-pressed': p12AnnFilter === 'resolved' ? 'true' : 'false', 'data-p12-filter': 'resolved', onClick: () => setP12AnnFilter('resolved') }, '已解决 ' + p11AnnsSorted().filter((ann) => String((revampResolution(ann) || {}).status || 'open') !== 'open').length)),
+            h('button', { type: 'button', className: 'ad-btn ad-sm', 'aria-pressed': p12AnnFilter === 'resolved' ? 'true' : 'false', 'data-p12-filter': 'resolved', onClick: () => setP12AnnFilter('resolved') }, '已处理 ' + p11AnnsSorted().filter((ann) => String((revampResolution(ann) || {}).status || 'open') !== 'open').length)),
           p12FilteredAnns().length
             ? h('div', { className: 'ad-rev-ann-list', role: 'list', 'data-p12-ann-sort': 'true' }, p12FilteredAnns().map((ann) => {
               const resolution = String((revampResolution(ann) || {}).status || 'open')
               return h('div', { key: ann.id, className: 'ad-rev-ann', role: 'listitem', 'data-sev': p11SevKeyOf(ann.severity), title: '历史严重级：' + p11SevLabelOf(ann.severity) + '（只读显示，不改数据）' },
-                h('button', { type: 'button', className: 'ad-btn ad-sm ad-icon-btn ad-p12-ann-check', 'data-p12-ann-check': 'true', 'aria-pressed': p12AnnSel.includes(ann.id) ? 'true' : 'false', 'aria-label': (p12AnnSel.includes(ann.id) ? '取消选择：' : '选择：') + String(ann.text || ''), onClick: (event) => { if (event && event.stopPropagation) event.stopPropagation(); p12ToggleAnnSel(ann.id) } }, p12AnnSel.includes(ann.id) ? '☑' : '☐'),
                 h(RevChip, { tone: 'plain' }, '批注'),
                 h('span', { className: 'ad-rev-ann-text', title: (ann.anchor && ann.anchor.quote ? '「' + String(ann.anchor.quote) + '」 ' : '') + String(ann.text || '') }, (ann.anchor && ann.anchor.line ? 'L' + ann.anchor.line + ' ' : '') + (ann.anchor && ann.anchor.quote ? '「' + String(ann.anchor.quote).slice(0, 40) + '」 ' : '') + String(ann.text || '')),
                 h('span', { className: 'ad-rev-ann-state' }, p11ResolutionLabelOf(ann)),
-                h('span', { className: 'ad-p11-ann-actions', 'data-p19-nobutton': 'true', 'data-p27-nobutton': 'true' },
-                  h('button', { type: 'button', className: 'ad-btn ad-sm', 'data-hf-edit-ann': 'true', disabled: reviewReadOnly, onClick: (event) => p11OpenEditComposer(ann, event) }, '修改'),
-                  h('button', { type: 'button', className: 'ad-btn ad-sm', 'data-locate': 'true', onClick: () => p11LocateAnn(ann) }, '定位')))
+                h('span', { className: 'ad-p11-ann-actions' },
+                  h('button', { type: 'button', className: 'ad-btn ad-sm', 'data-hf-edit-ann': 'true', onClick: (event) => p11OpenEditComposer(ann, event) }, '修改'),
+                  h('button', { type: 'button', className: 'ad-btn ad-sm', 'data-locate': 'true', onClick: () => p11LocateAnn(ann) }, '定位'),
+                  h('button', { type: 'button', className: 'ad-btn ad-sm ad-btn-danger', 'data-hf-delete-ann': 'true', onClick: (event) => { if (event && event.stopPropagation) event.stopPropagation(); deleteReviewAnnotation(ann) } }, '删除')))
             }))
             : h('div', { className: 'ad-rev-hint' }, '还没有批注：划选正文或点块右侧「批注」添加'),
-          h('div', { 'data-p12-batch': 'true', 'data-p12-ann-batch': 'true', 'data-p19-nobutton': 'true', 'data-p27-nobutton': 'true', 'aria-hidden': 'true', style: { display: 'none' } }),
           h('div', { className: 'ad-p11-legend', 'data-p12-legend': 'true', 'data-p11-legend': 'true' }, '批注类型：批注（已统一；历史标记只读显示）'))
       }
       /* ------------------- v0.16.40（P0 / S3）：VSC 导演简报 渲染辅助（六区块 / 导出 / 移交 / 路径灯） ------------------- */
@@ -21010,7 +21417,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
 
       /* ------------------- v0.16.40（P0 / S4）：分段 / 段级流水线 渲染辅助（六态/进度/命名） ------------------- */
       const segList = () => (analysisOverlay && Array.isArray(analysisOverlay.segments)) ? analysisOverlay.segments : []
-      const segNormalized = () => normalizeSegmentRecords(segList(), episodeOrder)
+      const segNormalized = () => normalizeSegmentRecords(segList(), episodeOrder).map((seg) => { const auto = segmentAutoStateOf(seg, genTasks, episodeOrder); return auto && auto !== seg.state ? { ...seg, state: auto, nextAction: segmentNextAction(auto).cta } : seg })
       const segSelected = () => segNormalized().find((seg) => String(seg.segmentId) === String(selectedSegmentId)) || null
       const segShots = () => shotsOfEpisode()
       const segNaming = () => mergeNamingSnapshot(analysisOverlay && analysisOverlay.naming, deriveNamingSnapshot(segShots(), episodeOrder))
@@ -21037,23 +21444,19 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             'aria-selected': String(seg.segmentId) === String(selectedSegmentId),
             onClick: () => { setSelectedSegmentId(String(seg.segmentId)); setSegmentSplitLine('') },
           },
-          h('span', { className: 'ad-rev-dot', 'data-tone': seg.state === 'approved' ? 'ok' : seg.state === 'pending_review' ? 'warn' : 'plain', 'aria-hidden': 'true' }),
+          h('span', { className: 'ad-rev-dot', 'data-tone': seg.state === 'completed' ? 'ok' : 'plain', 'aria-hidden': 'true' }),
           h('span', { className: 'ad-rev-tree-label' }, '#' + seg.order + ' ' + seg.segmentId + ' ' + (seg.title || '')),
           h('span', { className: 'ad-rev-tree-meta' }, segmentStateLabel(seg.state) + ' · ' + (seg.shotNumbers || []).length + ' 镜'))))
       }
       const renderSegStateButtons = (seg) => {
-        const allowed = nextSegmentStates(seg.state)
         const history = Array.isArray(seg.stateHistory) ? seg.stateHistory : []
         return h('div', { className: 'ad-rev-seg-state' },
           h('div', { className: 'ad-rev-seg-row' },
-            h('span', { className: 'ad-rev-seg-k' }, '六态：'),
-            h(RevChip, { tone: seg.state === 'approved' ? 'ok' : seg.state === 'pending_review' ? 'warn' : 'plain' }, segmentStateLabel(seg.state)),
-            h('span', { className: 'ad-rev-seg-hint' }, '下一步：' + (segmentNextAction(seg.state).cta || '—')),
-            h('button', { type: 'button', className: 'ad-btn ad-primary ad-sm', disabled: segLocked || !canApproveSegment(seg), title: canApproveSegment(seg) ? '人工标记该段通过（仅待审核段可标记）' : '禁止跳段通过：仅「待审核」段可标记通过', onClick: () => approveSegment(seg.segmentId) }, '标记通过'),
-            h('button', { type: 'button', className: 'ad-btn ad-sm', disabled: segLocked, onClick: () => transitionSegment(seg.segmentId, seg.state === 'approved' ? 'pending_generation' : 'pending_storyboard') }, '退回修改')),
-          allowed.length ? h('div', { className: 'ad-rev-seg-row' }, h('span', { className: 'ad-rev-seg-k' }, '人工回填：'), allowed.map((state) => h('button', { key: state, type: 'button', className: 'ad-btn ad-sm', 'aria-pressed': seg.state === state, disabled: segLocked, onClick: () => transitionSegment(seg.segmentId, state) }, '→ ' + segmentStateLabel(state)))) : null,
-          h('div', { className: 'ad-rev-seg-hint' }, '流转记录（append-only ≤100）：' + (history.length ? history.slice(-5).map((item) => (item.from || '—') + '→' + (item.to || '') + (item.by ? '@' + item.by : '')).join(' / ') : '暂无')),
-          h('div', { className: 'ad-rev-seg-hint' }, '执行事实以任务/素材为准；「生成失败」为派生显示，不写入 state'))
+            h('span', { className: 'ad-rev-seg-k' }, '状态：'),
+            h(RevChip, { tone: seg.state === 'completed' ? 'ok' : 'plain' }, segmentStateLabel(seg.state)),
+            h('span', { className: 'ad-rev-seg-hint' }, '下一步：' + (segmentNextAction(seg.state).cta || '—'))),
+          h('div', { className: 'ad-rev-seg-hint' }, '流转记录（只读）：' + (history.length ? history.slice(-5).map((item) => (item.from || '—') + '→' + (item.to || '') + (item.by ? '@' + item.by : '')).join(' / ') : '暂无')),
+          h('div', { className: 'ad-rev-seg-hint' }, '执行事实以任务/素材为准；完成自动派生，不写入状态'))
       }
       const renderSegmentCard = (seg) => {
         const open = String(seg.segmentId) === String(selectedSegmentId)
@@ -21063,7 +21466,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             h('button', { type: 'button', className: 'ad-btn ad-sm', 'aria-expanded': open, onClick: () => { setSelectedSegmentId(open ? '' : String(seg.segmentId)); setSegmentSplitLine('') } }, open ? '收起' : '展开'),
             h('strong', null, '#' + seg.order + ' ' + seg.segmentId),
             h('span', { className: 'ad-rev-seg-title' }, seg.title || ''),
-            h(RevChip, { tone: seg.state === 'approved' ? 'ok' : seg.state === 'pending_review' ? 'warn' : 'plain' }, segmentStateLabel(seg.state)),
+            h(RevChip, { tone: seg.state === 'completed' ? 'ok' : 'plain' }, segmentStateLabel(seg.state)),
             h('span', { className: 'ad-rev-seg-hint' }, 'L' + (seg.sourceRef && seg.sourceRef.startLine) + '-L' + (seg.sourceRef && seg.sourceRef.endLine) + ' · ' + shotsOfSeg.length + ' 镜'),
             h('button', { type: 'button', className: 'ad-btn ad-sm', disabled: segLocked, title: '上移', 'aria-label': '段上移', onClick: () => moveSegment(seg.segmentId, -1) }, '↑'),
             h('button', { type: 'button', className: 'ad-btn ad-sm', disabled: segLocked, title: '下移', 'aria-label': '段下移', onClick: () => moveSegment(seg.segmentId, 1) }, '↓'),
@@ -21084,7 +21487,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             h('div', { className: 'ad-rev-seg-row' }, segTextArea('dialogues', '台词（角色|台词，每行）', (seg.dialogues || []).map((line) => (line.character || '') + '|' + (line.text || '')).join('\n'), (v) => patchSegmentArrayField(seg.segmentId, 'dialogues', v), 2), segTextArea('assetsDeclared', '资产声明（每行）', (seg.assetsDeclared || []).join('\n'), (v) => patchSegmentArrayField(seg.segmentId, 'assetsDeclared', v), 2)),
             renderSegStateButtons(seg),
             h('div', { className: 'ad-rev-seg-row' }, h('span', { className: 'ad-rev-seg-k' }, '只读关联：'), h('span', { className: 'ad-rev-seg-cell' }, (seg.shotNumbers || []).length ? (seg.shotNumbers || []).map((n) => { const c = namingDisplayOf(n, segNaming()); return c ? n + '→' + c : n }).join('、') : '（无关联镜头：按 shotNumber 精确匹配，只读）')),
-            h('div', { className: 'ad-rev-seg-hint' }, '进度（派生）：镜 ' + (seg.progress && seg.progress.shotsTotal) + ' / 通过 ' + (seg.progress && seg.progress.shotsApproved) + '；视频 ' + (seg.progress && seg.progress.videosTotal) + ' / 通过 ' + (seg.progress && seg.progress.videosApproved)),
+            h('div', { className: 'ad-rev-seg-hint' }, '进度（派生）：镜 ' + (seg.progress && seg.progress.shotsTotal) + ' / 完成 ' + (seg.progress && seg.progress.shotsApproved) + '；视频 ' + (seg.progress && seg.progress.videosTotal) + ' / 完成 ' + (seg.progress && seg.progress.videosApproved)),
             segShotList(seg)) : null)
       }
       const renderSegmentSidePanel = () => {
@@ -21303,7 +21706,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             h('div', { className: 'ad-rev-card-v' }, groupSuggestion),
             h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: sbCopySuggestion }, '复制建议')) : null,
           h('div', { className: 'ad-rev-card-hint' }, 'Agent 直接写正式稿（无草稿区）；保存链由现有 sync/load 刷新'),
-          h('div', { className: 'ad-rev-card-hint' }, '审核/WB 内部 draft 路径保留，仅无用户草稿入口'))
+          h('div', { className: 'ad-rev-card-hint' }, '内部 draft 路径保留，仅无用户草稿入口'))
       }
       const renderGroupCardS5b = (group) => {
         const view = sbGroupViewOf(group)
@@ -21452,11 +21855,11 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
       const renderRevampEpisodeShell = (node, mode) => {
         if (!s6RevampOn()) return node
         const modeKey = String(mode || 'review')
-        const modeLabel = modeKey === 'vsc' ? 'VSC 简报' : modeKey === 'segments' ? '分段' : '审核'
+        const modeLabel = modeKey === 'vsc' ? 'VSC 简报' : modeKey === 'segments' ? '分段' : '批注'
         const openAnnCount = (reviewAnnsAll || []).filter((ann) => String((revampResolution(ann) || {}).status || 'open') === 'open').length
         const topbar = h('div', { className: 'ad-rev-s6-topbar ad-p11-shell-topbar', key: 'p1-ep-topbar' },
           s6Layout.rightAsDrawer
-            ? h('button', { type: 'button', className: 'ad-btn ad-sm ad-rev-s6-drawer-btn', 'data-p11-panel-btn': 'true', 'data-p1-drawer-btn': 'true', 'data-p12-left-drawer-btn': p12PanelMode === 'left' ? 'true' : 'false', 'data-p12-sheet-btn': p12PanelMode === 'sheet' ? 'true' : 'false', 'data-p12-toggle': 'panel', 'data-p12-focus-return': 'true', 'data-p1-drawer-close': s6DrawerOpen ? 'true' : 'false', 'aria-expanded': s6DrawerOpen ? 'true' : 'false', 'aria-controls': 'ad-rev-s6-drawer', onClick: s6ToggleDrawer }, (s6DrawerOpen ? '关闭审核面板' : '审核 ' + openAnnCount))
+            ? h('button', { type: 'button', className: 'ad-btn ad-sm ad-rev-s6-drawer-btn', 'data-p11-panel-btn': 'true', 'data-p1-drawer-btn': 'true', 'data-p12-left-drawer-btn': p12PanelMode === 'left' ? 'true' : 'false', 'data-p12-sheet-btn': p12PanelMode === 'sheet' ? 'true' : 'false', 'data-p12-toggle': 'panel', 'data-p12-focus-return': 'true', 'data-p1-drawer-close': s6DrawerOpen ? 'true' : 'false', 'aria-expanded': s6DrawerOpen ? 'true' : 'false', 'aria-controls': 'ad-rev-s6-drawer', onClick: s6ToggleDrawer }, (s6DrawerOpen ? '关闭批注面板' : '批注 ' + openAnnCount))
             : null)
         const backdrop = s6Layout.rightAsDrawer && s6DrawerOpen
           ? h('div', { key: 'p1-ep-backdrop', className: 'ad-rev-s6-drawer-backdrop', 'data-p1-backdrop': 'true', 'data-p12-backdrop': 'true', 'aria-hidden': 'true', onClick: s6CloseDrawer })
@@ -21720,7 +22123,6 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
         if (p12AnnFilter === 'resolved') return list.filter((ann) => String((revampResolution(ann) || {}).status || 'open') !== 'open')
         return list
       }
-      const p12ToggleAnnSel = (id) => setP12AnnSel((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : prev.concat([id]))
       /* ------------------- v0.16.42（P1.1）：page-head / 底部动作栏 / 浮动批注条 / gutter 定位 / 默认场景（纯 UI；0 新 api/写面） ------------------- */
       /* P1.1：按 AC-P11-03 从界面移除开发者说明；语义仅保留在代码注释（接受修订不依赖历史快照，只记录轮次/diffStats/hash） */
       const p11WritingPathText = (lamp) => {
@@ -21728,26 +22130,6 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
         if (!label || /未配置|兜底/.test(label)) return '写作路径：内置兜底流程（外部 skill 未配置，不影响使用）'
         if (/draft|草稿/.test(label)) return '写作路径：Agent 草稿'
         return '写作路径：已配置'
-      }
-      const p11ReviewDisplayStatus = () => {
-        const review = (reviewOverlay && reviewOverlay.review) || {}
-        const status = String(review.status || 'review_draft')
-        if (status === 'locked') return { key: 'locked', label: '已通过锁定', tone: 'ok' }
-        if (status === 'approved') return { key: 'approved', label: '已通过', tone: 'ok' }
-        if (reviewPendingDraft) {
-          const stats = reviewPendingDraft.diffStats || { added: 0, removed: 0, changed: 0 }
-          const changed = Number(stats.added || 0) + Number(stats.removed || 0) + Number(stats.changed || 0)
-          return changed === 0 ? { key: 'noop', label: '已回传 · 无实际改动（不可接受）', tone: 'warn' } : { key: 'diff_ready', label: '已回传 · 修订稿待审阅（+' + stats.added + '/−' + stats.removed + '）', tone: 'warn' }
-        }
-        if (status === 'submitted') {
-          if (p15Poll.state === 'paused') return { key: 'waiting', label: '已提交 · 已暂停检测（页面不可见/失焦）', tone: 'plain' }
-          if (p15Poll.state === 'timeout' || p15Poll.state === 'error') return { key: 'waiting', label: '已提交 · 未检测到回传（可刷新重试）', tone: 'warn' }
-          return { key: 'waiting', label: '已提交 · 等待回传（自动检测中）', tone: 'warn' }
-        }
-        const anns = reviewAnnsAll || []
-        const rounds = Array.isArray(review.rounds) ? review.rounds : []
-        if (!anns.length && !rounds.length) return { key: 'draft', label: '未审核', tone: 'plain' }
-        return { key: 'annotating', label: '修改中', tone: 'warn' }
       }
       const p11MarksForBlock = (sceneNo, block) => {
         const anns = (reviewAnnsAll || []).filter((ann) => {
@@ -21796,7 +22178,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
       // D-0017：修改已有批注内容（复用弹层定位；仅改 text，不动 anchor/行号/状态）
       const p11OpenEditComposer = (ann, event) => {
         if (!ann || !ann.id) return
-        if (reviewReadOnly) { say('审核已锁定：解锁后才能修改批注'); return }
+
         const anchor = (ann.anchor && typeof ann.anchor === 'object') ? ann.anchor : {}
         let rect = null
         try {
@@ -21885,74 +22267,28 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: () => { setP11Composer(null); setP11Float(null) } }, '取消')))
       }
       const renderP11ActionBar = () => {
-        const review = (reviewOverlay && reviewOverlay.review) || {}
-        const status = String(review.status || 'review_draft')
-        const locked = status === 'locked'
         const openAnns = (reviewAnnsAll || []).filter((ann) => String((revampResolution(ann) || {}).status || 'open') === 'open')
-        const display = p11ReviewDisplayStatus()
-        // RC-22（v0.16.100）：提交按钮提示按新解析（临时覆盖 > 项目绑定 > 本地记忆 > 当前视图）
         const rc22Hint = rc22ResolveDelivery(P16_DIRECT_BRIDGE.services, p16NormPath(projectRoot), openTitle, settings, rc22SessionOverride)
-        let primaryKey = 'submit'
-        if (locked) primaryKey = 'unlock'
-        else if (status === 'approved') primaryKey = 'lock'
-        else if (reviewPendingDraft) primaryKey = 'diff'
-        else if (!openAnns.length) primaryKey = 'approve'
-        const btn = (key, label, onClick, extra) => h('button', Object.assign({ type: 'button', key: key, className: 'ad-btn ad-sm' + (primaryKey === key ? ' ad-primary' : ''), onClick }, extra || {}), label)
-        return h('div', { className: 'ad-p11-actions', 'data-p11-actions': 'true', 'data-p19-nobutton': 'true', 'data-p27-nobutton': 'true', 'data-p12-confirm': 'native', role: 'toolbar', 'aria-label': '审核动作栏' },
-          h('span', { className: 'ad-p11-actions-status', role: 'status', 'data-p12-panel-summary': 'true', 'data-p15-status': display.key, 'data-p15-poll': p15Poll.state, 'data-p15-receipt': reviewPendingDraft ? (display.key === 'noop' ? 'diffzero' : 'returned') : undefined }, '状态 ' + display.label + ' · 未解决 ' + openAnns.length + ' · 已解决 ' + (reviewAnnsAll || []).filter((ann) => String((revampResolution(ann) || {}).status || 'open') !== 'open').length + ' · 轮次 ' + String((((reviewOverlay || {}).review || {}).rounds || []).length)),
-          (() => {
-            const services = P16_DIRECT_BRIDGE.services
-            const p17 = p17ResolveTarget(services, p16NormPath(projectRoot))
-            const rc22Delivery = rc22ResolveDelivery(services, p16NormPath(projectRoot), openTitle, settings, rc22SessionOverride)
-            const binding = rc22Delivery.ok ? { ok: true, sessionId: rc22Delivery.sessionId, cwd: rc22Delivery.cwd, preset: rc22Delivery.preset, title: rc22Delivery.title } : { ok: false, reason: rc22Delivery.reason }
-            const warning = rc22Delivery.ok
-              ? (rc22SessionOverride ? ('本面板临时覆盖（不写回项目绑定）' + (rc22Delivery.warning ? '；' + rc22Delivery.warning : '')) : (rc22Delivery.warning || ''))
-              : rc22Delivery.reason
-            const selectedLabel = rc22Delivery.row ? (rc22SessionTitleOf(rc22Delivery.title, rc22Delivery.sessionId) + '（' + rc22SessionShortOf(rc22Delivery.sessionId) + '）· ' + rc22Delivery.sourceLabel) : '选择会话'
-            const shown = p17.candidates.slice(0, p17Limit)
-            const optionNode = (row, index) => {
-              const ok = row.preset === 'drama'
-              if (row.preset && !ok) return null
-              const label = rc22SessionTitleOf(row.title, row.id) + ' · ' + rc22SessionShortOf(row.id) + ' · ' + (row.cwd || '') + (row.preset ? (' · ' + row.preset) : ' · 检测中…')
-              return h('div', { key: 'p17-' + row.id, role: 'option', 'data-p17-option': 'true', 'data-p17-option-ok': ok ? 'true' : 'false', 'data-p17-option-blocked': ok ? 'false' : 'true', 'data-p17-current': row.current ? 'true' : 'false', 'data-p17-selected': row.id === p17.targetId ? 'true' : 'false', title: label },
-                btn('p17-opt-' + index, label, () => { if (ok) p17ChooseSession(row.id) }, { disabled: !ok, title: ok ? '选择该会话（本面板临时覆盖，不写回项目绑定）' : '会话 projection 未加载/不可用' }))
-            }
-            return h('span', { className: 'ad-p11-more', style: { position: 'relative' }, 'data-p17-selector': 'true', 'data-p17-selected': String(p17.targetId || ''), 'data-p17-warning': warning ? 'true' : 'false', 'data-p16-binding': binding.ok ? 'ok' : 'blocked', 'data-p16-session': String(binding.sessionId || '').slice(0, 12), 'data-p16-cwd': String(binding.cwd || ''), 'data-p16-preset': String(binding.preset || ''), 'data-p16-direct': p16Direct.state, 'data-p16-request': String(p16Direct.requestId || '') },
-              btn('p17-select', '直连会话：' + selectedLabel + ' ▾', () => setP17SelectorOpen(!p17SelectorOpen), { title: '选择 AI 直连会话（仅列出 cwd 相等/祖先且短剧模式的会话；手动选择为本面板临时覆盖）' + (rc22Delivery.sessionId ? '；完整会话 id：' + rc22Delivery.sessionId : '') }),
-              rc22SessionOverride
-                ? btn('p17-reset', '恢复默认', () => { setRc22SessionOverride(''); setP17TargetId(''); const root = p16NormPath(projectRoot); if (root) P17_SESSION_MEMORY.delete(root) }, { title: '清除本面板临时选择，回退默认解析（项目绑定 > 本地记忆 > 当前视图）' })
-                : null,
-              p17SelectorOpen
-                ? h('div', { className: 'ad-p11-more-list', role: 'listbox', 'aria-label': 'AI 直连会话', 'data-p17-list': 'true' },
-                    shown.length ? shown.map((row, index) => optionNode(row, index)) : h('div', { className: 'ad-sub', 'data-p17-empty': 'true' }, '无可用直连会话：请先打开一个工作区（或项目目录），再打开短剧模式会话'),
-                    p17.candidates.length > shown.length ? h('div', { 'data-p17-more': 'true' }, btn('p17-more', '显示更多', () => setP17Limit((value) => value + 30), {})) : null)
-                : null,
-              warning ? h('span', { className: 'ad-sub', 'data-p17-warning': 'true' }, warning) : null,
-              p16Direct.state === 'error' && p16Direct.error ? h('span', { className: 'ad-err', role: 'alert', 'data-p16-error': 'true', 'data-p19-error': 'true', 'data-p27-error': 'true' }, '直连发送失败：' + p16Direct.error + '；', btn('copy-fallback-direct', '复制指令', submitReviewCopy, {})) : null)
-          })(),
-          btn('submit', '提交优化指令', submitReview, { disabled: revampBusy || !openAnns.length || (status === 'submitted' && !reviewPendingDraft) || p16Direct.state === 'sending', title: (status === 'submitted' && !reviewPendingDraft) ? '已提交，等待 AI 回传（单飞）' : (rc22Hint.ok ? ('直投 ' + rc22Hint.sourceLabel + '（消耗 1 次模型调用；需确认）') : ('直连不可用：' + rc22Hint.reason + '；点击将复制指令回退')) }),
-          btn('refresh', '刷新', () => { refreshReviewAll().catch(() => {}) }, { disabled: reviewSaving }),
+        const btn = (key, label, onClick, extra) => h('button', Object.assign({ type: 'button', key: key, className: 'ad-btn ad-sm' + (key === 'submit' ? ' ad-primary' : ''), onClick }, extra || {}), label)
+        return h('div', { className: 'ad-p11-actions', 'data-p11-actions': 'true', 'data-p19-nobutton': 'true', 'data-p27-nobutton': 'true', 'data-p12-confirm': 'native', role: 'toolbar', 'aria-label': '批注与优化动作栏' },
+          h('span', { className: 'ad-p11-actions-status', role: 'status' }, '待处理批注 ' + openAnns.length),
+          h('span', { className: 'ad-sub', 'data-p16-target': 'true', 'data-p16-source': rc22Hint.ok ? rc22Hint.sourceLabel : 'unavailable', title: rc22Hint.ok ? String(rc22Hint.sessionId || '') : '' }, rc22Hint.ok ? ('投递到：' + rc22SessionTitleOf(rc22Hint.title, rc22Hint.sessionId) + '（' + rc22SessionShortOf(rc22Hint.sessionId) + '）· ' + rc22Hint.sourceLabel) : ('直连不可用：' + rc22Hint.reason)),
+          p16Direct.state === 'error' && p16Direct.error ? h('span', { className: 'ad-err', role: 'alert', 'data-p16-error': 'true', 'data-p19-error': 'true', 'data-p27-error': 'true' }, '直连发送失败：' + p16Direct.error + '；', btn('copy-fallback-direct', '复制指令', submitReviewCopy, {})) : null,
+          btn('submit', '提交优化指令', submitReview, { disabled: revampBusy || !openAnns.length || p16Direct.state === 'sending', title: rc22Hint.ok ? ('直投 ' + rc22Hint.sourceLabel + '（消耗 1 次模型调用；需确认）') : ('直连不可用：' + rc22Hint.reason + '；点击将复制指令回退') }),
+          btn('refresh', '刷新', () => { loadReviewOverlay().catch(() => {}) }, { disabled: reviewSaving }),
           reviewAutoSave.state === 'error' ? btn('retry', '重试保存', () => { setReviewAutoSave({ state: 'saving', at: '' }); saveReviewOverlay().catch(() => {}) }, {}) : null,
           h('span', { className: 'ad-p11-actions-status', role: 'status', 'data-hf-autosave': 'true', 'aria-live': 'polite' }, reviewAutoSave.state === 'saving' || reviewSaving ? '保存中…' : reviewAutoSave.state === 'error' ? '保存失败：重试' : (reviewAutoSave.state === 'saved' && reviewAutoSave.at ? '已自动保存 ' + String(reviewAutoSave.at).slice(11, 19) : '已自动保存')))
-
       }
-      const renderP11PageHead = (scope) => {
-        const display = p11ReviewDisplayStatus()
-        const openCount = (reviewAnnsAll || []).filter((ann) => String((revampResolution(ann) || {}).status || 'open') === 'open').length
-        return h('div', { className: 'ad-p11-page-head', 'data-p11-page-head': 'true', 'data-p11-shortcuts': scope === 'storyboard' ? '分镜页仅流水线 · Esc 关闭' : 'Alt+B 批注 · Esc 关闭', 'data-p12-shortcuts-help': 'true', 'data-p11-layout': s6Layout.tier, title: '剧本 · 第' + String(revampEpisodeNo).padStart(3, '0') + '集 · 集切换（Alt+↑/↓）', 'data-p11-writing-path': p11WritingPathText(deriveWritingPathLamp(analysisOverlay ? analysisOverlay.handoff : [])), key: 'p11-page-head' },
-          h('span', { className: 'ad-p11-page-title' }, scope === 'storyboard' ? '分镜脚本' : '剧本'),
-          episodeSwitcherNode,
-          scope === 'storyboard' ? h('span', { 'data-p12-status-chip': 'true', 'data-p15-status': display.key }, h(RevChip, { tone: display.tone, 'data-p11-status': display.key }, display.label)) : null,
-          scope === 'storyboard' ? h('span', { className: 'ad-p11-unres' }, '未解决 ' + openCount) : null,
-          // D-0021-A：剧本页头不再渲染场景导航下拉（review/VSC 均无）
-          h('span', { className: 'ad-p11-more', style: { marginLeft: 'auto' } },
-            h('button', { type: 'button', className: 'ad-btn ad-sm', 'aria-haspopup': 'menu', 'aria-expanded': p11MoreOpen ? 'true' : 'false', onClick: () => setP11MoreOpen(!p11MoreOpen) }, '更多'),
-            p11MoreOpen
-              ? h('div', { className: 'ad-p11-more-list', role: 'menu' },
-                  h('button', { type: 'button', className: 'ad-btn ad-sm', role: 'menuitem', onClick: () => { setP11MoreOpen(false); setReviewReadView('structured') } }, '结构化阅读'),
-                  h('button', { type: 'button', className: 'ad-btn ad-sm', role: 'menuitem', onClick: () => { setP11MoreOpen(false); setReviewReadView('text') } }, '原文视图'))
-              : null))
-      }
+      const renderP11PageHead = (scope) => h('div', { className: 'ad-p11-page-head', 'data-p11-page-head': 'true', 'data-p11-shortcuts': scope === 'storyboard' ? '分镜页仅流水线 · Esc 关闭' : 'Alt+B 批注 · Esc 关闭', 'data-p12-shortcuts-help': 'true', 'data-p11-layout': s6Layout.tier, title: '剧本 · 第' + String(revampEpisodeNo).padStart(3, '0') + '集 · 集切换（Alt+↑/↓）', 'data-p11-writing-path': p11WritingPathText(deriveWritingPathLamp(analysisOverlay ? analysisOverlay.handoff : [])), key: 'p11-page-head' },
+        h('span', { className: 'ad-p11-page-title' }, scope === 'storyboard' ? '分镜脚本' : '剧本'),
+        episodeSwitcherNode,
+        h('span', { className: 'ad-p11-more', style: { marginLeft: 'auto' } },
+          h('button', { type: 'button', className: 'ad-btn ad-sm', 'aria-haspopup': 'menu', 'aria-expanded': p11MoreOpen ? 'true' : 'false', onClick: () => setP11MoreOpen(!p11MoreOpen) }, '更多'),
+          p11MoreOpen
+            ? h('div', { className: 'ad-p11-more-list', role: 'menu' },
+                h('button', { type: 'button', className: 'ad-btn ad-sm', role: 'menuitem', onClick: () => { setP11MoreOpen(false); setReviewReadView('structured') } }, '结构化阅读'),
+                h('button', { type: 'button', className: 'ad-btn ad-sm', role: 'menuitem', onClick: () => { setP11MoreOpen(false); setReviewReadView('text') } }, '原文视图'))
+            : null))
       React.useEffect(() => {
         p11ShowAllRef.current = false
         // D-0021-A：仅内部默认场景选择，不渲染任何导航/过滤 affordance（中区恒全量）
@@ -21960,6 +22296,12 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
         return undefined
       }, [s6Layout.tier])
       // v0.16.48（D-0014/D-0015）：审核/VSC 模式按需加载 assets（只读；复用既有 loadAssets）
+      React.useEffect(() => {
+        if (phase !== 'project' || !openTitle) return undefined
+        if (tab !== 'storyboard' && tab !== 'episode') return undefined
+        loadGenerate().catch(() => {})
+        return undefined
+      }, [phase, openTitle, tab, episodeOrder])
       React.useEffect(() => {
         if (tab !== 'episode') return undefined
         if (episodePageMode !== 'review' && episodePageMode !== 'vsc') return undefined
@@ -22311,9 +22653,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
         // v0.12.0（task-7）：15 页签 4 组 + 窄窗「更多」收纳；aria：tablist/tab/aria-selected 保留，内容区统一 tabpanel
         const tabLabelOf = new Map(tabs)
         // RC-23 X：新宿主隐藏草稿 tab；旧宿主（无 contentWriteSupported）保留旧 tab 降级
-        const baseTabGroups = contentWriteSupported === true
-          ? TAB_GROUPS.map((group) => ({ ...group, tabs: group.tabs.filter((key) => key !== 'drafts') }))
-          : TAB_GROUPS
+        const baseTabGroups = TAB_GROUPS.map((group) => ({ ...group, tabs: group.tabs.filter((key) => key !== 'drafts') }))
         // v0.16.146：render 层隐藏交付组（组标题 + generate/check 页签）；TAB_GROUPS 定义保留。
         const visibleTabGroups = baseTabGroups.filter((group) => !HIDDEN_TAB_GROUP_IDS.includes(group.id))
         const groupedTabs = visibleTabGroups.map((group) => ({ ...group, items: group.tabs.map((key) => [key, tabLabelOf.get(key)]) }))
@@ -22809,7 +23149,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
               h('div', { className: 'ad-p11-tree-summary', 'data-p12-left-summary': 'true' }, '场次 ' + (revampParsed.scenes || []).length + ' · 未解决 ' + (reviewAnnsAll || []).filter((ann) => String((revampResolution(ann) || {}).status || 'open') === 'open').length),
             // D-0021-A：删除审核页左侧场次导航（中区恒全量展示；摘要保留）
               h('div', Object.assign(s6DrawerColAttrs('ad-rev-col-right ad-p11-review-left'), { 'data-p12-panel-mode': p12PanelMode, 'data-p12-drawer': p12PanelMode === 'left' ? 'left' : undefined, 'data-p12-left-drawer': p12PanelMode === 'left' ? 'true' : undefined, 'data-p12-sheet': p12PanelMode === 'sheet' ? 'review' : undefined }), renderReviewPanel()), renderAssetSyncModule()),
-            h('div', { className: 'ad-rev-col-main ad-p11-main' }, reviewMissing && !(reviewAnnsAll || []).length ? h('div', { className: 'ad-rev-hint', 'data-hf-review-empty-hint': 'true' }, '未开始审核：本集还没有审核记录，添加批注后会自动保存并创建') : null, revEpisodeNodes, renderP11ActionBar(), renderP11FloatBar(), renderP14AssetPopover())))
+            h('div', { className: 'ad-rev-col-main ad-p11-main' }, reviewMissing && !(reviewAnnsAll || []).length ? h('div', { className: 'ad-rev-hint', 'data-hf-review-empty-hint': 'true' }, '还没有批注：添加批注后会自动保存并创建') : null, revEpisodeNodes, renderP11ActionBar(), renderP11FloatBar(), renderP14AssetPopover())))
           }
           if (body.length) body[body.length - 1] = renderRevampEpisodeShell(body[body.length - 1], episodePageMode)
         }
@@ -23023,7 +23363,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             const typeKey = String(card.type || '').toUpperCase()
             typeCounts.set(typeKey, (typeCounts.get(typeKey) || 0) + 1)
           }
-          const typeChips = ASSET_TYPE_ORDER.filter(([type]) => typeCounts.has(type))
+          const typeChips = assetTypeChipsOf(typeCounts)
           const selectedCard = assetCards.find((card) => card.id === assetSelectedId) || null
           const markBroken = (src) => setAssetBrokenImages((prev) => (prev[src] ? prev : { ...prev, [src]: true }))
           const assetPlaceholder = (text, className, attrs) => h('span', Object.assign({ className: className || 'ad-asset-placeholder' }, attrs || {}), text)
@@ -23202,7 +23542,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
                       className: 'ad-btn ad-sm',
                       'data-asset-prompt-generate': 'true',
                       disabled: busy || locked,
-                      title: locked ? '卡片已锁定：请先在面板重打开/解锁后再生成或写回' : state ? '用 drama-asset 技能生成当前状态提示词并写回 promptsByState（带 stateId）' : '用 drama-asset 技能生成提示词并写回该资产卡（投递项目绑定会话）',
+                      title: locked ? '卡片已锁定：请先解锁后再生成或写回' : state ? '用 drama-asset 技能生成当前状态提示词并写回 promptsByState（带 stateId）' : '用 drama-asset 技能生成提示词并写回该资产卡（投递项目绑定会话）',
                       onClick: () => { sendAssetPromptRequest(card, state).catch(() => {}) },
                     }, busy ? '发送中…' : '生成提示词')
                   : null,
@@ -23217,7 +23557,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
                     h('pre', { className: 'ad-asset-prompt-body' }, entry.text))))
                 : h('div', { className: 'ad-asset-detail-empty' }, '暂无提示词'),
               state ? h('div', { className: 'ad-rev-hint', 'data-asset-prompt-state': 'true' }, '当前状态：' + state.name + '（提示词独立存储 promptsByState；Agent 写回带 stateId）') : null,
-              locked ? h('div', { className: 'ad-warn', role: 'status', 'data-asset-prompt-locked': 'true' }, '卡片已锁定：请先在面板重打开/解锁后再生成或写回') : null,
+              locked ? h('div', { className: 'ad-warn', role: 'status', 'data-asset-prompt-locked': 'true' }, '卡片已锁定：请先解锁后再生成或写回') : null,
               assetPromptCopyState
                 ? h('div', { className: assetPromptCopyState.state === 'ok' ? 'ad-ok' : 'ad-err', role: 'status', 'data-asset-prompt-copy-state': assetPromptCopyState.state, 'data-asset-prompt-copy-key': assetPromptCopyState.key }, assetPromptCopyState.state === 'ok' ? '已复制提示词' : '复制失败：剪贴板不可用，请手动选择文本复制')
                 : null,
@@ -23226,7 +23566,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
           }
           const sendAssetPromptRequest = async (card, state) => {
             if (!assetLibraryV2 || !card || assetPromptLockRef.current) return
-            if (card.review && card.review.status === 'final') { setAssetPromptError('卡片已锁定：请先在面板重打开/解锁后再生成或写回'); return }
+            if (card.review && card.review.status === 'final') { setAssetPromptError('卡片已锁定：请先解锁后再生成或写回'); return }
             const rc = rc22ResolveDelivery(P16_DIRECT_BRIDGE.services, String(projectRoot || '').replace(/\\/g, '/').replace(/\/+$/, ''), openTitle, settings, rc22SessionOverride)
             const label = String(card.id || '') + ' ' + String(card.name || '') + (state ? ' · 状态：' + state.name : '')
             const text = assetPromptInstruction(openTitle, card, state ? state.id : '', state ? state.name : '')
@@ -23256,7 +23596,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
               const message = String((error && error.message) || '未知错误')
               const lockedErr = code === 'asset-locked' || /asset-locked|locked|锁定/i.test(message)
               copyPlainText(text, '发送失败，已复制提示词生成指令')
-              setAssetPromptError(lockedErr ? '卡片已锁定：请先在面板重打开/解锁后再生成或写回' : ('发送失败：' + message + '；已复制指令可手动发送'))
+              setAssetPromptError(lockedErr ? '卡片已锁定：请先解锁后再生成或写回' : ('发送失败：' + message + '；已复制指令可手动发送'))
             } finally {
               assetPromptLockRef.current = false
               setAssetPromptBusyId('')
@@ -23287,7 +23627,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             const text = String(status || '').toLowerCase()
             if (['done', 'succeeded', 'success', 'completed', 'finished', 'bound'].includes(text)) return 'success'
             if (['failed', 'error', 'cancelled', 'canceled', 'timeout'].includes(text)) return 'error'
-            if (['pending', 'submitted', 'queued', 'polling', 'downloading', 'running', 'generating', 'in_progress', 'processing'].includes(text)) return text === 'queued' || text === 'submitted' ? 'queued' : 'running'
+            if (['pending', 'submitted', 'queued', 'polling', 'downloading', 'running', 'generating', 'in_progress', 'processing', 'collecting'].includes(text)) return text === 'queued' || text === 'submitted' ? 'queued' : 'running'
             return 'queued'
           }
           const focusAssetCard = (cardId) => {
@@ -23320,6 +23660,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             const taskId = String((info && info.taskId) || options.taskId || '')
             if (!taskId) return null
             const stage = options.stage || assetTaskStageOf((info && info.status) || '')
+            const promptMode = String(options.mode || (info && info.mode) || '')
             return taskCenterUpsert({
               taskId,
               type: 'asset-image',
@@ -23327,9 +23668,16 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
               cardId: String(card && card.id || ''),
               stateId: String(options.stateId || ''),
               project: openTitle,
-              displayName: String(card ? (card.id + ' ' + (card.name || '')).trim() : taskId),
+              displayName: String(card ? ((card.id + ' ' + (card.name || '')).trim() + (String(options.stateId || (info && info.stateId) || '') ? ' · ' + String(options.stateId || (info && info.stateId) || '') : '')) : taskId),
               title: String(options.title || '资产图生成'),
               stage,
+              authority: String(options.authority || (/^ag-/.test(taskId) ? 'host' : 'temp')),
+              hostStatus: String((info && (info.canonicalStatus || info.status)) || options.hostStatus || ''),
+              mode: promptMode,
+              revision: Number(info && info.revision) || Number(options.revision) || 0,
+              taskRevision: Number(info && info.taskRevision) || Number(options.taskRevision) || 0,
+              lastSyncedAt: Date.now(),
+              updatedAt: Number(info && info.updatedAtMs) || undefined,
               error: (() => {
                 const raw = String((info && info.error) || options.error || '')
                 if (raw) return assetTaskFailureText(raw)
@@ -23337,23 +23685,26 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
                 return ''
               })(),
               artifact: (info && info.artifact) || options.artifact || null,
-              actions: stage === 'error' ? [{ id: 'retry', label: '重试', run: () => { try { sendAssetImageRequest(card).catch(() => {}) } catch (error) { /* 忽略 */ } } }, { id: 'locate', label: '定位', run: () => { try { focusAssetCard(String(card && card.id || '')) } catch (error) { /* 忽略 */ } } }] : [{ id: 'locate', label: '定位', run: () => { try { focusAssetCard(String(card && card.id || '')) } catch (error) { /* 忽略 */ } } }],
+              actions: stage === 'error' ? [{ id: 'retry', label: '重试', run: () => { try { sendAssetImageRequest(card, null, false, { promptKind: promptMode === 'scenesheet' ? 'scenesheet' : 'plate' }).catch(() => {}) } catch (error) { /* 忽略 */ } } }, { id: 'locate', label: '定位', run: () => { try { focusAssetCard(String(card && card.id || '')) } catch (error) { /* 忽略 */ } } }] : [{ id: 'locate', label: '定位', run: () => { try { focusAssetCard(String(card && card.id || '')) } catch (error) { /* 忽略 */ } } }],
             }, taskCenterAssetAdapter)
           }
           const sendAssetImageRequest = async (card, state, useDefaultPrompt, options = {}) => {
             if (!assetLibraryV2 || !assetGenerateSupported || !assetMediaWriteSupported || !card || assetImageLockRef.current) return
-            if (card.review && card.review.status === 'final') { setAssetImageError('卡片已锁定：请先在面板重打开/解锁后再生成或写回'); return }
+            if (card.review && card.review.status === 'final') { setAssetImageError('卡片已锁定：请先解锁后再生成或写回'); return }
             const targetState = state || assetDefaultStateOf(card)
             const targetStateId = targetState ? String(targetState.id || '') : ''
             const targetStateName = targetState ? String(targetState.name || targetState.id) : '默认状态'
             const defaultState = assetDefaultStateOf(card)
             const promptState = useDefaultPrompt && defaultState && (!targetState || defaultState.id !== targetState.id) ? defaultState : targetState
             const promptSource = promptState ? { ...card, prompts: assetStatePromptsOf(card, promptState) } : card
-            const promptEntry = assetPromptEntriesOf(promptSource)[0] || null
-            if (!promptEntry || !promptEntry.text) { setAssetImageError('该资产还没有提示词，请先生成提示词'); return }
+            const promptKind = options.promptKind === 'scenesheet' ? 'scenesheet' : 'plate'
+            const promptEntries = assetPromptEntriesOf(promptSource)
+            if (!promptEntries.length) { setAssetImageError(promptKind === 'scenesheet' ? '缺少场景展示图提示词（PROMPT_SCENESHEET）' : '该资产还没有提示词，请先生成提示词'); return }
+            const promptText = buildAssetPromptPayload(promptSource, promptKind)
+            if (!promptText) { setAssetImageError(promptKind === 'scenesheet' ? '缺少场景展示图提示词（PROMPT_SCENESHEET）' : '缺少主提示词（PROMPT_MAIN）'); return }
+            if (promptText.length > 8000) { setAssetImageError('提示词过长（上限 8000 字符）'); return }
             const activeAssetTasks = taskCenterSnapshot().tasks.filter((task) => task.type === 'asset-image' && !task.terminal)
-            if (activeAssetTasks.some((task) => String(task.cardId || '') === String(card.id || ''))) { setAssetImageError('该资产已有在途生成任务：请等待完成，同卡同状态不重复提交'); return }
-            if (activeAssetTasks.length >= 20) { setAssetImageError('任务队列已满（上限 20）：请等待完成或关闭通知后重试'); return }
+            if (activeAssetTasks.some((task) => String(task.cardId || '').toUpperCase() === String(card.id || '').toUpperCase() && String(task.stateId || 'default') === String(targetStateId || 'default'))) { setAssetImageError('该资产该状态已有在途生成任务：请等待完成，同卡同状态不重复提交'); return }
             // RC-31：先校验项目画布绑定（设置里的默认后端 ≠ 项目画布绑定）
             if (!assetCanvasBound) {
               setAssetImageError('项目未绑定画布：请在弹窗「绑定画布」中选择候选（或去生成页绑定）')
@@ -23361,8 +23712,10 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
               return
             }
             const label = String(card.id || '') + ' ' + String(card.name || '') + ' · 生成到：' + targetStateName
-            const ok = options.skipConfirm === true ? true : (typeof window === 'undefined' || typeof window.confirm !== 'function' ? true : window.confirm('提交宿主直连生成？\n资产：' + label + '\n生成到：' + targetStateName + (targetStateId ? '（' + targetStateId + '）' : '') + '\n画布工具：' + assetCanvasLabel + '\n将消耗 1 次生成额度；任务在宿主执行，完成后自动加入目标状态画廊版本。继续？'))
+            const confirmText = promptKind === 'scenesheet' ? ('生成场景展示图？\n资产：' + label + (targetStateId ? '（' + targetStateId + '）' : '') + '\n画布工具：' + assetCanvasLabel + '\n展示图规格：正交视图（平面 + 立面；复杂场景为轴测/剖面）+ 入口/门窗/尺寸标注 + 比例尺\n这不是普通场景照片，请勿与「生成图片」混用。\n将消耗 1 次生成额度；完成后自动加入目标状态画廊。继续？') : ('提交宿主直连生成？\n资产：' + label + '\n生成到：' + targetStateName + (targetStateId ? '（' + targetStateId + '）' : '') + '\n画布工具：' + assetCanvasLabel + '\n将消耗 1 次生成额度；任务在宿主执行，完成后自动加入目标状态画廊版本。继续？')
+            const ok = options.skipConfirm === true ? true : (typeof window === 'undefined' || typeof window.confirm !== 'function' ? true : window.confirm(confirmText))
             if (!ok) return
+            assetLastGenerationAtRef.current = Date.now()
             const submittingTaskId = 'submitting:' + String(card.id || '')
             taskCenterUpsert({ taskId: submittingTaskId, type: 'asset-image', source: 'ai-drama', cardId: String(card.id || ''), stateId: targetStateId, project: openTitle, displayName: String(card.id || '') + ' ' + String(card.name || ''), title: '提交生成中（等待宿主返回任务）', stage: 'running', actions: [] }, taskCenterAssetAdapter)
             assetImageLockRef.current = true
@@ -23370,9 +23723,9 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             setAssetImageNotice('')
             setAssetImageError('')
             try {
-              const submitPayload = { title: openTitle, assetId: String(card.id || ''), action: 'submit', prompt: promptEntry.text }
+              const submitPayload = { title: openTitle, assetId: String(card.id || ''), action: 'submit', prompt: promptText, promptKind, mode: promptKind === 'scenesheet' ? 'scenesheet' : 'normal' }
               if (targetStateId) submitPayload.stateId = targetStateId
-              const result = await api('asset-generate', submitPayload)
+              const result = await apiWithTimeout('asset-generate', submitPayload, 60000)
               if (!result || result.ok === false) {
                 taskCenterRemove(submittingTaskId)
                 const code = String((result && (result.code || result.errorCode)) || '')
@@ -23391,11 +23744,15 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
               const info = assetGenerateTaskOf(result)
               taskCenterRemove(submittingTaskId)
               setAssetGenJobs((prev) => ({ ...(prev || {}), [String(card.id)]: { taskId: info.taskId, status: info.status || 'submitted', error: info.error, candidates: [], submittedAt: Date.now(), stateId: info.stateId || targetStateId } }))
-              publishAssetTask(card, info, { stage: 'running', stateId: info.stateId || targetStateId, title: '资产图生成 · 已提交，生成中（目标 ' + targetStateName + '）' })
+              publishAssetTask(card, info, { stage: assetTaskStageOf(info.status || 'submitted'), stateId: info.stateId || targetStateId, mode: promptKind === 'scenesheet' ? 'scenesheet' : 'normal', title: '资产图生成 · 已提交（目标 ' + targetStateName + '）' })
               return true
             } catch (error) {
               taskCenterRemove(submittingTaskId)
               const message = String((error && error.message) || '未知错误')
+              if (String((error && error.code) || '') === 'timeout') {
+                publishAssetTask(card, { taskId: 'submit-timeout:' + String(card.id), status: 'failed', error: '提交超时，可重试' }, { stage: 'error', title: '提交超时（60s）' })
+                return false
+              }
               if (/not[-_]?found|unknown method|不支持/i.test(message)) setAssetImageError('当前宿主不支持直连生成：请使用「复制提示词」交给 Agent 处理')
               else publishAssetTask(card, { taskId: 'submit-failed:' + String(card.id), status: 'failed', error: message }, { stage: 'error', title: '资产图生成提交失败' })
               return false
@@ -23515,6 +23872,10 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
               await new Promise((resolve) => setTimeout(resolve, 4000))
             }
           }
+          // N1: 暴露生成域动作给 task center effect（effect 在顶层作用域，不能直接引用本嵌套作用域）
+          taskCenterState.publishAssetTask = publishAssetTask
+          taskCenterState.sendAssetImageRequest = sendAssetImageRequest
+          taskCenterState.focusAssetCard = focusAssetCard
           const assetBatchDrain = async () => {
             if (assetBatchDrainingRef.current) return
             assetBatchDrainingRef.current = true
@@ -23543,36 +23904,20 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             if (!ids.length) { setAssetBatchNotice('请先勾选资产卡'); return }
             if (ids.length > 20) { setAssetBatchNotice('单次最多 20 张：已选 ' + ids.length + ' 张，请减少选择'); return }
             const activeTasks = taskCenterSnapshot().tasks.filter((task) => task.type === 'asset-image' && !task.terminal)
-            const activeIds = new Set(activeTasks.map((task) => String(task.cardId || '').toUpperCase()))
-            const queuedIds = new Set(assetBatchQueueRef.current.map((item) => String(item.cardId || '').toUpperCase()))
+            const activeIds = new Set(activeTasks.map((task) => String(task.cardId || '').toUpperCase() + '::' + String(task.stateId || 'default')))
+            const queuedIds = new Set(assetBatchQueueRef.current.map((item) => String(item.cardId || '').toUpperCase() + '::' + String(item.stateId || 'default')))
             const cards = ids.map((id) => assetCards.find((entry) => String(entry.id || '').toUpperCase() === String(id || '').toUpperCase()) || null).filter(Boolean)
-            const picked = cards.filter((card) => !activeIds.has(String(card.id || '').toUpperCase()) && !queuedIds.has(String(card.id || '').toUpperCase()))
+            const picked = cards.filter((card) => { const state = assetDefaultStateOf(card); const key = String(card.id || '').toUpperCase() + '::' + String(state && state.id || 'default'); return !activeIds.has(key) && !queuedIds.has(key) })
             const skipped = cards.length - picked.length
             if (!picked.length) { setAssetBatchNotice(skipped ? '所选资产均已有在途/排队任务，已合并跳过' : '所选资产不可用'); return }
-            const totalAfter = activeTasks.length + assetBatchQueueRef.current.length + picked.length
-            if (totalAfter > 20) { setAssetBatchNotice('任务队列上限 20：当前在途/排队 ' + (activeTasks.length + assetBatchQueueRef.current.length) + '，本次最多再入 ' + Math.max(0, 20 - activeTasks.length - assetBatchQueueRef.current.length) + ' 张'); return }
             const ok = typeof window === 'undefined' || typeof window.confirm !== 'function' ? true : window.confirm('已选 ' + picked.length + ' 张，一起加入队列？')
             if (!ok) return
             const entries = picked.map((card, index) => {
               const state = assetDefaultStateOf(card)
-              return { queueId: 'batch-' + Date.now().toString(36) + '-' + String(index) + '-' + String(card.id || ''), cardId: String(card.id || ''), stateId: String(state && state.id || ''), displayName: String(card.id || '') + ' ' + String(card.name || '') }
+              return { queueId: 'batch-' + Date.now().toString(36) + '-' + String(index) + '-' + String(card.id || ''), cardId: String(card.id || ''), stateId: String(state && state.id || '') }
             })
             assetBatchQueueRef.current = assetBatchQueueRef.current.concat(entries)
             setAssetBatchQueue(assetBatchQueueRef.current.slice())
-            for (const entry of entries) {
-              taskCenterUpsert({
-                taskId: entry.queueId,
-                type: 'asset-image',
-                source: 'ai-drama',
-                cardId: entry.cardId,
-                stateId: entry.stateId,
-                project: openTitle,
-                displayName: entry.displayName,
-                title: '批量生成排队中',
-                stage: 'queued',
-                actions: [{ id: 'cancel-queued', label: '取消排队', run: () => assetBatchCancelQueued(entry.queueId) }],
-              }, taskCenterAssetAdapter)
-            }
             setAssetBatchSelected({})
             setAssetBatchNotice('已加入队列：' + entries.length + ' 张（串行提交中）')
             void assetBatchDrain()
@@ -23581,7 +23926,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             if (!card || !assetLibraryV2) return
             if (!assetGenerateSupported) { setAssetSelectedId(card.id); say('当前宿主不支持直连生成：请打开详情「复制提示词」交给 Agent 处理'); return }
             if (!assetPromptEntriesOf(card).length) { setAssetSelectedId(card.id); say('该资产还没有提示词，请先生成提示词'); return }
-            if (card.review && card.review.status === 'final') { setAssetSelectedId(card.id); say('卡片已锁定：请先重打开再生成图片'); return }
+            if (card.review && card.review.status === 'final') { setAssetSelectedId(card.id); say('卡片已锁定：请先解锁再生成图片'); return }
             if (!assetCanvasBound) { setAssetSelectedId(card.id); openCanvasBindModal('asset'); say('项目未绑定画布：请先在弹窗中绑定画布再生成图片'); return }
             sendAssetImageRequest(card).catch(() => {})
           }
@@ -23602,6 +23947,17 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             const defaultState = assetDefaultStateOf(card)
             const stateIsDefault = Boolean(!state || !defaultState || String(state.id) === String(defaultState.id))
             const defaultPromptCount = defaultState ? assetPromptEntriesOf({ ...card, prompts: assetStatePromptsOf(card, defaultState) }).length : 0
+            const sceneSheetPromptText = (() => { try { const merged = assetStatePromptsOf(card, state); return String((merged && merged.PROMPT_SCENESHEET) || '').trim() } catch (error) { return '' } })()
+            const isSceneAsset = String(card.type || '').toUpperCase() === 'SPC'
+            const sceneSheetNarrow = typeof window !== 'undefined' && Number(window.innerWidth) < 360
+            const sceneSheetCompact = typeof window !== 'undefined' && Number(window.innerWidth) >= 360 && Number(window.innerWidth) < 560
+            const sceneSheetActive = isSceneAsset && taskCenterSnapshot().tasks.some((task) => task.type === 'asset-image' && !task.terminal && String(task.cardId || '').toUpperCase() === String(card.id || '').toUpperCase() && String(task.stateId || 'default') === String((state && state.id) || 'default'))
+            const sceneSheetReason = !isSceneAsset ? '' : (!sceneSheetPromptText ? '缺少展示图提示词 PROMPT_SCENESHEET' : (!assetGenerateSupported ? '当前宿主不支持直连生成' : (!assetMediaWriteSupported ? '当前宿主不支持直连写回' : (!assetCanvasBound ? '项目未绑定画布' : (locked ? '卡片已锁定：请先解锁' : (busy ? '提交中，请稍候' : (sceneSheetActive ? '该资产该状态已有在途任务' : '')))))))
+            const sceneSheetDisabled = Boolean(sceneSheetReason)
+            const sceneSheetTitle = '生成场景展示图（正交视图 / 平面+立面 / 含标注与比例尺；非普通场景照片）'
+            const sceneSheetAriaBase = '生成场景展示图：正交视图、平面+立面、含标注与比例尺，非普通场景照片'
+            const sceneSheetAria = sceneSheetDisabled ? ('生成场景展示图（暂不可用：' + sceneSheetReason + '）') : sceneSheetAriaBase
+            const sceneSheetLabel = sceneSheetNarrow ? icon('image') : (sceneSheetCompact ? '生成展示图' : '生成场景展示图')
             const selectedBatchCount = Object.keys(assetBatchSelected || {}).filter((key) => assetBatchSelected[key]).length
             const batchMode = selectedBatchCount > 0
 
@@ -23631,6 +23987,9 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
               h('div', { className: 'ad-row', style: { gap: 6, flexWrap: 'nowrap', marginTop: 4, alignItems: 'center' }, 'data-asset-gen-row': 'r3' },
                 assetGenerateSupported && assetMediaWriteSupported
                   ? h('button', { type: 'button', className: 'ad-btn ad-sm ad-primary', style: actionStyle, 'data-asset-generate-image': 'true', 'data-asset-batch-cta': batchMode ? 'true' : undefined, disabled: busy || (batchMode ? false : (locked || !hasPrompt)), title: batchMode ? '已选 ' + selectedBatchCount + ' 张：将所选资产一起加入队列' : (locked ? '卡片已锁定：请先重打开' : !hasPrompt ? '请先生成提示词' : (state ? '宿主直连生成：按当前状态提示词生成，完成后加入当前状态画廊' : '宿主直连生成：按主提示词用画布工具生成，完成后直接加入画廊版本')), onClick: () => { if (batchMode) { assetBatchEnqueue(); return } sendAssetImageRequest(card, state).catch(() => {}) } }, batchMode ? ('加入队列（' + selectedBatchCount + ' 张）') : (job ? '重新生成' : '生成图片'))
+                  : null,
+                isSceneAsset
+                  ? h('button', { type: 'button', className: 'ad-btn ad-sm', style: actionStyle, 'data-asset-scenesheet-generate': 'true', 'aria-disabled': sceneSheetDisabled ? 'true' : undefined, 'aria-label': sceneSheetAria, title: sceneSheetTitle, onClick: () => { if (sceneSheetDisabled) { setAssetImageNotice(sceneSheetReason); setTimeout(() => { try { setAssetImageNotice('') } catch (error) { /* 忽略 */ } }, 2000); return } sendAssetImageRequest(card, state, false, { promptKind: 'scenesheet' }).catch(() => {}) } }, sceneSheetLabel)
                   : null,
                 assetGenerateSupported && assetMediaWriteSupported
                   ? h('button', { type: 'button', className: 'ad-btn ad-sm', style: actionStyle, 'data-asset-gen-refresh': 'true', disabled: busy || !job, onClick: () => { refreshAssetGeneration(card).catch(() => {}) } }, '刷新状态')
@@ -23776,15 +24135,28 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             for (const raw of images) { const value = String(raw || '').trim(); if (value && !out.includes(value)) out.push(value) }
             return out
           }
+          /* ASSET_STATE_PROMPTS_PURE_START */
           const assetStatePromptsOf = (card, state) => {
-            if (!card || !state) return {}
-            const byState = card.promptsByState && typeof card.promptsByState === 'object' ? card.promptsByState : {}
-            if (byState[state.id] && typeof byState[state.id] === 'object') return byState[state.id]
-            const media = card.media && typeof card.media === 'object' ? card.media : {}
-            const defaultStateId = String(media.defaultStateId || '').trim() || 'default'
-            if (state.id === defaultStateId) return card.prompts && typeof card.prompts === 'object' ? card.prompts : {}
-            return {}
+            const top = card && card.prompts && typeof card.prompts === 'object' && !Array.isArray(card.prompts) ? card.prompts : {}
+            if (!state) return top
+            const byState = card && card.promptsByState && typeof card.promptsByState === 'object' && !Array.isArray(card.promptsByState) ? card.promptsByState : {}
+            const statePrompts = byState[state.id] && typeof byState[state.id] === 'object' && !Array.isArray(byState[state.id]) ? byState[state.id] : null
+            return statePrompts ? { ...top, ...statePrompts } : top
           }
+          /* ASSET_STATE_PROMPTS_PURE_END */
+          /* ASSET_UPLOAD_STATE_PURE_START */
+          const assetUploadStateTargetOf = (card) => {
+            const media = card && card.media && typeof card.media === 'object' ? card.media : {}
+            const rawStates = Array.isArray(media.states) ? media.states : []
+            if (!rawStates.length) return ''
+            const ids = rawStates.map((state) => String((state && state.id) || '').trim()).filter(Boolean)
+            if (!ids.length) return ''
+            const requested = String(media.defaultStateId || '').trim()
+            if (ids.includes(requested)) return requested
+            if (ids.includes('default')) return 'default'
+            return ids[0]
+          }
+          /* ASSET_UPLOAD_STATE_PURE_END */
           const persistAssetStateSelection = async (card, stateId, relPath, options = {}) => {
             const media = card && card.media && typeof card.media === 'object' ? card.media : {}
             const states = assetStateListOf(card).map((state) => {
@@ -23885,7 +24257,9 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
           const persistAssetSelectedVersion = async (card, relPath, options = {}) => {
             if (options && options.stateId) return persistAssetStateSelection(card, options.stateId, relPath, options)
             if (!card || !relPath || !openTitle) return false
-            if (card.review && card.review.status === 'final') throw Object.assign(new Error('卡片已锁定：请先重打开再选定'), { code: 'asset-locked' })
+            if (card.review && card.review.status === 'final') throw Object.assign(new Error('卡片已锁定：请先解锁再选定'), { code: 'asset-locked' })
+            const stateTarget = assetUploadStateTargetOf(card)
+            if (stateTarget) return persistAssetStateSelection(card, stateTarget, relPath, options)
             const media = card.media && typeof card.media === 'object' ? card.media : {}
             const images = Array.isArray(media.images) ? media.images : []
             const nextImages = [String(relPath), ...images.filter((item) => String(item) !== String(relPath))]
@@ -24000,13 +24374,13 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             const message = String((error && error.message) || '未知错误')
             if (code === 'conflict') return action + '失败（冲突）：资产卡已被其他操作更新，已自动重试一次仍失败；请刷新资产库后重试'
             if (code === 'invalid-args') return action + '失败（校验失败）：' + message
-            if (code === 'asset-locked') return action + '失败：卡片已定稿并锁定，需重打开后编辑'
+            if (code === 'asset-locked') return action + '失败：卡片已锁定，需解锁后编辑'
             if (code === 'state-in-use') return action + '失败：' + message
             return action + '失败：' + message
           }
           const saveAssetStateMeta = async (card, nextStates, nextDefaultStateId, okText, options = {}) => {
             if (!card || assetStateDeleteBusy) return false
-            if (card.review && card.review.status === 'final') { setAssetVersionError('已定稿并锁定：状态只读；需重打开后编辑'); return false }
+            if (card.review && card.review.status === 'final') { setAssetVersionError('已锁定：状态只读；需先解锁后编辑'); return false }
             let expectedHash = String((assetReviewHashes && assetReviewHashes.asset) || '')
             if (!expectedHash) { setAssetVersionError('校验失败：缺少 cards.json hash，请刷新资产库后重试'); return false }
             const action = String((options && options.action) || '状态操作')
@@ -24059,7 +24433,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
           }
           const setAssetDefaultState = async (card, stateId) => {
             if (!card || !stateId || assetStateDeleteBusy) return
-            if (card.review && card.review.status === 'final') { setAssetVersionError('已定稿并锁定：状态只读；需重打开后编辑'); return }
+            if (card.review && card.review.status === 'final') { setAssetVersionError('已锁定：状态只读；需先解锁后编辑'); return }
             const states = assetStateListOf(card)
             if (!states.some((state) => state.id === stateId)) return
             const defaultStateId = assetStateDefaultIdOf(card, states)
@@ -24077,7 +24451,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
           }
           const openAssetStateRename = (card, state) => {
             if (!card || !state || assetStateRenameBusy) return
-            if (card.review && card.review.status === 'final') { setAssetVersionError('已定稿并锁定：状态只读；需重打开后编辑'); return }
+            if (card.review && card.review.status === 'final') { setAssetVersionError('已锁定：状态只读；需先解锁后编辑'); return }
             setAssetStateAddOpen(false)
             setAssetStateRenameTarget({ id: state.id, name: state.name, cardId: String(card.id || '') })
             setAssetStateRenameName(String(state.name || ''))
@@ -24094,7 +24468,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             const target = assetStateRenameTarget
             if (!target || !card || assetStateRenameBusy) return
             if (target.cardId && String(card.id || '') !== String(target.cardId)) { setAssetStateRenameTarget(null); return }
-            if (card.review && card.review.status === 'final') { setAssetStateRenameError('已定稿并锁定：状态只读；需重打开后编辑'); return }
+            if (card.review && card.review.status === 'final') { setAssetStateRenameError('已锁定：状态只读；需先解锁后编辑'); return }
             const states = assetStateListOf(card)
             const current = states.find((state) => state.id === target.id) || null
             if (!current) { setAssetStateRenameTarget(null); return }
@@ -24331,7 +24705,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
                           }, state.name),
                           ...assetStateActionNodes(card, state, defaultStateId, stateList, locked))))
                       : null,
-                    locked ? h('div', { className: 'ad-warn', 'data-asset-state-locked': 'true', style: { width: '100%' } }, '已定稿并锁定：状态只读；需重打开后编辑') : null,
+                    locked ? h('div', { className: 'ad-warn', 'data-asset-state-locked': 'true', style: { width: '100%' } }, '已锁定：状态只读；需先解锁后编辑') : null,
                     !locked
                       ? h('button', { type: 'button', className: 'ad-btn ad-sm', 'data-asset-state-add': 'true', disabled: uploadBusy, title: '新增角色状态', 'aria-expanded': assetStateAddOpen ? 'true' : 'false', onClick: () => { if (assetStateAddOpen) closeAssetStateAdd(); else openAssetStateAdd(card) } }, '＋ 状态')
                       : null,
@@ -24578,10 +24952,6 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             const files = Array.from(fileList || [])
             if (!files.length) return
             const allowed = /\.(png|jpe?g|webp|gif)$/i
-            if (styleReferences.length + files.length > VISUAL_ANALYSIS_MAX_IMAGES) {
-              setVisualUploadError('参考图最多 ' + VISUAL_ANALYSIS_MAX_IMAGES + ' 张（当前 ' + styleReferences.length + ' 张）')
-              return
-            }
             setVisualUploadBusy(true)
             setVisualUploadNotice('')
             setVisualUploadError('')
@@ -24691,8 +25061,6 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             setSyncSelected((prev) => {
               const next = { ...prev }
               if (next[id]) { delete next[id]; return next }
-              const slots = Math.max(0, VISUAL_ANALYSIS_MAX_IMAGES - styleReferences.length)
-              if (Object.keys(next).length >= slots) { setSyncError('最多再追加 ' + slots + ' 张（references 上限 10）'); return prev }
               next[id] = true
               setSyncError('')
               return next
@@ -24702,8 +25070,6 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             if (syncBusy || styleFrozen) return
             const ids = Object.keys(syncSelected).filter((id) => syncSelected[id])
             if (!ids.length) { setSyncError('请先勾选要同步的风格参考素材'); return }
-            const slots = Math.max(0, VISUAL_ANALYSIS_MAX_IMAGES - styleReferences.length)
-            if (ids.length > slots) { setSyncError('最多再追加 ' + slots + ' 张（references 上限 10）'); return }
             setSyncBusy(true)
             setSyncError('')
             setSyncNotice('')
@@ -24718,7 +25084,6 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
                 seen.add(sig)
                 next.push({ assetId: String(id), order: next.length })
               }
-              if (next.length > VISUAL_ANALYSIS_MAX_IMAGES) { setSyncError('references 最多 ' + VISUAL_ANALYSIS_MAX_IMAGES + ' 张'); return }
               const ok = await saveVisualStyleExtras({ references: visualReferencePayload(next) }, '已同步 ' + (next.length - styleReferences.length) + ' 张风格参考素材')
               if (!ok) { setSyncError('同步保存失败；原 references 未改变'); return }
               setStyleReferences(next)
@@ -24780,14 +25145,13 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
           const removeVisualAnalysis = () => { setAnalysisResult(null); setAnalysisError(''); setAnalysisNotice(''); setVisualAnalysisStale(false); setAnalysisSelected({}) }
           const sendVisualAnalysis = async () => {
             if (analysisBusy || styleFrozen || !openTitle) return
-            if (styleReferences.length < VISUAL_ANALYSIS_MIN_IMAGES || styleReferences.length > VISUAL_ANALYSIS_MAX_IMAGES) { setAnalysisError('需先准备 3–10 张参考图'); return }
+            if (styleReferences.length < VISUAL_ANALYSIS_MIN_IMAGES) { setAnalysisError('需先准备至少 3 张参考图'); return }
             const fieldError = visualValidateReferenceFields(styleReferenceFilms, styleDirectorStyles)
             if (fieldError) { setAnalysisError(fieldError); return }
             const requestedAt = new Date().toISOString()
             const text = visualAnalysisInstruction({ projectTitle: openTitle, episode: Number(episodeOrder) || 1, refs: visualAnalysisRefsOf(styleReferences, assets), films: styleReferenceFilms, directors: styleDirectorStyles })
             const rc = rc22ResolveDelivery(P16_DIRECT_BRIDGE.services, p16NormPath(projectRoot), openTitle, settings, rc22SessionOverride)
             if (!rc.ok) { copyPlainText(text, '直连不可用，已复制风格分析指令'); setAnalysisError('直连不可用：' + rc.reason + '；已复制分析指令可手动发送'); return }
-            if (Array.from(text).length > 2000) { copyPlainText(text, '分析指令超长，已复制'); setAnalysisError('分析指令超过 2000 字，已复制；请分批'); return }
             const confirmed = typeof window !== 'undefined' && typeof window.confirm === 'function'
               ? window.confirm('发送风格分析？项目《' + openTitle + '》第 ' + (Number(episodeOrder) || 1) + ' 集；参考图 ' + styleReferences.length + ' 张、影片 ' + styleReferenceFilms.length + ' 条、导演 ' + styleDirectorStyles.length + ' 条；将读取图片并发送当前模型提供方；将消耗 1 次模型调用；结果仅建议、不自动保存。')
               : true
@@ -25217,7 +25581,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
                 h('div', { style: { marginBottom: 6 } }, visualRefThumbOf(row.assetId)),
                 h('div', { className: 'ad-sub', style: { overflowWrap: 'anywhere' } }, visualRefNameOf(row.assetId)),
                 h('button', { type: 'button', className: 'ad-btn ad-sm', onClick: () => removeVisualReference(row.assetId), disabled: styleFrozen || styleRefsBusy, style: { marginTop: 4 } }, '移除'))))
-            : h('div', { className: 'ad-visual-empty', style: { marginTop: 8 } }, '还没有参考图；上传 png/jpg/jpeg/webp/gif（单文件≤50MB，3–10 张可分析）')
+            : h('div', { className: 'ad-visual-empty', style: { marginTop: 8 } }, '还没有参考图；上传 png/jpg/jpeg/webp/gif（单文件≤50MB，分析需 ≥3 张）')
           const filmsNode = h('div', { style: { marginTop: 8 } },
             h('div', { className: 'ad-row', style: { justifyContent: 'space-between' } }, h('div', { className: 'ad-sub' }, '参考影片 · ' + styleReferenceFilms.length + ' / ' + STYLE_REFERENCE_FILMS_MAX), h('button', { type: 'button', className: 'ad-btn ad-sm', disabled: styleFrozen || styleReferenceFilms.length >= STYLE_REFERENCE_FILMS_MAX, onClick: () => setStyleReferenceFilms((prev) => [...prev, { title: '', year: '', director: '', note: '' }]) }, '增加影片')),
             styleReferenceFilms.length ? styleReferenceFilms.map((row, index) => h('div', { className: 'ad-row', key: 'film-' + index, style: { gap: 4, marginTop: 4, flexWrap: 'wrap' } },
@@ -25322,7 +25686,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
                 h('div', { className: 'ad-modal', id: 'ad-visual-sync-dialog', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'ad-vb-sync-title' },
                   h('div', { className: 'ad-modal-title', id: 'ad-vb-sync-title' }, '同步风格参考素材'),
                   h('div', { className: 'ad-sub' }, '从已导入的项目素材（风格参考）中选择，加入当前 references；不读取会话附件、不上传模型、不自动分析。'),
-                  h('div', { className: 'ad-sub' }, '会话图片复制到项目资产库（风格参考），不上传模型。当前 references ' + styleReferences.length + ' / ' + VISUAL_ANALYSIS_MAX_IMAGES + '；本批最多再追加 ' + Math.max(0, VISUAL_ANALYSIS_MAX_IMAGES - styleReferences.length) + ' 张。'),
+                  h('div', { className: 'ad-sub' }, '会话图片复制到项目资产库（风格参考），不上传模型。当前 references ' + styleReferences.length + '；本批可追加全部未加入项。'),
                   syncLoading ? h('div', { className: 'ad-sub' }, '读取缩略图…') : null,
                   syncError ? h('div', { className: 'ad-warn', role: 'alert' }, syncError) : null,
                   syncCandidates.length
@@ -25337,9 +25701,9 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
                           h('span', { className: 'ad-sub', style: { overflowWrap: 'anywhere' } }, (asset.source || '项目素材') ),
                           asset.sha256 ? h('span', { className: 'ad-count' }, 'sha ' + String(asset.sha256).slice(0, 8)) : null)
                       }))
-                    : h('div', { className: 'ad-visual-empty' }, syncLoading ? '读取中…' : (styleReferences.length >= VISUAL_ANALYSIS_MAX_IMAGES ? 'references 已满 10 张' : '暂无可追加的风格参考素材')),
+                    : h('div', { className: 'ad-visual-empty' }, syncLoading ? '读取中…' : '暂无可追加的风格参考素材'),
                   h('div', { className: 'ad-modal-actions' },
-                    h('button', { type: 'button', className: 'ad-btn ad-primary', disabled: syncBusy || !Object.keys(syncSelected).length || styleFrozen, onClick: () => confirmSyncReferences().catch(() => {}) }, syncBusy ? '同步中…' : '确认追加'),
+                    h('button', { type: 'button', className: 'ad-btn ad-primary', disabled: syncBusy || !Object.keys(syncSelected).length || styleFrozen, onClick: () => confirmSyncReferences().catch(() => {}) }, syncBusy ? '处理中…' : '确认追加'),
                     h('button', { type: 'button', className: 'ad-btn', disabled: syncBusy, onClick: () => setSyncOpen(false) }, '取消'))))
             : null
           const visualDraftNode = (visualDraftBusy || visualDraftData || visualDraftError || visualDraftNotice)
@@ -25379,7 +25743,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
               h('div', { className: 'ad-row', style: { gap: 6, flexWrap: 'wrap' } },
                 h('input', { id: 'ad-visual-ref-file', ref: visualRefFileInputRef, type: 'file', multiple: true, accept: 'image/png,image/jpeg,image/webp,image/gif', style: { display: 'none' }, onChange: (e) => uploadVisualReferences(e.target.files).catch(() => {}) }),
                 h('button', { type: 'button', className: 'ad-btn ad-sm ad-primary', disabled: styleFrozen || visualUploadBusy, onClick: () => { if (visualRefFileInputRef.current) visualRefFileInputRef.current.click() } }, visualUploadBusy ? '上传中…' : '上传参考图'),
-                h('span', { className: 'ad-sub' }, '参考图 ' + styleReferences.length + ' / ' + VISUAL_ANALYSIS_MAX_IMAGES + '（分析需 3–10 张）'),
+                h('span', { className: 'ad-sub' }, '参考图 ' + styleReferences.length + ' 张（分析需 ≥3 张）'),
                 h('button', { type: 'button', className: 'ad-btn ad-sm', disabled: styleFrozen || styleRefsBusy, onClick: () => saveVisualTextReferences().catch(() => {}) }, '保存参考文字'),
                 h('button', { type: 'button', className: 'ad-btn ad-sm', disabled: styleFrozen || syncBusy, onClick: openSyncReferences, title: '从已导入的风格参考素材追加到 references（不读会话附件/不自动分析）' }, '同步风格参考素材'),
                 h('span', { className: 'ad-sub' }, '会话参考图')),
@@ -26440,10 +26804,11 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
                           if (!hasIntersectionObserver()) ensureAssetImages(assetCardImagePaths(filterAssetCards(assetCards, '全部', assetQuery).slice(0, LIST_PAGE_SIZE)))
                         },
                       }, `全部 ${assetCards.length}`),
-                      typeChips.map(([type, label]) => h('button', {
+                      typeChips.map(([type, label, count]) => h('button', {
                         key: type,
                         type: 'button',
                         className: 'ad-asset-chip',
+                        'data-asset-type-chip': type,
                         'aria-pressed': assetTypeFilter === type,
                         onClick: () => {
                           setAssetTypeFilter(type)
@@ -26451,9 +26816,9 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
                           setAssetCardLimit(LIST_PAGE_SIZE)
                           if (!hasIntersectionObserver()) ensureAssetImages(assetCardImagePaths(filterAssetCards(assetCards, type, assetQuery).slice(0, LIST_PAGE_SIZE)))
                         },
-                      }, `${label} ${typeCounts.get(type)}`))),
+                      }, `${label} ${count}`))),
                       h('button', { type: 'button', className: 'ad-asset-chip', 'aria-pressed': assetTypeGroupMode, 'data-asset-type-group-toggle': 'true', title: '按中文类型目录（人物/场景/道具/特效/载具/服装/其他）分组展示', onClick: () => setAssetTypeGroupMode((value) => !value) }, '按类型目录分组')),
-                    (() => { const selectedCount = Object.keys(assetBatchSelected || {}).filter((id) => assetBatchSelected[id]).length; const floating = selectedCount > 0; const barStyle = { display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', padding: '8px 10px', border: '1px solid var(--ad-border)', borderRadius: 8, background: 'var(--ad-bg-base)', boxShadow: '0 4px 16px var(--ad-border)', fontSize: 12, ...assetBatchBarStyle }; if (!floating) return null; return h('div', { ref: assetBatchBarRef, className: 'ad-asset-batch-bar', 'data-asset-batch-bar': 'true', 'data-asset-batch-floating': floating ? 'true' : undefined, role: 'group', 'aria-label': '批量生成队列', style: barStyle }, h('span', { 'data-asset-batch-count': 'true' }, '已选 ' + selectedCount + ' / 20'), selectedCount ? h('span', { className: 'ad-sub', 'data-asset-batch-hint': 'true' }, '批量：勾选多张后加入队列') : null, h('button', { type: 'button', className: 'ad-btn ad-sm ad-primary', 'data-asset-batch-enqueue': 'true', disabled: !selectedCount, onClick: () => assetBatchEnqueue() }, '加入队列'), h('button', { type: 'button', className: 'ad-btn ad-sm', 'data-asset-batch-clear': 'true', disabled: !selectedCount, onClick: () => { setAssetBatchSelected({}); setAssetBatchNotice('') } }, '取消选择'), assetBatchQueue.length ? h('span', { className: 'ad-sub', 'data-asset-batch-queue-count': 'true' }, '排队中 ' + assetBatchQueue.length) : null, assetBatchNotice ? h('span', { className: assetBatchNotice.indexOf('失败') >= 0 ? 'ad-err' : 'ad-sub', 'data-asset-batch-notice': 'true' }, assetBatchNotice) : null) })(),
+                    (() => { const selectedCount = Object.keys(assetBatchSelected || {}).filter((id) => assetBatchSelected[id]).length; const floating = selectedCount > 0; const barStyle = { display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 6, padding: '8px 10px', border: '1px solid var(--ad-border)', borderRadius: 8, background: 'var(--ad-bg-base)', boxShadow: '0 4px 16px var(--ad-border)', fontSize: 12, ...assetBatchBarStyle }; if (!floating) return null; return h('div', { ref: assetBatchBarRef, className: 'ad-asset-batch-bar', 'data-asset-batch-bar': 'true', 'data-asset-batch-floating': floating ? 'true' : undefined, role: 'group', 'aria-label': '批量生成队列', style: barStyle }, h('div', { 'data-asset-batch-text': 'true', style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, minWidth: 0, flex: '1 1 auto' } }, h('span', { 'data-asset-batch-count': 'true' }, '已选 ' + selectedCount + ' / 20'), h('span', { className: 'ad-sub', 'data-asset-batch-hint': 'true' }, '批量：勾选多张后加入队列'), assetBatchQueue.length ? h('span', { className: 'ad-sub', 'data-asset-batch-queue-count': 'true' }, '排队中 ' + assetBatchQueue.length) : null, assetBatchNotice ? h('span', { className: assetBatchNotice.indexOf('失败') >= 0 ? 'ad-err' : 'ad-sub', 'data-asset-batch-notice': 'true' }, assetBatchNotice) : null), h('div', { 'data-asset-batch-actions': 'true', style: { display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto', flex: '0 0 auto' } }, h('button', { type: 'button', className: 'ad-btn ad-sm ad-primary', 'data-asset-batch-enqueue': 'true', disabled: !selectedCount, onClick: () => assetBatchEnqueue() }, '加入队列'), h('button', { type: 'button', className: 'ad-btn ad-sm', 'data-asset-batch-clear': 'true', disabled: !selectedCount, onClick: () => { setAssetBatchSelected({}); setAssetBatchNotice('') } }, '取消选择'))) })(),
                     visibleAssetCards.length
                       ? (assetTypeGroupMode
                           ? h('div', { 'data-asset-type-grouped': 'true' },
@@ -26500,7 +26865,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
                                     : null),
                                   voiceOverlayNode(voiceTarget, { variant: 'card' }))
                               })))
-                      : h('div', { className: 'ad-table-empty' }, assetQuery.trim() ? '没有匹配的资产卡（换个编号或名称试试）' : (assetLibraryV2 ? (assetMigrateState.state === 'running' ? '正在迁移资产图片…' : '资产库暂无资产卡：生成资产卡后会自动出现在这里（无图卡显示占位）') : '该分类下暂时没有资产卡')),
+                      : h('div', { className: 'ad-table-empty' }, assetQuery.trim() ? '没有匹配的资产卡（换个编号或名称试试）' : (assetTypeFilter === 'VEH' && !assetQuery.trim() ? '暂无载具资产卡' : (assetLibraryV2 ? (assetMigrateState.state === 'running' ? '正在迁移资产图片…' : '资产库暂无资产卡：生成资产卡后会自动出现在这里（无图卡显示占位）') : '该分类下暂时没有资产卡'))),
                     listHasMore(visibleAssetCards.length, assetCardLimit)
                       ? h('div', { className: 'ad-pager' },
                           h('span', { className: 'ad-pager-info' }, `已显示 ${assetCardRenderCount} / ${visibleAssetCards.length}`),
@@ -26579,7 +26944,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
           const worldRulesForKind = Array.isArray(worldRules[worldKindFilter]) ? worldRules[worldKindFilter] : []
           const summaryNode = h('div', { className: 'ad-box', key: 'world-summary', style: { marginBottom: 10 } },
             h('div', { className: 'ad-row', style: { marginBottom: 6, alignItems: 'center', gap: 8 } }, h('h3', { className: 'ad-sec', style: { margin: 0 } }, '总述'), worldSummary && worldSummary.fromContract ? h('span', { className: 'ad-count' }, '来自契约迁移') : null, h('div', { style: { flex: 1 } }), summaryEditing ? h('button', { className: 'ad-btn ad-sm', type: 'button', 'data-world-summary-edit-button': worldKindFilter, onClick: () => setWorldSummaryEditingKind('') }, '完成') : h('button', { className: 'ad-btn ad-sm', type: 'button', 'data-world-summary-edit-button': worldKindFilter, onClick: () => setWorldSummaryEditingKind(worldKindFilter) }, '编辑')),
-            summaryEditing ? h('textarea', { className: 'ad-area', rows: 3, value: summaryDraft, 'data-world-summary': worldKindFilter, 'aria-label': worldKindFilter + ' 总述', maxLength: 4000, style: { width: '100%', minHeight: '48px', maxHeight: '180px', resize: 'vertical', boxSizing: 'border-box' }, onInput: worldAutoGrow, onChange: (event) => setWorldSummary(worldKindFilter, event.target.value), onKeyDown: (event) => { if (event && event.key === 'Escape' && !event.isComposing) { event.preventDefault(); setWorldSummaryEditingKind(''); worldFocusRef.current = { type: 'summaryEditButton', kind: worldKindFilter } } } }) : h('div', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', minHeight: 20 }, role: 'note', 'aria-label': worldKindFilter + ' 总述' }, worldSummary && String(worldSummary.detail || '').trim() ? String(worldSummary.detail) : '未填写总述'),
+            summaryEditing ? h('textarea', { className: 'ad-area', rows: 3, value: summaryDraft, 'data-world-summary': worldKindFilter, 'aria-label': worldKindFilter + ' 总述', maxLength: 5000, style: { width: '100%', minHeight: '48px', maxHeight: '180px', resize: 'vertical', boxSizing: 'border-box' }, onInput: worldAutoGrow, onChange: (event) => setWorldSummary(worldKindFilter, event.target.value), onKeyDown: (event) => { if (event && event.key === 'Escape' && !event.isComposing) { event.preventDefault(); setWorldSummaryEditingKind(''); worldFocusRef.current = { type: 'summaryEditButton', kind: worldKindFilter } } } }) : h('div', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', minHeight: 20 }, role: 'note', 'aria-label': worldKindFilter + ' 总述' }, worldSummary && String(worldSummary.detail || '').trim() ? String(worldSummary.detail) : '未填写总述'),
             worldKindFilter === '冲突矛盾' ? h('div', { className: 'ad-hint-next', role: 'note' }, '原契约第 8 项（灵魂/生死/因果）已迁入冲突矛盾，请人工调整') : null,
             h('div', { className: 'ad-box', key: 'world-rules', 'data-world-rules': worldKindFilter, style: { marginTop: 8 } },
               h('div', { className: 'ad-row', style: { alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 } },
@@ -26594,7 +26959,7 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
                     h('div', { className: 'ad-row', style: { alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
                       h('input', { className: 'ad-input ad-sm', value: rule.name, 'data-world-rule-name': rule.id, 'aria-label': '底层规则名称（第 ' + (index + 1) + ' 条）', 'aria-invalid': error ? 'true' : 'false', placeholder: '规则名称（必填，≤60 字）', maxLength: 60, onChange: (event) => setWorldRule(worldKindFilter, rule.id, 'name', event.target.value) }),
                       h('button', { className: 'ad-btn ad-sm ad-btn-danger ad-icon-btn ad-icon-btn-sm', type: 'button', 'data-world-rule-delete': rule.id, 'aria-label': '删除底层规则：' + (rule.name || '第 ' + (index + 1) + ' 条'), title: '删除底层规则', onClick: () => removeWorldRule(worldKindFilter, rule.id) }, icon('trash'))),
-                    h('textarea', { className: 'ad-area', rows: 2, value: rule.detail, 'data-world-rule-detail': rule.id, 'aria-label': '底层规则说明（第 ' + (index + 1) + ' 条）', placeholder: '规则说明（≤2000 字）', maxLength: 2000, style: { width: '100%', minHeight: '40px', maxHeight: '180px', resize: 'vertical', boxSizing: 'border-box' }, onInput: worldAutoGrow, onChange: (event) => setWorldRule(worldKindFilter, rule.id, 'detail', event.target.value) }),
+                    h('textarea', { className: 'ad-area', rows: 2, value: rule.detail, 'data-world-rule-detail': rule.id, 'aria-label': '底层规则说明（第 ' + (index + 1) + ' 条）', placeholder: '规则说明（≤5000 字）', maxLength: 5000, style: { width: '100%', minHeight: '40px', maxHeight: '180px', resize: 'vertical', boxSizing: 'border-box' }, onInput: worldAutoGrow, onChange: (event) => setWorldRule(worldKindFilter, rule.id, 'detail', event.target.value) }),
                     error ? h('div', { className: 'ad-hint-next', role: 'alert', 'data-world-rule-error': rule.id }, error) : null)
                 }))
                 : h('div', { className: 'ad-hint-next', 'data-world-rules-empty': 'true' }, '暂无底层规则；可点「增加规则」补充（如力量来源/代价/禁忌/世界底层法则）。')))
@@ -26634,12 +26999,6 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
                         h('strong', null, draft.title || draft.path || '(无标题)'),
                         h('span', { className: 'ad-count' }, draft.status),
                         h('div', { style: { flex: 1 } }),
-                        draft.status === 'pending'
-                          ? h('button', { className: 'ad-btn ad-primary ad-sm', onClick: () => resolveDraft(draft.id, 'accept'), disabled: busy }, '采纳')
-                          : null,
-                        draft.status === 'pending'
-                          ? h('button', { className: 'ad-btn ad-sm ad-btn-danger', onClick: () => resolveDraft(draft.id, 'discard'), disabled: busy }, '丢弃')
-                          : null,
                         draft.status === 'discarded'
                           ? h('span', { className: 'ad-count' }, '已丢弃')
                           : null),
@@ -27047,10 +27406,6 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
             : ''
           const reviewTone = (sev) =>
             ['critical', 'error', 'high'].includes(sev) ? 'error' : ['warn', 'warning', 'medium'].includes(sev) ? 'warn' : 'info'
-          const reviewVerdictText = (id) => {
-            const verdict = reviewFeedback[id]
-            return verdict === 'accepted' ? '已采纳' : verdict === 'ignored' ? '已忽略' : verdict === 'false-positive' ? '已标误报' : ''
-          }
           // Q7 单集：最新报告属于其他集时按空态处理（说明本集暂无审读）
           const reviewEpisodeMismatch = Boolean(
             reviewReport && reviewReport.episode != null && Number(episodeOrder) &&
@@ -27089,100 +27444,6 @@ wbGenStatus === 'sent' && Date.now() - wbGenSentAt < 5000 ? h('span', { classNam
                               h('div', null, issue.message))))
                       : h('div', { className: 'ad-hint-next' }, '未发现问题。'))
                 : emptyState({ key: 'check-empty', title: '还没有一致性检查结果', description: '点上方「运行一致性检查」看契约完整性 / 集数一致性 / 说话人 / 分镜时长 / 镜号 / 缺口 / 重复桥段。', next: '点「运行一致性检查」开始', actions: [{ label: '运行一致性检查', onClick: runCheck, disabled: busy }] }),
-
-              h('div', { className: 'ad-sec', key: 'rv-sec' }, '最新审读报告（AI 深度审读 · 面板只展示，触发由 Agent 完成）'),
-              h('div', { className: 'ad-row', key: 'rv-bar', style: { marginBottom: 8, flexWrap: 'wrap' } },
-                h('button', { className: 'ad-btn ad-sm', onClick: () => loadReview({ notice: true }), disabled: busy || reviewBusy }, icon('refresh'), reviewBusy ? '读取中…' : '刷新审读报告'),
-                reviewEpisode ? h('span', { className: 'ad-count' }, `第 ${reviewEpisode} 集`) : null,
-                reviewReport && reviewReport.generatedAt ? h('span', { className: 'ad-count' }, `生成：${reviewReport.generatedAt}`) : null,
-                reviewReport && reviewReport.meta && reviewReport.meta.model ? h('span', { className: 'ad-count' }, `模型：${reviewReport.meta.model}`) : null,
-                reviewReport && reviewReport.meta && reviewReport.meta.tokens != null
-                  ? h('span', { className: 'ad-count' }, `tokens ${
-                      typeof reviewReport.meta.tokens === 'object'
-                        ? Number(reviewReport.meta.tokens.total || (Number(reviewReport.meta.tokens.input) || 0) + (Number(reviewReport.meta.tokens.output) || 0)) || 0
-                        : Number(reviewReport.meta.tokens) || 0
-                    }`)
-                  : null,
-                reviewJump ? h('button', { className: 'ad-btn ad-sm', onClick: () => setReviewJump(null) }, '清除定位') : null),
-              // v0.6.3：审读展示细化 —— 维度筛选 / 排序 / 总数摘要 / 快捷键说明
-              reviewReport && reviewFindings.length
-                ? h('div', { key: 'rv-tools', style: { marginBottom: 8 } },
-                    h('div', { className: 'ad-row', style: { marginBottom: 6, flexWrap: 'wrap' } },
-                      h('label', { className: 'ad-sub' }, '维度筛选'),
-                      h('select', {
-                        className: 'ad-select',
-                        'aria-label': '审读维度筛选',
-                        value: reviewFilterKey,
-                        onChange: (e) => setReviewDimensionFilter(e.target.value),
-                        style: { maxWidth: 260 },
-                      },
-                        h('option', { value: '' }, `全部维度（${reviewFindings.length}）`),
-                        reviewDimensionOptions.map((option) => h('option', { key: option.key, value: option.key }, `${option.label}（${option.count}）`))),
-                      h('label', { className: 'ad-sub', style: { marginLeft: 8 } }, '排序'),
-                      h('select', {
-                        className: 'ad-select',
-                        'aria-label': '审读排序',
-                        value: reviewSort,
-                        onChange: (e) => setReviewSort(e.target.value),
-                        style: { maxWidth: 200 },
-                      },
-                        REVIEW_SORT_OPTIONS.map(([value, label]) => h('option', { key: value, value }, label))),
-                      reviewFilterKey ? h('button', { className: 'ad-btn ad-sm', onClick: () => setReviewDimensionFilter('') }, '清除筛选') : null),
-                    h('div', { className: 'ad-sub', role: 'status' }, reviewSummaryText),
-                    h('div', { className: 'ad-hint-next' }, '快捷键：Ctrl/⌘+S 保存当前页签或文档栏；Enter 执行搜索；点「跳转定位」可跳到对应集/场/镜'))
-                : null,
-              // P2-6 增强（v0.6.2）：标注本次审读实际使用的模型来源 / 是否回退（消费报告 meta.modelSource 等字段）
-              reviewReport && (reviewReport.modelSource || (reviewReport.meta && reviewReport.meta.model) || reviewReport.modelFallback)
-                ? h('div', {
-                    className: 'ad-flow-hint',
-                    key: 'rv-usage',
-                    'data-model-source': reviewReport.modelSource || '',
-                    role: 'note',
-                  }, reviewModelUsageText(reviewReport))
-                : null,
-              // v0.9.2（P3-E）：成本档位标注 + 回退提示（host task-65 只增字段）
-              reviewReport && (reviewReport.costTier || reviewReport.costTierRequested || reviewReport.costTierFallback)
-                ? h('div', { className: 'ad-flow-hint', key: 'rv-cost-tier', 'data-cost-tier': reviewReport.costTier || '', role: 'note' },
-                    `成本档位：${reviewReport.costTier ? costTierLabel(reviewReport.costTier) : '未指定'}` +
-                    (reviewReport.costTierFallback
-                      ? `（请求 ${reviewReport.costTierRequested || '—'} 不可用，已回退默认${reviewReport.costTierFallbackReason ? '：' + reviewReport.costTierFallbackReason : ''}）`
-                      : ''))
-                : null,
-              reviewReport && reviewReport.degraded
-                ? h('div', { className: 'ad-flow-stale', key: 'rv-degraded' }, `已降级：${reviewReport.degradedReason || '模型不可用 / 超预算，仅返回确定性检查结果'}（默认不阻断定稿与导出）`)
-                : null,
-              reviewError ? h('div', { className: 'ad-doc-note', key: 'rv-err' }, reviewError) : null,
-              reviewReport && !reviewEpisodeMismatch
-                ? (reviewFindings.length
-                    ? (reviewSorted.length
-                        ? h('div', { key: 'rv-list' },
-                            reviewReport.summaryText ? h('div', { className: 'ad-sub', style: { marginBottom: 8 } }, reviewReport.summaryText) : null,
-                            reviewSort === 'severity'
-                              ? reviewGroups.map((group) => h('div', { key: 'rv-g-' + group.sev },
-                                  h('div', { className: 'ad-sec' }, `${reviewSeverity(group.sev).label}（${group.items.length}）`),
-                                  group.items.map((finding) => renderReviewFinding(finding))))
-                              : reviewSorted.map((finding) => renderReviewFinding(finding)))
-                        : emptyState({
-                            key: 'rv-filtered',
-                            title: '当前筛选下没有问题',
-                            description: `共 ${reviewFindings.length} 条审读问题，当前维度筛选无匹配。`,
-                            next: '清除筛选查看全部问题',
-                            actions: [{ label: '清除筛选', onClick: () => setReviewDimensionFilter('') }],
-                          }))
-                    : emptyState({
-                        key: 'rv-clean',
-                        title: '本期未发现需要处理的问题',
-                        description: reviewReport.summaryText || '审读已完成，未返回可操作问题。',
-                        next: '可继续创作；如需复查点「刷新审读报告」',
-                      }))
-                : emptyState({
-                    key: 'rv-empty',
-                    title: reviewEpisodeMismatch ? '本集暂无审读报告' : '还没有审读报告',
-                    description: reviewEpisodeMismatch
-                      ? `最新报告是第 ${reviewReport.episode} 集；当前查看第 ${episodeOrder} 集，可让 Agent 审读本集。`
-                      : '审读由 Agent 在短剧模式下生成（drama_check_consistency deep:true），面板只读展示、不主动调用工具。',
-                    next: '对 Agent 说「审读第 N 集」，完成后点「刷新审读报告」',
-                  }),
 
               h('div', { className: 'ad-sec', key: 'exs' }, '导出交付物'),
               h('div', { className: 'ad-row', key: 'exb' },
